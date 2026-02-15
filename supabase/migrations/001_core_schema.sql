@@ -90,7 +90,7 @@ CREATE TABLE builds (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    user_id         UUID NOT NULL ,
+    user_id         UUID,                                  -- nullable for service-role builds
     status          build_status NOT NULL DEFAULT 'queued',
     prompt          TEXT NOT NULL,                       -- user's natural language request
     plan_json       JSONB,                              -- planner output (cached)

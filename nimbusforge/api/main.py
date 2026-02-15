@@ -366,15 +366,18 @@ async def create_build(
 
     # Create build record
     build_id = str(uuid4())
+    build_row = {
+        "id": build_id,
+        "tenant_id": str(tenant_id),
+        "project_id": str(project_id),
+        "status": "queued",
+        "prompt": body.prompt,
+    }
+    # Only set user_id for real users (service-role has no auth.users entry)
+    if not user.is_service_role:
+        build_row["user_id"] = str(user.user_id)
     try:
-        db.table("builds").insert({
-            "id": build_id,
-            "tenant_id": str(tenant_id),
-            "project_id": str(project_id),
-            "user_id": str(user.user_id),
-            "status": "queued",
-            "prompt": body.prompt,
-        }).execute()
+        db.table("builds").insert(build_row).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create build: {e}")
 
