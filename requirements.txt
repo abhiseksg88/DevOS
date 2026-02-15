@@ -1,4 +1,4 @@
-# NimbusForge — Python Dependencies
+# Vedaa — Python Dependencies
 # Control Plane + Agent Orchestrator
 
 # --- Web Framework ---
