@@ -5,7 +5,7 @@
  * Build/deploy operations still go through the backend API.
  */
 
-import { createClient } from "./supabase";
+import { createClient } from "./supabase/client";
 import type { Tenant, Project, Build } from "@/types";
 
 // ---------------------------------------------------------------------------
