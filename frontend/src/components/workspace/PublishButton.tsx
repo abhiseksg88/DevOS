@@ -13,6 +13,8 @@ import {
   Globe,
   Upload,
   Zap,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildDeployDocument } from "@/components/preview/PreviewPane";
@@ -21,6 +23,7 @@ import type { FileNode, Project } from "@/types";
 
 type PublishState =
   | "idle"
+  | "preflight"
   | "generating"
   | "uploading"
   | "deploying"
@@ -36,15 +39,10 @@ interface PublishButtonProps {
   onPublished?: (url: string) => void;
 }
 
-const STEP_LABELS: Record<PublishState, string> = {
-  idle: "",
-  generating: "Generating deployment...",
-  uploading: "Uploading to Netlify...",
-  deploying: "Deploying...",
-  polling: "Almost ready...",
-  success: "Published!",
-  error: "Failed",
-};
+/** Max time to poll for deploy status before timing out (ms) */
+const POLL_TIMEOUT_MS = 120_000;
+/** Max HTML size we'll upload (10 MB) */
+const MAX_HTML_SIZE = 10 * 1024 * 1024;
 
 export function PublishButton({
   project,
@@ -58,9 +56,12 @@ export function PublishButton({
     project?.deployed_url ?? null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [showPanel, setShowPanel] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [preflightStatus, setPreflightStatus] = useState<api.PublishHealth | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number>(0);
   const retryCountRef = useRef(0);
 
   // Sync deployed URL from project
@@ -88,8 +89,19 @@ export function PublishButton({
     (deployId: string) => {
       if (!project) return;
       setState("polling");
+      pollStartRef.current = Date.now();
 
       pollRef.current = setInterval(async () => {
+        // Timeout guard — stop polling after POLL_TIMEOUT_MS
+        if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
+          stopPolling();
+          setState("error");
+          setError(
+            "Deploy is taking longer than expected. Check Netlify dashboard for status.",
+          );
+          return;
+        }
+
         try {
           const status = await api.publish.status(
             token,
@@ -106,15 +118,20 @@ export function PublishButton({
           } else if (status.state === "error" || status.state === "failed") {
             stopPolling();
             setState("error");
-            setError("Deployment failed on Netlify");
+            setError("Deployment failed on Netlify. Try again or check the Netlify dashboard.");
           }
           // Otherwise keep polling (preparing, uploading, uploaded)
         } catch (err) {
-          stopPolling();
-          setState("error");
-          setError(err instanceof Error ? err.message : "Polling failed");
+          // Don't stop polling on transient network errors — only stop after timeout
+          const elapsed = Date.now() - pollStartRef.current;
+          if (elapsed > POLL_TIMEOUT_MS) {
+            stopPolling();
+            setState("error");
+            setError(err instanceof Error ? err.message : "Polling failed");
+          }
+          // Otherwise silently retry on next interval
         }
-      }, 2000);
+      }, 2500);
     },
     [project, token, tenantId, stopPolling, onPublished],
   );
@@ -123,14 +140,43 @@ export function PublishButton({
     if (!project || !token || !tenantId) return;
 
     setError(null);
+    setWarning(null);
     setShowPanel(true);
+    setPreflightStatus(null);
     retryCountRef.current = 0;
 
+    // ─── Step 0: Pre-flight health check ───────────────────────────
+    setState("preflight");
+    const health = await api.publish.health(token);
+    setPreflightStatus(health);
+
+    if (!health.ready) {
+      // Config error — don't retry, show clear message
+      setState("error");
+      if (!health.netlify_configured) {
+        setError(
+          "Netlify is not configured. Set NETLIFY_TOKEN in your backend environment variables.",
+        );
+      } else if (!health.netlify_reachable) {
+        setError(
+          health.netlify_error ||
+            "Cannot reach Netlify API. Check your token is valid.",
+        );
+      } else {
+        setError("Publish infrastructure is not ready. Check backend configuration.");
+      }
+      return;
+    }
+
+    if (!health.supabase_configured) {
+      setWarning("Supabase credentials not configured — published app won't have database access.");
+    }
+
+    // ─── Step 1: Generate deployment HTML ──────────────────────────
     const doPublish = async (): Promise<void> => {
       try {
-        // Step 1: Generate deployment HTML
         setState("generating");
-        await new Promise((r) => setTimeout(r, 300)); // Brief visual feedback
+        await new Promise((r) => setTimeout(r, 200)); // Brief visual feedback
 
         // Fetch Supabase credentials for embedding
         let supabaseUrl = "";
@@ -143,7 +189,11 @@ export function PublishButton({
             supabaseAnonKey = creds.anonKey || "";
           }
         } catch {
-          // Continue without Supabase credentials
+          // Continue without Supabase credentials — user was already warned
+        }
+
+        if (!supabaseUrl && !supabaseAnonKey && !warning) {
+          setWarning("Supabase credentials unavailable — published app won't have database access.");
         }
 
         const html = buildDeployDocument(
@@ -153,7 +203,23 @@ export function PublishButton({
           project.name,
         );
 
-        // Step 2: Upload to backend
+        // ─── Validate generated HTML ─────────────────────────────
+        if (!html || html.trim().length < 50) {
+          setState("error");
+          setError("Generated HTML is empty or too small. Add some code to your project first.");
+          return;
+        }
+
+        if (html.length > MAX_HTML_SIZE) {
+          setState("error");
+          setError(
+            `Generated HTML is too large (${(html.length / 1024 / 1024).toFixed(1)} MB). ` +
+              "Reduce your code size and try again.",
+          );
+          return;
+        }
+
+        // ─── Step 2: Upload to backend ─────────────────────────────
         setState("uploading");
         const result = await api.publish.deploy(
           token,
@@ -162,13 +228,13 @@ export function PublishButton({
           html,
         );
 
-        // Step 3: Check result
+        // ─── Step 3: Check result ──────────────────────────────────
         if (result.status === "ready") {
           setState("success");
           setDeployedUrl(result.url);
           onPublished?.(result.url);
         } else {
-          // Still deploying — start polling
+          // Still deploying — start polling with timeout guard
           setState("deploying");
           pollStatus(result.deploy_id);
         }
@@ -181,7 +247,9 @@ export function PublishButton({
           !message.includes("not configured") &&
           !message.includes("503") &&
           !message.includes("401") &&
-          !message.includes("403");
+          !message.includes("403") &&
+          !message.includes("too large") &&
+          !message.includes("empty");
 
         if (isRetryable && retryCountRef.current < 3) {
           retryCountRef.current += 1;
@@ -199,7 +267,7 @@ export function PublishButton({
     };
 
     await doPublish();
-  }, [project, token, tenantId, fileTree, onPublished, pollStatus]);
+  }, [project, token, tenantId, fileTree, warning, onPublished, pollStatus]);
 
   const handleCopy = useCallback(() => {
     if (deployedUrl) {
@@ -210,6 +278,7 @@ export function PublishButton({
   }, [deployedUrl]);
 
   const isPublishing =
+    state === "preflight" ||
     state === "generating" ||
     state === "uploading" ||
     state === "deploying" ||
@@ -299,6 +368,17 @@ export function PublishButton({
             {isPublishing && (
               <div className="space-y-3">
                 <PublishStep
+                  icon={<ShieldCheck className="w-3.5 h-3.5" />}
+                  label="Pre-flight check"
+                  status={
+                    state === "preflight"
+                      ? "active"
+                      : (["generating", "uploading", "deploying", "polling"] as string[]).includes(state)
+                        ? "done"
+                        : "pending"
+                  }
+                />
+                <PublishStep
                   icon={<Zap className="w-3.5 h-3.5" />}
                   label="Generate deployment"
                   status={
@@ -330,6 +410,13 @@ export function PublishButton({
                   }
                 />
 
+                {warning && (
+                  <p className="text-xs text-amber-400 mt-2 flex items-start gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    {warning}
+                  </p>
+                )}
+
                 {error && (
                   <p className="text-xs text-amber-400 mt-2">{error}</p>
                 )}
@@ -349,7 +436,8 @@ export function PublishButton({
                 {/* Show custom domain if available */}
                 {project?.custom_domain && (
                   <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5 border border-emerald-500/20">
-                    🌐 Live at:{" "}
+                    <Globe className="w-3 h-3 inline mr-1" />
+                    Live at:{" "}
                     <span className="font-mono font-semibold">
                       {project.custom_domain}
                     </span>
@@ -373,6 +461,13 @@ export function PublishButton({
                     )}
                   </button>
                 </div>
+
+                {warning && (
+                  <p className="text-xs text-amber-400 flex items-start gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    {warning}
+                  </p>
+                )}
 
                 <div className="flex gap-2">
                   <a
@@ -404,6 +499,30 @@ export function PublishButton({
                     Deploy failed
                   </span>
                 </div>
+
+                {/* Pre-flight failure details */}
+                {preflightStatus && !preflightStatus.ready && (
+                  <div className="space-y-1.5 p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+                    <PreflightItem
+                      ok={preflightStatus.netlify_configured}
+                      label="Netlify token"
+                    />
+                    <PreflightItem
+                      ok={preflightStatus.netlify_reachable}
+                      label="Netlify API reachable"
+                    />
+                    <PreflightItem
+                      ok={preflightStatus.supabase_configured}
+                      label="Supabase credentials"
+                    />
+                    {preflightStatus.netlify_team && (
+                      <p className="text-xs text-slate-500 mt-1">
+                        Team: {preflightStatus.netlify_team}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {error && (
                   <p className="text-xs text-slate-400 bg-surface-2 rounded-lg p-3 border border-surface-3">
                     {error}
@@ -421,6 +540,23 @@ export function PublishButton({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pre-flight check item
+// ---------------------------------------------------------------------------
+
+function PreflightItem({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      {ok ? (
+        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+      ) : (
+        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+      )}
+      <span className={ok ? "text-slate-400" : "text-red-400"}>{label}</span>
     </div>
   );
 }

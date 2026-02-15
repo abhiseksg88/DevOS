@@ -65,7 +65,33 @@ export const deployments = {
 };
 
 // --- Publish (Netlify One-Click Deploy) ---
+export interface PublishHealth {
+  ready: boolean;
+  netlify_configured: boolean;
+  netlify_reachable: boolean;
+  netlify_team: string | null;
+  custom_domain: string | null;
+  supabase_configured: boolean;
+  netlify_error?: string;
+}
+
 export const publish = {
+  /** Pre-flight health check — validates Netlify token/team before attempting publish */
+  health: async (token: string): Promise<PublishHealth> => {
+    try {
+      return await request<PublishHealth>("GET", "/health/publish", token);
+    } catch {
+      return {
+        ready: false,
+        netlify_configured: false,
+        netlify_reachable: false,
+        netlify_team: null,
+        custom_domain: null,
+        supabase_configured: false,
+        netlify_error: "Backend unreachable",
+      };
+    }
+  },
   deploy: (token: string, tenantId: string, projectId: string, html: string) =>
     request<PublishResult>(
       "POST",

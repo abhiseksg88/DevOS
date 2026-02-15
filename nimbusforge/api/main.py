@@ -155,6 +155,43 @@ async def health():
     return {"status": "ok", "service": "vedaa-api"}
 
 
+@app.get("/health/publish")
+async def health_publish(settings: Settings = Depends(get_settings)):
+    """
+    Pre-flight check for publish readiness.
+    Returns which services are configured and reachable.
+    Called by frontend before attempting to publish.
+    """
+    checks: dict = {
+        "netlify_configured": bool(settings.netlify_token),
+        "netlify_team": settings.netlify_team_slug or None,
+        "custom_domain": settings.netlify_custom_domain or None,
+        "supabase_configured": bool(settings.supabase_url and settings.supabase_anon_key),
+    }
+
+    # If Netlify token exists, validate it with a lightweight API call
+    if settings.netlify_token:
+        try:
+            import httpx
+            resp = httpx.get(
+                "https://api.netlify.com/api/v1/user",
+                headers={"Authorization": f"Bearer {settings.netlify_token}"},
+                timeout=5,
+            )
+            checks["netlify_reachable"] = resp.status_code == 200
+            if resp.status_code == 401:
+                checks["netlify_error"] = "Invalid token"
+        except Exception:
+            checks["netlify_reachable"] = False
+            checks["netlify_error"] = "Network error"
+    else:
+        checks["netlify_reachable"] = False
+        checks["netlify_error"] = "NETLIFY_TOKEN not set"
+
+    checks["ready"] = checks["netlify_configured"] and checks["netlify_reachable"]
+    return checks
+
+
 @app.get("/debug/db")
 async def debug_db(
     db: Client = Depends(get_supabase_service),
