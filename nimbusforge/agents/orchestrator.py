@@ -1,5 +1,5 @@
 """
-NimbusForge Agent Orchestrator — LangGraph Multi-Agent Pipeline
+Vedaa Agent Orchestrator — LangGraph Multi-Agent Pipeline
 
 Graph:  Planner (Opus) -> Scaffolder (DeepSeek) -> Coder (Sonnet) -> Reviewer (Haiku) -> Deployer
                                                          ^                  |

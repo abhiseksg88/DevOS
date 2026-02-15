@@ -24,13 +24,14 @@ class TestSettingsValidation:
         assert test_settings.debug_mode is True
 
     def test_cors_allowed_origins_default(self):
-        """Default CORS should be localhost:3000, not wildcard."""
+        """Default CORS should include localhost and vedaa.io, not wildcard."""
         from nimbusforge.api.config import Settings
 
         s = Settings(
             supabase_service_role_key="test-key",
         )
-        assert s.cors_allowed_origins == ["http://localhost:3000"]
+        assert "http://localhost:3000" in s.cors_allowed_origins
+        assert "https://vedaa.io" in s.cors_allowed_origins
         assert "*" not in s.cors_allowed_origins
 
     def test_debug_mode_default_false(self, monkeypatch):

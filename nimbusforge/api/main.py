@@ -1,5 +1,5 @@
 """
-NimbusForge API — FastAPI Control Plane
+Vedaa API — FastAPI Control Plane
 
 Endpoints:
   /tenants           — CRUD + member management
@@ -67,9 +67,9 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="NimbusForge API",
+    title="Vedaa API",
     version="0.1.0",
-    description="AI-native Cloud Application Builder — Control Plane",
+    description="Vedaa — The Agentic Development OS",
 )
 
 _startup_settings = get_settings()
@@ -116,7 +116,7 @@ async def startup_event():
     """Validate configuration on startup and log important info."""
     settings = get_settings()
 
-    logger.info("NimbusForge API starting")
+    logger.info("Vedaa API starting")
     logger.info("Supabase URL: %s", settings.supabase_url)
     logger.info("CORS allowed origins: %s", settings.cors_allowed_origins)
     logger.info("Debug mode: %s", settings.debug_mode)
@@ -152,7 +152,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "nimbusforge-api"}
+    return {"status": "ok", "service": "vedaa-api"}
 
 
 @app.get("/debug/db")

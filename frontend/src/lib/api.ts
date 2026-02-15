@@ -1,5 +1,5 @@
 /**
- * NimbusForge API client.
+ * Vedaa API client.
  * All calls go through the FastAPI backend.
  */
 

@@ -42,7 +42,7 @@ const defaultFileTree: FileNode[] = [
             path: "src/app/page.tsx",
             type: "file",
             language: "typescriptreact",
-            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to NimbusForge</h1>\n    </main>\n  );\n}',
+            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to Vedaa</h1>\n    </main>\n  );\n}',
           },
           {
             name: "layout.tsx",

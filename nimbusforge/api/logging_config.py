@@ -1,5 +1,5 @@
 """
-Structured logging configuration for NimbusForge API.
+Structured logging configuration for Vedaa API.
 
 Configures JSON-formatted logging in production and human-readable in development.
 """

@@ -2,7 +2,7 @@
 Preview Routing Strategy — Subdomain-based preview URLs with SSL and cleanup.
 
 Strategy: Subdomain routing
-  URL format: https://{build_id_prefix}.preview.nimbusforge.dev
+  URL format: https://{build_id_prefix}.preview.vedaa.dev
   SSL: Wildcard certificate via Let's Encrypt + Caddy automatic HTTPS
   Proxy: Caddy reverse proxy to Cloud Run/Fly.io service URL
 
@@ -46,7 +46,7 @@ def generate_caddyfile(previews: list[dict], settings: Settings) -> str:
     # Global options
     blocks.append("""\
 {
-    email ssl@nimbusforge.dev
+    email ssl@vedaa.dev
     acme_ca https://acme-v02.api.letsencrypt.org/directory
 }
 """)

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="vedaa-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="vedaa-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c4b5fd" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Glow circle -->
+  <circle cx="60" cy="60" r="58" fill="url(#vedaa-glow)"/>
+  <!-- Main rounded square background -->
+  <rect x="8" y="8" width="104" height="104" rx="24" fill="#12121a" stroke="url(#vedaa-grad)" stroke-width="2"/>
+  <!-- V lettermark -->
+  <path d="M36 32L60 88L84 32" stroke="url(#vedaa-grad)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Accent dot -->
+  <circle cx="60" cy="96" r="4" fill="#8b5cf6"/>
+</svg>

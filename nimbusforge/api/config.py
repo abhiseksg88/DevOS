@@ -1,5 +1,5 @@
 """
-NimbusForge API Configuration.
+Vedaa API Configuration.
 Loaded from environment variables with sensible defaults.
 """
 
@@ -65,7 +65,11 @@ class Settings(BaseSettings):
     max_agent_iterations: int = 5
 
     # --- CORS ---
-    cors_allowed_origins: list[str] = ["http://localhost:3000"]
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "https://vedaa.io",
+        "https://www.vedaa.io",
+    ]
 
     # --- Debug ---
     debug_mode: bool = False

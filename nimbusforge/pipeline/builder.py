@@ -120,7 +120,7 @@ def _init_repo(work_dir: str, tenant_id: str, project_id: str, settings: Setting
     if not (repo_dir / ".git").exists():
         subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "nimbusforge@build.ai"], cwd=repo_dir, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.name", "NimbusForge"], cwd=repo_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Vedaa"], cwd=repo_dir, check=True, capture_output=True)
 
         # Initial commit if there are files
         subprocess.run(["git", "add", "-A"], cwd=repo_dir, check=True, capture_output=True)
@@ -240,7 +240,7 @@ def _build_commit_message(prompt: str, build_id: str, model_usage: dict, patches
         "files_changed": sorted(files),
     }
 
-    return f"ai: {summary}\n\nNimbusForge-Build-Metadata: {json.dumps(metadata)}"
+    return f"ai: {summary}\n\nVedaa-Build-Metadata: {json.dumps(metadata)}"
 
 
 def _generate_dockerfile(repo_dir: Path, settings: Settings):
