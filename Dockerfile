@@ -8,10 +8,12 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (gcc for C extensions, libffi/libssl for cryptography)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     git \
+    libffi-dev \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -22,17 +24,12 @@ FROM python:3.12-slim AS runner
 
 WORKDIR /app
 
-# Install runtime dependencies (git for patch operations, docker CLI for builds)
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Install kaniko executor for daemonless Docker builds
-# (In production, kaniko runs as a separate Cloud Run Job. This is for dev.)
-# RUN curl -L https://github.com/GoogleContainerTools/kaniko/releases/latest/download/executor -o /usr/local/bin/executor \
-#     && chmod +x /usr/local/bin/executor
 
 COPY --from=builder /install /usr/local
 
@@ -41,12 +38,14 @@ COPY nimbusforge/ ./nimbusforge/
 RUN useradd --create-home appuser
 USER appuser
 
-EXPOSE 8000
+# Railway dynamically assigns PORT; default to 8000 for local dev
+ENV PORT=8000
+EXPOSE ${PORT}
 
-# Health check
+# Health check (uses PORT env var)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Single worker mode for Railway (memory constrained)
-# Use --workers for production deployments with more resources
-CMD ["uvicorn", "nimbusforge.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
+# Use shell form so $PORT gets expanded at runtime
+CMD uvicorn nimbusforge.api.main:app --host 0.0.0.0 --port $PORT --log-level info
