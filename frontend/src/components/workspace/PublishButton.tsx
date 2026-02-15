@@ -298,12 +298,7 @@ export function PublishButton({
                   status={
                     state === "generating"
                       ? "active"
-                      : state === "uploading" ||
-                          state === "deploying" ||
-                          state === "polling" ||
-                          state === "success"
-                        ? "done"
-                        : "pending"
+                      : "done"
                   }
                 />
                 <PublishStep
@@ -312,9 +307,7 @@ export function PublishButton({
                   status={
                     state === "uploading"
                       ? "active"
-                      : state === "deploying" ||
-                          state === "polling" ||
-                          state === "success"
+                      : state === "deploying" || state === "polling"
                         ? "done"
                         : "pending"
                   }
@@ -325,9 +318,7 @@ export function PublishButton({
                   status={
                     state === "deploying" || state === "polling"
                       ? "active"
-                      : state === "success"
-                        ? "done"
-                        : "pending"
+                      : "pending"
                   }
                 />
 

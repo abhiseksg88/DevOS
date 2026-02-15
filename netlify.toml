@@ -10,11 +10,6 @@
   # Do NOT install Python packages
   NPM_FLAGS = "--legacy-peer-deps"
 
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
-[functions]
-  # Disable Netlify Functions (we use Railway for backend)
-  directory = "none"
+# Next.js adapter — handles SSR, API routes, middleware, and image optimization
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
