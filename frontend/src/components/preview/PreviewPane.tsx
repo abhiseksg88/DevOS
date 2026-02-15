@@ -150,6 +150,9 @@ function buildPreviewDocument(files: FileNode[]): string {
 <!-- 1. Error bridge — must be FIRST so it catches load errors from CDNs -->
 <script>
 window.__errs=[];
+/* postMessage to parent uses '*' because srcdoc iframes are same-origin;
+   only non-sensitive diagnostic messages (errors, logs) are sent this way.
+   Credential messages (SUPABASE_INIT) are handled separately with origin checks. */
 window.onerror=function(m,s,l,c,e){
   var p={message:String(m),line:l,stack:e?e.stack:''};
   window.__errs.push(p);
@@ -212,7 +215,7 @@ ${cleanCSS}
     }
   });
 
-  /* Request credentials from parent */
+  /* Request credentials from parent — srcdoc iframes are same-origin so '*' is safe here */
   try{
     window.parent.postMessage({type:'REQUEST_SUPABASE_CREDENTIALS'},'*');
   }catch(e){console.warn('[Preview] Could not request Supabase credentials');}
@@ -329,6 +332,7 @@ ${cleanCSS}
       ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
     }catch(err){
       showErr(err.message,err.stack);
+      /* Error diagnostic — non-sensitive, srcdoc same-origin */
       try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:err.message}},'*')}catch(x){}
     }
   }
@@ -598,40 +602,39 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
   // Handle Supabase credential requests from preview iframe
   useEffect(() => {
     async function handleCredentialRequest(e: MessageEvent) {
-      if (e.data?.type === "REQUEST_SUPABASE_CREDENTIALS") {
-        try {
-          // Fetch credentials from backend
-          const { preview } = await import("@/lib/api");
-          const token = ""; // TODO: Get auth token from session/context
+      if (e.data?.type !== "REQUEST_SUPABASE_CREDENTIALS") return;
 
-          // For now, fetch without auth (endpoint should be public or we need to integrate auth)
-          const response = await fetch("/api/preview-credentials");
-          if (!response.ok) {
-            console.error("[PreviewPane] Failed to fetch credentials:", response.statusText);
-            return;
-          }
+      // Only respond to same-origin messages (srcdoc iframes are same-origin)
+      if (e.origin !== "null" && e.origin !== window.location.origin) {
+        console.warn("[PreviewPane] Ignoring credential request from untrusted origin:", e.origin);
+        return;
+      }
 
-          const credentials = await response.json();
-
-          // Send credentials to iframe
-          const iframes = document.getElementsByTagName("iframe");
-          for (let i = 0; i < iframes.length; i++) {
-            try {
-              iframes[i].contentWindow?.postMessage(
-                {
-                  type: "SUPABASE_INIT",
-                  url: credentials.url,
-                  anonKey: credentials.anonKey,
-                },
-                "*"
-              );
-            } catch (err) {
-              console.error("[PreviewPane] Failed to send credentials to iframe:", err);
-            }
-          }
-        } catch (error) {
-          console.error("[PreviewPane] Error handling credential request:", error);
+      try {
+        const response = await fetch("/api/preview-credentials");
+        if (!response.ok) {
+          console.error("[PreviewPane] Failed to fetch credentials:", response.statusText);
+          return;
         }
+
+        const credentials = await response.json();
+
+        // Send credentials only to the requesting iframe's source.
+        // srcdoc iframes report origin "null", so we use "*" only for those
+        // (which is safe because srcdoc iframes are same-origin by definition).
+        const targetOrigin = e.origin === "null" ? "*" : e.origin;
+        if (e.source && typeof (e.source as WindowProxy).postMessage === "function") {
+          (e.source as WindowProxy).postMessage(
+            {
+              type: "SUPABASE_INIT",
+              url: credentials.url,
+              anonKey: credentials.anonKey,
+            },
+            targetOrigin,
+          );
+        }
+      } catch (error) {
+        console.error("[PreviewPane] Error handling credential request:", error);
       }
     }
 

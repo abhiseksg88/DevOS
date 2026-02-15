@@ -109,8 +109,12 @@ def _init_repo(work_dir: str, tenant_id: str, project_id: str, settings: Setting
                 file_path = repo_dir / f["name"]
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_bytes(content)
-    except Exception:
-        pass  # New project, empty repo
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).info(
+            "No existing source in storage for %s/%s (new project): %s",
+            tenant_id, project_id, e,
+        )
 
     # Init git repo if not exists
     if not (repo_dir / ".git").exists():
@@ -406,5 +410,9 @@ def _sync_to_storage(repo_dir: Path, tenant_id: str, project_id: str, settings: 
                     content,
                     {"upsert": "true"},
                 )
-            except Exception:
-                pass  # Non-critical — source is in git
+            except Exception as upload_err:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Failed to upload %s to storage for %s/%s: %s",
+                    relative, tenant_id, project_id, upload_err,
+                )

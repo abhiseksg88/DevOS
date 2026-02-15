@@ -57,14 +57,14 @@ def _ensure_app_data_table(db, settings: Settings) -> bool:
         error_msg = str(e).lower()
 
         # If table doesn't exist, log warning
+        import logging
+        _tbl_logger = logging.getLogger(__name__)
         if "relation" in error_msg or "does not exist" in error_msg or "not found" in error_msg:
-            print(f"[WARNING] app_data table not found. Run: supabase db push")
-            print(f"[WARNING] Migration: supabase/migrations/004_app_data_table.sql")
-            # Return True to continue build (table will be created via migrations)
+            _tbl_logger.warning("app_data table not found. Run: supabase db push")
+            _tbl_logger.warning("Migration: supabase/migrations/004_app_data_table.sql")
             return True
         else:
-            # Some other error - log but continue
-            print(f"[INFO] Database check error (non-critical): {e}")
+            _tbl_logger.info("Database check error (non-critical): %s", e)
             return True
 
 
@@ -634,16 +634,29 @@ def _update_model_usage(current: dict, model: str, response: dict) -> dict:
 
 def _load_project_files(tenant_id: str, project_id: str, settings: Settings) -> dict[str, str]:
     """Load project source files from Supabase Storage."""
+    import logging
+    _logger = logging.getLogger(__name__)
+
     db = _get_db(settings)
     try:
         files_list = db.storage.from_("project-assets").list(f"{tenant_id}/{project_id}/src")
         result = {}
         for f in files_list[:50]:  # Limit to 50 most relevant files
-            content = db.storage.from_("project-assets").download(
-                f"{tenant_id}/{project_id}/src/{f['name']}"
-            )
-            if content:
-                result[f"src/{f['name']}"] = content.decode("utf-8", errors="replace")
+            try:
+                content = db.storage.from_("project-assets").download(
+                    f"{tenant_id}/{project_id}/src/{f['name']}"
+                )
+                if content:
+                    result[f"src/{f['name']}"] = content.decode("utf-8", errors="replace")
+            except Exception as file_err:
+                _logger.warning(
+                    "Failed to download file %s for project %s/%s: %s",
+                    f.get("name"), tenant_id, project_id, file_err,
+                )
         return result
-    except Exception:
+    except Exception as e:
+        _logger.warning(
+            "Failed to load project files for %s/%s: %s",
+            tenant_id, project_id, e,
+        )
         return {}
