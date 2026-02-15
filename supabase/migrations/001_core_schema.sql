@@ -229,7 +229,7 @@ CREATE INDEX idx_api_keys_prefix ON api_keys(key_prefix);
 -- ===========================================================================
 
 -- Helper function: get tenant IDs for the current authenticated user
-CREATE OR REPLACE FUNCTION auth.tenant_ids()
+CREATE OR REPLACE FUNCTION public.get_tenant_ids()
 RETURNS UUID[] AS $$
     SELECT COALESCE(
         array_agg(tenant_id),
@@ -240,7 +240,7 @@ RETURNS UUID[] AS $$
 $$ LANGUAGE sql SECURITY DEFINER STABLE;
 
 -- Helper function: get role for current user in a specific tenant
-CREATE OR REPLACE FUNCTION auth.tenant_role(t_id UUID)
+CREATE OR REPLACE FUNCTION public.get_tenant_role(t_id UUID)
 RETURNS tenant_role AS $$
     SELECT role
     FROM tenant_members
@@ -252,11 +252,11 @@ $$ LANGUAGE sql SECURITY DEFINER STABLE;
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenants_select ON tenants FOR SELECT
-    USING (id = ANY(auth.tenant_ids()));
+    USING (id = ANY(public.get_tenant_ids()));
 
 CREATE POLICY tenants_update ON tenants FOR UPDATE
-    USING (auth.tenant_role(id) IN ('owner', 'admin'))
-    WITH CHECK (auth.tenant_role(id) IN ('owner', 'admin'));
+    USING (public.get_tenant_role(id) IN ('owner', 'admin'))
+    WITH CHECK (public.get_tenant_role(id) IN ('owner', 'admin'));
 
 -- Insert/delete handled by service-role only (no user policy needed)
 
@@ -264,52 +264,52 @@ CREATE POLICY tenants_update ON tenants FOR UPDATE
 ALTER TABLE tenant_members ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_members_select ON tenant_members FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 CREATE POLICY tenant_members_insert ON tenant_members FOR INSERT
-    WITH CHECK (auth.tenant_role(tenant_id) IN ('owner', 'admin'));
+    WITH CHECK (public.get_tenant_role(tenant_id) IN ('owner', 'admin'));
 
 CREATE POLICY tenant_members_update ON tenant_members FOR UPDATE
-    USING (auth.tenant_role(tenant_id) IN ('owner', 'admin'))
-    WITH CHECK (auth.tenant_role(tenant_id) IN ('owner', 'admin'));
+    USING (public.get_tenant_role(tenant_id) IN ('owner', 'admin'))
+    WITH CHECK (public.get_tenant_role(tenant_id) IN ('owner', 'admin'));
 
 CREATE POLICY tenant_members_delete ON tenant_members FOR DELETE
-    USING (auth.tenant_role(tenant_id) = 'owner');
+    USING (public.get_tenant_role(tenant_id) = 'owner');
 
 -- ---- Projects ----
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY projects_select ON projects FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 CREATE POLICY projects_insert ON projects FOR INSERT
-    WITH CHECK (auth.tenant_role(tenant_id) IN ('owner', 'admin', 'member'));
+    WITH CHECK (public.get_tenant_role(tenant_id) IN ('owner', 'admin', 'member'));
 
 CREATE POLICY projects_update ON projects FOR UPDATE
-    USING (auth.tenant_role(tenant_id) IN ('owner', 'admin', 'member'))
-    WITH CHECK (auth.tenant_role(tenant_id) IN ('owner', 'admin', 'member'));
+    USING (public.get_tenant_role(tenant_id) IN ('owner', 'admin', 'member'))
+    WITH CHECK (public.get_tenant_role(tenant_id) IN ('owner', 'admin', 'member'));
 
 CREATE POLICY projects_delete ON projects FOR DELETE
-    USING (auth.tenant_role(tenant_id) IN ('owner', 'admin'));
+    USING (public.get_tenant_role(tenant_id) IN ('owner', 'admin'));
 
 -- ---- Builds ----
 ALTER TABLE builds ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY builds_select ON builds FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 -- Builds are created by the backend (service-role). No user INSERT policy.
 
 CREATE POLICY builds_update ON builds FOR UPDATE
-    USING (tenant_id = ANY(auth.tenant_ids())
-           AND auth.tenant_role(tenant_id) IN ('owner', 'admin', 'member'))
-    WITH CHECK (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids())
+           AND public.get_tenant_role(tenant_id) IN ('owner', 'admin', 'member'))
+    WITH CHECK (tenant_id = ANY(public.get_tenant_ids()));
 
 -- ---- Build Events ----
 ALTER TABLE build_events ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY build_events_select ON build_events FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 -- Insert by service-role only (backend writes build events)
 
@@ -317,17 +317,17 @@ CREATE POLICY build_events_select ON build_events FOR SELECT
 ALTER TABLE deployments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY deployments_select ON deployments FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 CREATE POLICY deployments_update ON deployments FOR UPDATE
-    USING (auth.tenant_role(tenant_id) IN ('owner', 'admin'))
-    WITH CHECK (auth.tenant_role(tenant_id) IN ('owner', 'admin'));
+    USING (public.get_tenant_role(tenant_id) IN ('owner', 'admin'))
+    WITH CHECK (public.get_tenant_role(tenant_id) IN ('owner', 'admin'));
 
 -- ---- Usage Events ----
 ALTER TABLE usage_events ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY usage_events_select ON usage_events FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 -- Insert by service-role only
 
@@ -335,19 +335,19 @@ CREATE POLICY usage_events_select ON usage_events FOR SELECT
 ALTER TABLE plan_cache ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY plan_cache_select ON plan_cache FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 -- ---- API Keys ----
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY api_keys_select ON api_keys FOR SELECT
-    USING (tenant_id = ANY(auth.tenant_ids()));
+    USING (tenant_id = ANY(public.get_tenant_ids()));
 
 CREATE POLICY api_keys_insert ON api_keys FOR INSERT
-    WITH CHECK (auth.tenant_role(tenant_id) IN ('owner', 'admin'));
+    WITH CHECK (public.get_tenant_role(tenant_id) IN ('owner', 'admin'));
 
 CREATE POLICY api_keys_delete ON api_keys FOR DELETE
-    USING (auth.tenant_role(tenant_id) IN ('owner', 'admin'));
+    USING (public.get_tenant_role(tenant_id) IN ('owner', 'admin'));
 
 -- ===========================================================================
 -- Storage Policies (Supabase Storage)
@@ -361,9 +361,9 @@ CREATE POLICY api_keys_delete ON api_keys FOR DELETE
 -- INSERT INTO storage.buckets (id, name, public) VALUES ('project-assets', 'project-assets', false);
 --
 -- Storage RLS policy (pseudo):
--- SELECT: bucket_id = 'project-assets' AND (storage.foldername(name))[1]::uuid = ANY(auth.tenant_ids())
--- INSERT: bucket_id = 'project-assets' AND (storage.foldername(name))[1]::uuid = ANY(auth.tenant_ids())
--- DELETE: bucket_id = 'project-assets' AND (storage.foldername(name))[1]::uuid = ANY(auth.tenant_ids())
+-- SELECT: bucket_id = 'project-assets' AND (storage.foldername(name))[1]::uuid = ANY(public.get_tenant_ids())
+-- INSERT: bucket_id = 'project-assets' AND (storage.foldername(name))[1]::uuid = ANY(public.get_tenant_ids())
+-- DELETE: bucket_id = 'project-assets' AND (storage.foldername(name))[1]::uuid = ANY(public.get_tenant_ids())
 
 -- ===========================================================================
 -- Utility: Updated_at trigger
