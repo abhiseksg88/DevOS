@@ -70,30 +70,17 @@ export function useAutoFix(
   const errorsRef = useRef<string[]>([]);
   const iterationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const isFixingRef = useRef(false);
+
+  // Use refs to avoid stale closures in setTimeout callbacks
   const fileTreeRef = useRef(fileTree);
   fileTreeRef.current = fileTree;
-
-  // Collect errors with debounce — wait for all errors to arrive
-  const reportError = useCallback(
-    (errorMessage: string) => {
-      // Don't capture during a fix attempt
-      if (state.isFixing) return;
-
-      // Deduplicate
-      if (!errorsRef.current.includes(errorMessage)) {
-        errorsRef.current.push(errorMessage);
-      }
-
-      // Debounce: wait 1.5s for more errors before triggering fix
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        if (errorsRef.current.length > 0 && iterationRef.current < MAX_ITERATIONS) {
-          triggerFix();
-        }
-      }, DEBOUNCE_MS);
-    },
-    [state.isFixing],
-  );
+  const onFileFixRef = useRef(onFileFix);
+  onFileFixRef.current = onFileFix;
+  const onFixStartRef = useRef(onFixStart);
+  onFixStartRef.current = onFixStart;
+  const onFixEndRef = useRef(onFixEnd);
+  onFixEndRef.current = onFixEnd;
 
   const triggerFix = useCallback(async () => {
     const errors = [...errorsRef.current];
@@ -108,13 +95,14 @@ export function useAutoFix(
     const controller = new AbortController();
     abortRef.current = controller;
 
+    isFixingRef.current = true;
     setState({
       isFixing: true,
       iteration,
       maxIterations: MAX_ITERATIONS,
       lastError: errors[0],
     });
-    onFixStart();
+    onFixStartRef.current();
 
     try {
       const errorList = errors
@@ -166,7 +154,7 @@ export function useAutoFix(
               throw new Error(event.error);
             }
           } catch (e) {
-            if (e instanceof SyntaxError) continue; // skip malformed JSON
+            if (e instanceof SyntaxError) continue;
             throw e;
           }
         }
@@ -174,27 +162,52 @@ export function useAutoFix(
 
       // Parse and apply fixes
       const fixedFiles = parseFixFiles(fullText);
+      isFixingRef.current = false;
       if (fixedFiles.length > 0) {
         for (const file of fixedFiles) {
-          onFileFix(file.path, file.content);
+          onFileFixRef.current(file.path, file.content);
         }
         setState((prev) => ({ ...prev, isFixing: false }));
-        onFixEnd(true, iteration);
+        onFixEndRef.current(true, iteration);
       } else {
         setState((prev) => ({ ...prev, isFixing: false }));
-        onFixEnd(false, iteration);
+        onFixEndRef.current(false, iteration);
       }
     } catch (err) {
+      isFixingRef.current = false;
       if ((err as Error).name === "AbortError") return;
       setState((prev) => ({ ...prev, isFixing: false }));
-      onFixEnd(false, iterationRef.current);
+      onFixEndRef.current(false, iterationRef.current);
     }
-  }, [onFileFix, onFixStart, onFixEnd]);
+  }, []); // Stable — uses refs for all external values
+
+  // Collect errors with debounce — wait for all errors to arrive
+  const reportError = useCallback(
+    (errorMessage: string) => {
+      // Don't capture during a fix attempt (use ref for freshness)
+      if (isFixingRef.current) return;
+
+      // Deduplicate
+      if (!errorsRef.current.includes(errorMessage)) {
+        errorsRef.current.push(errorMessage);
+      }
+
+      // Debounce: wait 1.5s for more errors before triggering fix
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        if (errorsRef.current.length > 0 && iterationRef.current < MAX_ITERATIONS) {
+          triggerFix();
+        }
+      }, DEBOUNCE_MS);
+    },
+    [triggerFix],
+  );
 
   // Reset iteration counter (call when user sends a new prompt)
   const reset = useCallback(() => {
     iterationRef.current = 0;
     errorsRef.current = [];
+    isFixingRef.current = false;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     abortRef.current?.abort();
     setState({
