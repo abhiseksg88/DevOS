@@ -111,3 +111,180 @@ export async function listBuilds(tenantId: string, projectId: string): Promise<B
   if (error) throw new Error(error.message);
   return (data ?? []) as Build[];
 }
+
+// ---------------------------------------------------------------------------
+// Code Persistence (Project Code + Versions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Save code files to the project's current code_files column.
+ * Also creates a version snapshot via RPC.
+ */
+export async function updateProjectCode(
+  projectId: string,
+  codeFiles: Record<string, string>,
+  trigger: 'generation' | 'autosave' | 'manual' = 'autosave',
+  label?: string
+): Promise<{ version: number }> {
+  const supabase = createClient();
+
+  // Call RPC to atomically update code and create version
+  const { data, error } = await supabase.rpc('create_project_version', {
+    p_project_id: projectId,
+    p_code_files: codeFiles,
+    p_label: label ?? trigger,
+    p_trigger: trigger,
+  });
+
+  if (error) throw new Error(error.message);
+  return data as { version: number };
+}
+
+/**
+ * Fetch the current code files from a project.
+ */
+export async function getProjectCode(projectId: string): Promise<Record<string, string>> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('projects')
+    .select('code_files')
+    .eq('id', projectId)
+    .single();
+
+  if (error) throw new Error(error.message);
+  return (data?.code_files ?? {}) as Record<string, string>;
+}
+
+/**
+ * List all versions of a project (for version history UI).
+ */
+export async function listProjectVersions(
+  projectId: string
+): Promise<Array<{ version: number; label: string; trigger: string; created_at: string }>> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('project_versions')
+    .select('version, label, trigger, created_at')
+    .eq('project_id', projectId)
+    .order('version', { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Array<{ version: number; label: string; trigger: string; created_at: string }>;
+}
+
+/**
+ * Fetch code from a specific version.
+ */
+export async function getProjectVersion(
+  projectId: string,
+  version: number
+): Promise<Record<string, string>> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('project_versions')
+    .select('code_files')
+    .eq('project_id', projectId)
+    .eq('version', version)
+    .single();
+
+  if (error) throw new Error(error.message);
+  return (data?.code_files ?? {}) as Record<string, string>;
+}
+
+// ---------------------------------------------------------------------------
+// Chat Messages (Workspace Conversation History)
+// ---------------------------------------------------------------------------
+
+/**
+ * Save a chat message (user or assistant).
+ */
+export async function saveChatMessage(
+  projectId: string,
+  role: 'user' | 'assistant' | 'system',
+  content: string
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('chat_messages').insert({
+    project_id: projectId,
+    role,
+    content,
+  });
+
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Load all chat messages for a project.
+ */
+export async function loadChatMessages(
+  projectId: string
+): Promise<Array<{ id: string; role: string; content: string; created_at: string }>> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('id, role, content, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Array<{ id: string; role: string; content: string; created_at: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace State (UI State)
+// ---------------------------------------------------------------------------
+
+export interface WorkspaceUIState {
+  activeFile: string | null;
+  openFiles: string[];
+  rightTab: 'code' | 'preview' | 'console';
+}
+
+/**
+ * Save the user's workspace UI state (active file, open tabs, etc).
+ * Uses UPSERT so it updates if exists, inserts if not.
+ */
+export async function saveWorkspaceState(
+  projectId: string,
+  userId: string,
+  state: WorkspaceUIState
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('workspace_state').upsert({
+    project_id: projectId,
+    user_id: userId,
+    active_file: state.activeFile,
+    open_files: state.openFiles,
+    right_tab: state.rightTab,
+  });
+
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Load the user's saved workspace state.
+ */
+export async function loadWorkspaceState(
+  projectId: string,
+  userId: string
+): Promise<WorkspaceUIState | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('workspace_state')
+    .select('active_file, open_files, right_tab')
+    .eq('project_id', projectId)
+    .eq('user_id', userId)
+    .single();
+
+  if (error) {
+    // No workspace state exists yet
+    if (error.code === 'PGRST116') return null;
+    throw new Error(error.message);
+  }
+
+  return {
+    activeFile: data.active_file,
+    openFiles: data.open_files ?? [],
+    rightTab: data.right_tab ?? 'preview',
+  } as WorkspaceUIState;
+}

@@ -14,6 +14,7 @@ export function useProject(projectId: string) {
   const [project, setProject] = useState<Project | null>(null);
   const [builds, setBuilds] = useState<Build[]>([]);
   const [token, setToken] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const getToken = useCallback(async () => {
@@ -21,7 +22,9 @@ export function useProject(projectId: string) {
     const supabase = createClient();
     const { data } = await supabase.auth.getSession();
     const t = data.session?.access_token ?? "";
+    const uid = data.session?.user?.id ?? null;
     setToken(t);
+    setUserId(uid);
     return t;
   }, [token]);
 
@@ -92,5 +95,5 @@ export function useProject(projectId: string) {
     [getToken, resolvedTenantId, projectId]
   );
 
-  return { project, builds, tenantId: resolvedTenantId, token, loading, createBuild, refreshBuild, getToken };
+  return { project, builds, tenantId: resolvedTenantId, token, userId, loading, createBuild, refreshBuild, getToken };
 }

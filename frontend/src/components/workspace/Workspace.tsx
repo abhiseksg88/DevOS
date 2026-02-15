@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
 import { useGenerate } from "@/hooks/useGenerate";
+import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
 import { FileTree } from "@/components/editor/FileTree";
@@ -23,6 +24,58 @@ import {
 import { cn } from "@/lib/utils";
 
 type RightTab = "code" | "preview" | "console";
+
+// Default file tree for new projects
+const defaultFileTree: FileNode[] = [
+  {
+    name: "src",
+    path: "src",
+    type: "directory",
+    children: [
+      {
+        name: "app",
+        path: "src/app",
+        type: "directory",
+        children: [
+          {
+            name: "page.tsx",
+            path: "src/app/page.tsx",
+            type: "file",
+            language: "typescriptreact",
+            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to NimbusForge</h1>\n    </main>\n  );\n}',
+          },
+          {
+            name: "layout.tsx",
+            path: "src/app/layout.tsx",
+            type: "file",
+            language: "typescriptreact",
+            content: 'import "./globals.css";\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang="en">\n      <body>{children}</body>\n    </html>\n  );\n}',
+          },
+          {
+            name: "globals.css",
+            path: "src/app/globals.css",
+            type: "file",
+            language: "css",
+            content: "@tailwind base;\n@tailwind components;\n@tailwind utilities;",
+          },
+        ],
+      },
+      {
+        name: "components",
+        path: "src/components",
+        type: "directory",
+        children: [],
+      },
+    ],
+  },
+  {
+    name: "package.json",
+    path: "package.json",
+    type: "file",
+    language: "json",
+    content: '{\n  "name": "my-app",\n  "version": "0.1.0",\n  "dependencies": {\n    "next": "14.2.0",\n    "react": "^18.3.0"\n  }\n}',
+  },
+];
 
 /** Helper: flatten file tree into a flat array */
 function flattenTree(nodes: FileNode[]): FileNode[] {
@@ -49,8 +102,9 @@ function updateInTree(nodes: FileNode[], path: string, content: string): FileNod
 
 export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
-  const { project, loading } = useProject(projectId);
+  const { project, loading, userId } = useProject(projectId);
   const generator = useGenerate();
+  const persistence = useCodePersistence(projectId, userId);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [rightTab, setRightTab] = useState<RightTab>("preview");
@@ -60,64 +114,124 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
   const seqRef = useRef(0);
 
+  // Ref to track last prompt for saving with generation
+  const lastPromptRef = useRef<string>("");
+
+  // Helper: Convert file tree to code map for persistence
+  function treeToCodeMap(tree: FileNode[]): Record<string, string> {
+    const map: Record<string, string> = {};
+    function walk(nodes: FileNode[]) {
+      for (const node of nodes) {
+        if (node.type === "file" && node.content) {
+          map[node.path] = node.content;
+        }
+        if (node.children) walk(node.children);
+      }
+    }
+    walk(tree);
+    return map;
+  }
+
+  // Helper: Convert code map to file tree for loading
+  function codeMapToTree(map: Record<string, string>): FileNode[] {
+    // Start with the skeleton
+    const tree = JSON.parse(JSON.stringify(defaultFileTree));
+
+    // Overlay saved files
+    for (const [path, content] of Object.entries(map)) {
+      const parts = path.split("/");
+      addFileToTreeStatic(tree, parts, 0, content);
+    }
+    return tree;
+  }
+
+  // Static version of addToDirectory for loading from saved code
+  function addFileToTreeStatic(
+    tree: FileNode[],
+    parts: string[],
+    index: number,
+    content: string
+  ): void {
+    if (index === parts.length) return;
+
+    const part = parts[index];
+    const isFile = index === parts.length - 1;
+    let node = tree.find((n) => n.name === part);
+
+    if (!node) {
+      const ext = part.split(".").pop() ?? "";
+      const langMap: Record<string, string> = {
+        tsx: "typescriptreact",
+        jsx: "javascriptreact",
+        ts: "typescript",
+        js: "javascript",
+        css: "css",
+        json: "json",
+        html: "html",
+      };
+      node = {
+        name: part,
+        path: parts.slice(0, index + 1).join("/"),
+        type: isFile ? "file" : "directory",
+        language: isFile ? langMap[ext] ?? "plaintext" : undefined,
+        content: isFile ? content : undefined,
+        children: isFile ? undefined : [],
+      };
+      tree.push(node);
+    }
+
+    if (index < parts.length - 1 && node.children) {
+      addFileToTreeStatic(node.children, parts, index + 1, content);
+    } else if (isFile && node.type === "file") {
+      node.content = content;
+    }
+  }
+
   // File tree — updated from Claude output or editor changes
-  const [fileTree, setFileTree] = useState<FileNode[]>([
-    {
-      name: "src",
-      path: "src",
-      type: "directory",
-      children: [
-        {
-          name: "app",
-          path: "src/app",
-          type: "directory",
-          children: [
-            {
-              name: "page.tsx",
-              path: "src/app/page.tsx",
-              type: "file",
-              language: "typescriptreact",
-              content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to NimbusForge</h1>\n    </main>\n  );\n}',
-            },
-            {
-              name: "layout.tsx",
-              path: "src/app/layout.tsx",
-              type: "file",
-              language: "typescriptreact",
-              content: 'import "./globals.css";\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang="en">\n      <body>{children}</body>\n    </html>\n  );\n}',
-            },
-            {
-              name: "globals.css",
-              path: "src/app/globals.css",
-              type: "file",
-              language: "css",
-              content: "@tailwind base;\n@tailwind components;\n@tailwind utilities;",
-            },
-          ],
-        },
-        {
-          name: "components",
-          path: "src/components",
-          type: "directory",
-          children: [],
-        },
-      ],
-    },
-    {
-      name: "package.json",
-      path: "package.json",
-      type: "file",
-      language: "json",
-      content: '{\n  "name": "my-app",\n  "version": "0.1.0",\n  "dependencies": {\n    "next": "14.2.0",\n    "react": "^18.3.0"\n  }\n}',
-    },
-  ]);
+  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
+
+  // Hydrate state from persistence on load
+  useEffect(() => {
+    if (persistence.isLoading) return;
+
+    // Load code from persistence
+    if (Object.keys(persistence.codeFiles).length > 0) {
+      const tree = codeMapToTree(persistence.codeFiles);
+      setFileTree(tree);
+    }
+
+    // Load messages from persistence
+    if (persistence.messages.length > 0) {
+      setMessages(persistence.messages);
+    }
+
+    // Load workspace state (active file, open tabs, right tab)
+    if (persistence.workspaceState) {
+      const ws = persistence.workspaceState;
+      setRightTab(ws.rightTab as RightTab);
+      if (ws.openFiles.length > 0) {
+        const flat = flattenTree(fileTree);
+        const restored = ws.openFiles
+          .map((path) => flat.find((f) => f.path === path))
+          .filter(Boolean) as FileNode[];
+        setOpenFiles(restored);
+        if (ws.activeFile) {
+          const active = restored.find((f) => f.path === ws.activeFile);
+          setActiveFile(active ?? null);
+        }
+      }
+    }
+  }, [persistence.isLoading]);
 
   /** Update a file's content in the tree */
   const updateFileContent = useCallback((path: string, content: string) => {
     setFileTree((prev) => updateInTree(prev, path, content));
     setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
     setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content } : f)));
-  }, []);
+
+    // Auto-save with debounce (handled in persistence hook)
+    persistence.saveCode(treeToCodeMap(updateInTree(fileTree, path, content)), 'autosave');
+  }, [persistence, fileTree]);
 
   /** Add or update a file in the tree */
   const addFileToTree = useCallback((path: string, content: string, language?: string) => {
@@ -177,7 +291,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     [activeFile, openFiles]
   );
 
-  // When generation completes, switch to preview
+  // When generation completes, switch to preview and save code
   useEffect(() => {
     if (!generator.isGenerating && generator.files.length > 0) {
       setRightTab("preview");
@@ -196,8 +310,11 @@ export function Workspace({ projectId }: { projectId: string }) {
           created_at: new Date().toISOString(),
         },
       ]);
+
+      // Save code after generation completes
+      persistence.saveCode(treeToCodeMap(fileTree), 'generation', lastPromptRef.current);
     }
-  }, [generator.isGenerating, generator.files.length]);
+  }, [generator.isGenerating, generator.files.length, persistence, fileTree]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -208,6 +325,12 @@ export function Workspace({ projectId }: { projectId: string }) {
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, userMsg]);
+
+      // Save user message to persistence
+      persistence.saveMessage('user', content);
+
+      // Store prompt for saving with generation
+      lastPromptRef.current = content;
 
       // Reset events
       seqRef.current = 0;
@@ -225,16 +348,15 @@ export function Workspace({ projectId }: { projectId: string }) {
       seqRef.current = 1;
 
       // Show "generating" message
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Generating your app with Claude Sonnet...",
-          timestamp: Date.now(),
-          status: "coding",
-        },
-      ]);
+      const generatingMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "Generating your app with Claude Sonnet...",
+        timestamp: Date.now(),
+        status: "coding",
+      };
+      setMessages((prev) => [...prev, generatingMsg]);
+      persistence.saveMessage('assistant', generatingMsg.content);
 
       // Switch to console to show progress
       setRightTab("console");
@@ -246,33 +368,32 @@ export function Workspace({ projectId }: { projectId: string }) {
 
       // Use the returned result (not stale closure state)
       if (result.error) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `Error: ${result.error}`,
-            timestamp: Date.now(),
-          },
-        ]);
+        const errorMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Error: ${result.error}`,
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        persistence.saveMessage('assistant', errorMsg.content);
       } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the **Preview** tab to see your app, or the **Code** tab to inspect the files.`,
-            timestamp: Date.now(),
-            status: "succeeded",
-          },
-        ]);
+        const successMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the **Preview** tab to see your app, or the **Code** tab to inspect the files.`,
+          timestamp: Date.now(),
+          status: "succeeded",
+        };
+        setMessages((prev) => [...prev, successMsg]);
+        persistence.saveMessage('assistant', successMsg.content);
+
         // Auto-switch to preview
         if (result.files.length > 0) {
           setRightTab("preview");
         }
       }
     },
-    [generator, fileTree, addFileToTree]
+    [generator, fileTree, addFileToTree, persistence]
   );
 
   if (loading) {
