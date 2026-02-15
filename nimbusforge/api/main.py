@@ -356,7 +356,7 @@ async def _run_build_pipeline(
     """
     Execute the full agent pipeline for a build.
     Imported here to avoid circular imports — the actual implementation
-    lives in platform.agents.orchestrator.
+    lives in nimbusforge.agents.orchestrator.
     """
     from ..agents.orchestrator import run_build
     try:

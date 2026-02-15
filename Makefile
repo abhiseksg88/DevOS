@@ -35,10 +35,10 @@ db-setup-test:
 run:
 	@echo ">>> Starting NimbusForge API on http://localhost:8000"
 	@echo ">>> Swagger docs at http://localhost:8000/docs"
-	uvicorn platform.api.main:app --host 0.0.0.0 --port 8000 --reload
+	uvicorn nimbusforge.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 run-prod:
-	uvicorn platform.api.main:app --host 0.0.0.0 --port 8000 --workers 4
+	uvicorn nimbusforge.api.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 # ---------- Testing ----------
 

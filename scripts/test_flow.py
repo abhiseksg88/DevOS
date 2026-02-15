@@ -13,7 +13,7 @@ This script:
 Prerequisites:
   - .env file with valid SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
   - Database tables created (run SQL migrations first)
-  - API server running: make run (or uvicorn platform.api.main:app)
+  - API server running: make run (or uvicorn nimbusforge.api.main:app)
 
 Usage:
     python scripts/test_flow.py

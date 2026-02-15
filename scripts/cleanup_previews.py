@@ -23,8 +23,8 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from platform.api.config import get_settings
-from platform.preview.router import cleanup_stale_previews
+from nimbusforge.api.config import get_settings
+from nimbusforge.preview.router import cleanup_stale_previews
 
 
 def main():

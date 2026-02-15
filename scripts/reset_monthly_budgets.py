@@ -12,7 +12,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from platform.api.config import get_settings
+from nimbusforge.api.config import get_settings
 from supabase import create_client
 
 
