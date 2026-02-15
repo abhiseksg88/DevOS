@@ -34,13 +34,24 @@ def get_supabase_anon(settings: Settings = Depends(get_settings)) -> Client:
 
 class AuthUser:
     """Authenticated user context extracted from Supabase JWT."""
-    def __init__(self, user_id: UUID, email: str, tenant_ids: list[UUID], raw_token: str):
+    def __init__(
+        self,
+        user_id: UUID,
+        email: str,
+        tenant_ids: list[UUID],
+        raw_token: str,
+        is_service_role: bool = False,
+    ):
         self.user_id = user_id
         self.email = email
         self.tenant_ids = tenant_ids
         self.raw_token = raw_token
+        self.is_service_role = is_service_role
 
     def assert_tenant_access(self, tenant_id: UUID):
+        # Service-role has unrestricted access (used for testing / internal calls)
+        if self.is_service_role:
+            return
         if tenant_id not in self.tenant_ids:
             raise HTTPException(status_code=403, detail="Access denied to this tenant")
 
@@ -48,6 +59,7 @@ class AuthUser:
 async def get_current_user(
     authorization: str = Header(..., description="Bearer <supabase_jwt>"),
     db: Client = Depends(get_supabase_service),
+    settings: Settings = Depends(get_settings),
 ) -> AuthUser:
     """Validate Supabase JWT, resolve tenant memberships."""
     if not authorization.startswith("Bearer "):
@@ -55,12 +67,34 @@ async def get_current_user(
 
     token = authorization[7:]
 
+    # Service-role bypass: when the token IS the service-role key itself
+    # (used by --skip-auth test mode and internal service calls)
+    if token == settings.supabase_service_role_key:
+        try:
+            memberships = (
+                db.table("tenant_members")
+                .select("tenant_id")
+                .execute()
+            )
+            tenant_ids = [UUID(m["tenant_id"]) for m in memberships.data]
+        except Exception:
+            tenant_ids = []
+        return AuthUser(
+            user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            email="service-role@nimbusforge.internal",
+            tenant_ids=tenant_ids,
+            raw_token=token,
+            is_service_role=True,
+        )
+
     # Verify JWT with Supabase Auth
     try:
         user_response = db.auth.get_user(token)
         user = user_response.user
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid token")
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=401, detail="Token verification failed")
 

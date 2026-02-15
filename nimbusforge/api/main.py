@@ -91,21 +91,32 @@ async def create_tenant(
 ):
     """Create a new tenant and add the creator as owner."""
     tenant_id = str(uuid4())
-    db.table("tenants").insert({
-        "id": tenant_id,
-        "name": body.name,
-        "slug": body.slug,
-        "plan": body.plan.value,
-    }).execute()
+    try:
+        db.table("tenants").insert({
+            "id": tenant_id,
+            "name": body.name,
+            "slug": body.slug,
+            "plan": body.plan.value,
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create tenant: {e}")
 
-    db.table("tenant_members").insert({
-        "tenant_id": tenant_id,
-        "user_id": str(user.user_id),
-        "role": "owner",
-    }).execute()
+    # Add creator as owner (skip for service-role — no real user in auth.users)
+    if not user.is_service_role:
+        try:
+            db.table("tenant_members").insert({
+                "tenant_id": tenant_id,
+                "user_id": str(user.user_id),
+                "role": "owner",
+            }).execute()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to add tenant member: {e}")
 
-    result = db.table("tenants").select("*").eq("id", tenant_id).single().execute()
-    return result.data
+    try:
+        result = db.table("tenants").select("*").eq("id", tenant_id).single().execute()
+        return result.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read back tenant: {e}")
 
 
 @app.get("/tenants", response_model=list[TenantResponse])
@@ -114,6 +125,11 @@ async def list_tenants(
     db: Client = Depends(get_supabase_service),
 ):
     """List all tenants the current user belongs to."""
+    # Service-role sees all tenants
+    if user.is_service_role:
+        result = db.table("tenants").select("*").execute()
+        return result.data
+
     membership = (
         db.table("tenant_members")
         .select("tenant_id")
@@ -210,16 +226,22 @@ async def create_project(
 ):
     user.assert_tenant_access(tenant_id)
     project_id = str(uuid4())
-    db.table("projects").insert({
-        "id": project_id,
-        "tenant_id": str(tenant_id),
-        "name": body.name,
-        "slug": body.slug,
-        "description": body.description,
-        "stack": body.stack,
-    }).execute()
-    result = db.table("projects").select("*").eq("id", project_id).single().execute()
-    return result.data
+    try:
+        db.table("projects").insert({
+            "id": project_id,
+            "tenant_id": str(tenant_id),
+            "name": body.name,
+            "slug": body.slug,
+            "description": body.description,
+            "stack": body.stack,
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create project: {e}")
+    try:
+        result = db.table("projects").select("*").eq("id", project_id).single().execute()
+        return result.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read back project: {e}")
 
 
 @app.get("/tenants/{tenant_id}/projects", response_model=list[ProjectResponse])
@@ -323,14 +345,17 @@ async def create_build(
 
     # Create build record
     build_id = str(uuid4())
-    db.table("builds").insert({
-        "id": build_id,
-        "tenant_id": str(tenant_id),
-        "project_id": str(project_id),
-        "user_id": str(user.user_id),
-        "status": "queued",
-        "prompt": body.prompt,
-    }).execute()
+    try:
+        db.table("builds").insert({
+            "id": build_id,
+            "tenant_id": str(tenant_id),
+            "project_id": str(project_id),
+            "user_id": str(user.user_id),
+            "status": "queued",
+            "prompt": body.prompt,
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create build: {e}")
 
     # Dispatch to agent pipeline (background)
     background_tasks.add_task(
