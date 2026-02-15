@@ -1,5 +1,5 @@
 """
-NimbusForge API Configuration.
+Vedaa API Configuration.
 Loaded from environment variables with sensible defaults.
 """
 
@@ -64,9 +64,19 @@ class Settings(BaseSettings):
     build_timeout_seconds: int = 600  # 10 minutes
     max_agent_iterations: int = 5
 
+    # --- CORS ---
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "https://vedaa.io",
+        "https://www.vedaa.io",
+    ]
+
+    # --- Debug ---
+    debug_mode: bool = False
+
     @model_validator(mode='after')
-    def validate_supabase_credentials(self):
-        """Validate that essential Supabase credentials are configured."""
+    def validate_critical_config(self):
+        """Validate that essential credentials are configured."""
         if not self.supabase_url:
             logger.warning("SUPABASE_URL not set. Preview apps may not persist data.")
 
@@ -74,11 +84,16 @@ class Settings(BaseSettings):
             logger.warning("SUPABASE_ANON_KEY not set. Preview apps cannot connect to database.")
 
         if not self.supabase_service_role_key:
-            logger.error("SUPABASE_SERVICE_ROLE_KEY not set. Backend operations will fail.")
+            raise ValueError(
+                "SUPABASE_SERVICE_ROLE_KEY is required. "
+                "Set it in .env or as an environment variable."
+            )
 
-        # Log successful configuration
         if self.supabase_url and self.supabase_anon_key and self.supabase_service_role_key:
             logger.info(f"Supabase configured: {self.supabase_url}")
+
+        if not self.anthropic_api_key:
+            logger.warning("ANTHROPIC_API_KEY not set. LLM generation will be unavailable.")
 
         return self
 

@@ -23,6 +23,7 @@ export interface Project {
   deployed_url?: string;
   deployed_at?: string;
   deployment_status?: "not_deployed" | "deploying" | "deployed" | "failed";
+  custom_domain?: string;
 }
 
 export interface PublishResult {

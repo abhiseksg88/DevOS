@@ -21,6 +21,35 @@ interface GenerateState {
 }
 
 /**
+ * Sanitize a file path from LLM output to prevent directory traversal
+ * and overwriting sensitive files.
+ */
+function sanitizePath(path: string): string | null {
+  let cleaned = path.trim();
+
+  // Reject absolute paths
+  if (cleaned.startsWith("/") || /^[A-Za-z]:/.test(cleaned)) return null;
+
+  // Collapse and reject directory traversal
+  if (cleaned.includes("..")) return null;
+
+  // Strip leading slashes and dots
+  cleaned = cleaned.replace(/^[./\\]+/, "");
+
+  // Reject empty paths
+  if (!cleaned) return null;
+
+  // Reject sensitive file patterns
+  const blocked = [".env", ".git", ".ssh", "node_modules", "credentials", ".secret"];
+  const lowerPath = cleaned.toLowerCase();
+  if (blocked.some((b) => lowerPath.startsWith(b) || lowerPath.includes("/" + b))) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+/**
  * Parse files from Claude's response. Supports multiple formats:
  * 1. ===FILE: path=== ... ===END_FILE===
  * 2. ```tsx // path/to/file.tsx ... ```
@@ -33,17 +62,19 @@ function parseFiles(text: string): GeneratedFile[] {
   const delimiterRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
-    files.push({ path: match[1].trim(), content: match[2].trimEnd() });
+    const safePath = sanitizePath(match[1]);
+    if (safePath) files.push({ path: safePath, content: match[2].trimEnd() });
   }
   if (files.length > 0) return files;
 
   // Format 2: ```language\n// filepath\n...``` or ```language:filepath\n...```
   const codeBlockRegex = /```(?:\w+)?\s*\n?\s*(?:\/\/\s*|\/\*\s*|#\s*)?(?:file:\s*|File:\s*|path:\s*)?([^\n*]+\.\w+)\s*\n([\s\S]*?)```/gi;
   while ((match = codeBlockRegex.exec(text)) !== null) {
-    const path = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
-    // Only accept paths that look like file paths
-    if (path.includes("/") || path.includes(".")) {
-      files.push({ path, content: match[2].trimEnd() });
+    const rawPath = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
+    // Only accept paths that look like file paths and pass sanitization
+    if (rawPath.includes("/") || rawPath.includes(".")) {
+      const safePath = sanitizePath(rawPath);
+      if (safePath) files.push({ path: safePath, content: match[2].trimEnd() });
     }
   }
   if (files.length > 0) return files;
@@ -61,7 +92,8 @@ function parseFiles(text: string): GeneratedFile[] {
     const codeMatch = section.match(/```\w*\n([\s\S]*?)```/);
     if (!codeMatch) continue;
 
-    files.push({ path: pathMatch[2].trim(), content: codeMatch[1].trimEnd() });
+    const safePath = sanitizePath(pathMatch[2]);
+    if (safePath) files.push({ path: safePath, content: codeMatch[1].trimEnd() });
   }
 
   return files;

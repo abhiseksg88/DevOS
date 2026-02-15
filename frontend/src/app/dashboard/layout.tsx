@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Zap, LogOut, CreditCard, Settings } from "lucide-react";
+import { LogOut, CreditCard, Settings } from "lucide-react";
+import Image from "next/image";
 import type { User } from "@supabase/supabase-js";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -12,13 +13,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
+    const timeout = setTimeout(() => router.replace("/login"), 5000);
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        clearTimeout(timeout);
+        if (!data.session) {
+          router.replace("/login");
+        } else {
+          setUser(data.session.user);
+        }
+      })
+      .catch(() => {
+        clearTimeout(timeout);
         router.replace("/login");
-      } else {
-        setUser(data.session.user);
-      }
-    });
+      });
+    return () => clearTimeout(timeout);
   }, [router]);
 
   async function handleSignOut() {
@@ -27,17 +37,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.replace("/login");
   }
 
-  if (!user) return null;
+  if (!user)
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-0">
+        <div className="animate-pulse-dot">
+          <div className="w-8 h-8 rounded-full bg-brand-500/30 flex items-center justify-center">
+            <div className="w-3 h-3 rounded-full bg-brand-500" />
+          </div>
+        </div>
+      </div>
+    );
 
   return (
     <div className="min-h-screen bg-surface-0">
       {/* Top nav */}
       <header className="h-14 border-b border-surface-3 flex items-center justify-between px-6">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
-            <Zap className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-lg font-semibold gradient-text">NimbusForge</span>
+          <Image src="/vedaa-logo.svg" alt="Vedaa" width={32} height={32} className="rounded-lg" />
+          <span className="text-lg font-semibold gradient-text">Vedaa</span>
         </div>
 
         <div className="flex items-center gap-2">

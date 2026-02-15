@@ -298,10 +298,7 @@ export function PublishButton({
                   status={
                     state === "generating"
                       ? "active"
-                      : state === "uploading" ||
-                          state === "deploying" ||
-                          state === "polling" ||
-                          state === "success"
+                      : (["uploading", "deploying", "polling"] as string[]).includes(state)
                         ? "done"
                         : "pending"
                   }
@@ -312,9 +309,7 @@ export function PublishButton({
                   status={
                     state === "uploading"
                       ? "active"
-                      : state === "deploying" ||
-                          state === "polling" ||
-                          state === "success"
+                      : (["deploying", "polling"] as string[]).includes(state)
                         ? "done"
                         : "pending"
                   }
@@ -325,9 +320,7 @@ export function PublishButton({
                   status={
                     state === "deploying" || state === "polling"
                       ? "active"
-                      : state === "success"
-                        ? "done"
-                        : "pending"
+                      : "pending"
                   }
                 />
 

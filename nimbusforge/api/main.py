@@ -1,5 +1,5 @@
 """
-NimbusForge API — FastAPI Control Plane
+Vedaa API — FastAPI Control Plane
 
 Endpoints:
   /tenants           — CRUD + member management
@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import traceback
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -23,7 +24,10 @@ from uuid import UUID, uuid4
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from supabase import Client
+
+from .logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -63,18 +67,44 @@ from .models import (
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="NimbusForge API",
+    title="Vedaa API",
     version="0.1.0",
-    description="AI-native Cloud Application Builder — Control Plane",
+    description="Vedaa — The Agentic Development OS",
 )
+
+_startup_settings = get_settings()
+setup_logging(debug=_startup_settings.debug_mode)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Lock down in production
+    allow_origins=_startup_settings.cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log every request with method, path, status, and duration. Adds X-Request-ID header."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = str(uuid4())
+        start = time.time()
+        response = await call_next(request)
+        duration_ms = round((time.time() - start) * 1000)
+        logger.info(
+            "%s %s -> %d (%dms) [request_id=%s]",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+            request_id,
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+app.add_middleware(RequestLoggingMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -84,26 +114,18 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Validate configuration on startup and log important info."""
-    from .config import get_settings
     settings = get_settings()
 
-    logger.info("=" * 60)
-    logger.info("NimbusForge API Starting...")
-    logger.info(f"Supabase URL: {settings.supabase_url}")
-    logger.info(f"Supabase Anon Key configured: {bool(settings.supabase_anon_key)}")
-    logger.info(f"Supabase Service Role Key configured: {bool(settings.supabase_service_role_key)}")
-    logger.info(f"Anthropic API Key configured: {bool(settings.anthropic_api_key)}")
-    logger.info(f"Netlify Token configured: {bool(settings.netlify_token)}")
-    logger.info("=" * 60)
-
-    # Warn about missing critical env vars (but don't block startup)
-    if not settings.supabase_service_role_key:
-        logger.warning("⚠️  SUPABASE_SERVICE_ROLE_KEY not set - database operations will fail")
-
-    if not settings.anthropic_api_key:
-        logger.warning("⚠️  ANTHROPIC_API_KEY not set - LLM generation will fail")
-
-    logger.info("✓ Startup validation complete")
+    logger.info("Vedaa API starting")
+    logger.info("Supabase URL: %s", settings.supabase_url)
+    logger.info("CORS allowed origins: %s", settings.cors_allowed_origins)
+    logger.info("Debug mode: %s", settings.debug_mode)
+    logger.info(
+        "Configured providers — Anthropic: %s, Netlify: %s",
+        bool(settings.anthropic_api_key),
+        bool(settings.netlify_token),
+    )
+    logger.info("Startup validation complete")
 
 
 # ---------------------------------------------------------------------------
@@ -112,28 +134,41 @@ async def startup_event():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Catch ALL unhandled exceptions and return the traceback as JSON."""
-    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": str(exc), "traceback": "".join(tb)},
+    """Catch unhandled exceptions. Only expose tracebacks in debug mode."""
+    request_id = str(uuid4())
+    logger.error(
+        "Unhandled exception [request_id=%s] %s: %s",
+        request_id, type(exc).__name__, exc,
+        exc_info=True,
     )
+    settings = get_settings()
+    content: dict = {"detail": "Internal server error", "request_id": request_id}
+    if settings.debug_mode:
+        tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        content["detail"] = str(exc)
+        content["traceback"] = "".join(tb)
+    return JSONResponse(status_code=500, content=content)
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "nimbusforge-api"}
+    return {"status": "ok", "service": "vedaa-api"}
 
 
 @app.get("/debug/db")
-async def debug_db(db: Client = Depends(get_supabase_service)):
-    """Test Supabase connection — returns table list or error."""
+async def debug_db(
+    db: Client = Depends(get_supabase_service),
+    settings: Settings = Depends(get_settings),
+):
+    """Test Supabase connection — only available when DEBUG_MODE=true."""
+    if not settings.debug_mode:
+        raise HTTPException(status_code=404, detail="Not found")
     try:
         result = db.table("tenants").select("id").limit(1).execute()
         app_data_exists = True
         try:
             db.table("app_data").select("id").limit(1).execute()
-        except:
+        except Exception:
             app_data_exists = False
         return {
             "status": "ok",
@@ -141,6 +176,7 @@ async def debug_db(db: Client = Depends(get_supabase_service)):
             "app_data_table_exists": app_data_exists
         }
     except Exception as e:
+        logger.error("Debug DB check failed: %s", e)
         return {"status": "error", "error": str(e), "type": type(e).__name__}
 
 
@@ -418,6 +454,13 @@ async def create_build(
     4. Returns the build record immediately (client polls or streams events)
     """
     user.assert_tenant_access(tenant_id)
+
+    # Verify LLM API key is configured
+    if not settings.anthropic_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM generation is unavailable. ANTHROPIC_API_KEY not configured.",
+        )
 
     # Budget check
     await check_budget(tenant_id, db)

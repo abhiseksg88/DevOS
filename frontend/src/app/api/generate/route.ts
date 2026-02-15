@@ -36,7 +36,45 @@ Interactivity:
 
 Do NOT include any explanation text outside of ===FILE: ... === blocks`;
 
+// ---------------------------------------------------------------------------
+// Simple in-memory rate limiter (per IP, sliding window)
+// ---------------------------------------------------------------------------
+const MAX_PROMPT_LENGTH = 50_000; // 50KB max prompt size
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 10; // max 10 requests per minute per IP
+
+const requestLog = new Map<string, number[]>();
+
+function checkRateLimit(clientId: string): boolean {
+  const now = Date.now();
+  const timestamps = requestLog.get(clientId) ?? [];
+  const recent = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) return false;
+  recent.push(now);
+  requestLog.set(clientId, recent);
+  return true;
+}
+
+// Clean up stale entries every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+  for (const [key, timestamps] of requestLog.entries()) {
+    const recent = timestamps.filter((t) => t > cutoff);
+    if (recent.length === 0) requestLog.delete(key);
+    else requestLog.set(key, recent);
+  }
+}, 5 * 60_000);
+
 export async function POST(req: NextRequest) {
+  // Rate limit by IP
+  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  if (!checkRateLimit(clientIp)) {
+    return new Response(
+      JSON.stringify({ error: "Rate limit exceeded. Try again in a minute." }),
+      { status: 429, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   const { prompt, existingFiles } = await req.json();
 
   if (!prompt || typeof prompt !== "string") {
@@ -44,6 +82,14 @@ export async function POST(req: NextRequest) {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // Validate prompt length to prevent DoS via oversized payloads
+  if (prompt.length > MAX_PROMPT_LENGTH) {
+    return new Response(
+      JSON.stringify({ error: `Prompt too long (max ${MAX_PROMPT_LENGTH} characters)` }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -63,6 +109,7 @@ export async function POST(req: NextRequest) {
   let context = "";
   if (existingFiles && Array.isArray(existingFiles)) {
     const fileDescriptions = existingFiles
+      .slice(0, 20) // Limit to 20 files max for context
       .filter((f: { content?: string }) => f.content)
       .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content}`)
       .join("\n\n");

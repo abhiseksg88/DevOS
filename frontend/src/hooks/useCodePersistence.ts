@@ -6,6 +6,7 @@ import type { FileNode, ChatMessage } from "@/types";
 
 export interface UseCodePersistenceReturn {
   isLoading: boolean;
+  lastError: string | null;
   codeFiles: Record<string, string>;
   messages: ChatMessage[];
   workspaceState: db.WorkspaceUIState | null;
@@ -33,6 +34,7 @@ export interface UseCodePersistenceReturn {
  */
 export function useCodePersistence(projectId: string, userId: string | null): UseCodePersistenceReturn {
   const [isLoading, setIsLoading] = useState(true);
+  const [lastError, setLastError] = useState<string | null>(null);
   const [codeFiles, setCodeFiles] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [workspaceState, setWorkspaceState] = useState<db.WorkspaceUIState | null>(null);
@@ -71,7 +73,7 @@ export function useCodePersistence(projectId: string, userId: string | null): Us
         setVersions(vers);
       } catch (err) {
         console.error('Failed to load persisted state:', err);
-        // Continue with empty state
+        if (mounted) setLastError('Failed to load saved project data. Changes may not persist.');
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -103,6 +105,7 @@ export function useCodePersistence(projectId: string, userId: string | null): Us
         ]);
       } catch (err) {
         console.error('Failed to save code:', err);
+        setLastError('Failed to save code. Your changes may not persist.');
       }
     },
     [projectId]
@@ -127,6 +130,7 @@ export function useCodePersistence(projectId: string, userId: string | null): Us
         ]);
       } catch (err) {
         console.error('Failed to save message:', err);
+        setLastError('Failed to save chat message.');
       }
     },
     [projectId]
@@ -203,6 +207,7 @@ export function useCodePersistence(projectId: string, userId: string | null): Us
 
   return {
     isLoading,
+    lastError,
     codeFiles,
     messages,
     workspaceState,

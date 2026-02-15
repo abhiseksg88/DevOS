@@ -7,14 +7,11 @@
 [build.environment]
   # Use Node.js 20 (stable, recommended for Next.js 14)
   NODE_VERSION = "20"
-  # Do NOT install Python packages
   NPM_FLAGS = "--legacy-peer-deps"
 
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+# Next.js plugin handles all routing automatically.
+# IMPORTANT: Do NOT add a [[redirects]] from="/*" rule — it breaks Next.js
+# SSR, API routes, middleware, and auth callbacks.
 
-[functions]
-  # Disable Netlify Functions (we use Railway for backend)
-  directory = "none"
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
