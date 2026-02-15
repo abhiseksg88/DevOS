@@ -225,31 +225,33 @@ export function Workspace({ projectId }: { projectId: string }) {
       seqRef.current = 1;
 
       // Show "generating" message
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "Generating your app with Claude Sonnet...",
-        timestamp: Date.now(),
-        status: "coding",
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "Generating your app with Claude Sonnet...",
+          timestamp: Date.now(),
+          status: "coding",
+        },
+      ]);
 
       // Switch to console to show progress
       setRightTab("console");
 
-      // Call Claude directly via our API route
-      await generator.generate(content, fileTree, (path, fileContent) => {
+      // Call Claude directly — generate() now returns a result
+      const result = await generator.generate(content, fileTree, (path, fileContent) => {
         addFileToTree(path, fileContent);
       });
 
-      // Show completion message
-      if (generator.error) {
+      // Use the returned result (not stale closure state)
+      if (result.error) {
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             role: "assistant",
-            content: `Error: ${generator.error}`,
+            content: `Error: ${result.error}`,
             timestamp: Date.now(),
           },
         ]);
@@ -259,11 +261,15 @@ export function Workspace({ projectId }: { projectId: string }) {
           {
             id: crypto.randomUUID(),
             role: "assistant",
-            content: "Done! Check the Preview tab to see your app, or the Code tab to inspect the files.",
+            content: `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the **Preview** tab to see your app, or the **Code** tab to inspect the files.`,
             timestamp: Date.now(),
             status: "succeeded",
           },
         ]);
+        // Auto-switch to preview
+        if (result.files.length > 0) {
+          setRightTab("preview");
+        }
       }
     },
     [generator, fileTree, addFileToTree]

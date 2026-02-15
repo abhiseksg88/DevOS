@@ -8,6 +8,11 @@ interface GeneratedFile {
   content: string;
 }
 
+export interface GenerateResult {
+  files: GeneratedFile[];
+  error: string | null;
+}
+
 interface GenerateState {
   isGenerating: boolean;
   streamedText: string;
@@ -15,16 +20,50 @@ interface GenerateState {
   error: string | null;
 }
 
-/** Parse ===FILE: path=== ... ===END_FILE=== blocks from streamed text */
+/**
+ * Parse files from Claude's response. Supports multiple formats:
+ * 1. ===FILE: path=== ... ===END_FILE===
+ * 2. ```tsx // path/to/file.tsx ... ```
+ * 3. // File: path/to/file.tsx ... (next file or end)
+ */
 function parseFiles(text: string): GeneratedFile[] {
   const files: GeneratedFile[] = [];
-  const regex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
+
+  // Format 1: ===FILE: path=== ... ===END_FILE===
+  const delimiterRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
   let match;
-  while ((match = regex.exec(text)) !== null) {
-    const path = match[1].trim();
-    const content = match[2].trimEnd();
-    files.push({ path, content });
+  while ((match = delimiterRegex.exec(text)) !== null) {
+    files.push({ path: match[1].trim(), content: match[2].trimEnd() });
   }
+  if (files.length > 0) return files;
+
+  // Format 2: ```language\n// filepath\n...``` or ```language:filepath\n...```
+  const codeBlockRegex = /```(?:\w+)?\s*\n?\s*(?:\/\/\s*|\/\*\s*|#\s*)?(?:file:\s*|File:\s*|path:\s*)?([^\n*]+\.\w+)\s*\n([\s\S]*?)```/gi;
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    const path = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
+    // Only accept paths that look like file paths
+    if (path.includes("/") || path.includes(".")) {
+      files.push({ path, content: match[2].trimEnd() });
+    }
+  }
+  if (files.length > 0) return files;
+
+  // Format 3: Look for code blocks with file paths mentioned before them
+  const sections = text.split(/(?=###?\s|(?:^|\n)(?:\*\*)?(?:File|`)[:\s])/);
+  for (const section of sections) {
+    // Find a file path reference
+    const pathMatch = section.match(
+      /(?:###?\s*|(?:\*\*)?(?:File|`)[:\s]*\s*)([`"]?)([a-zA-Z][\w./\-]+\.\w{1,10})\1/
+    );
+    if (!pathMatch) continue;
+
+    // Find the code block in this section
+    const codeMatch = section.match(/```\w*\n([\s\S]*?)```/);
+    if (!codeMatch) continue;
+
+    files.push({ path: pathMatch[2].trim(), content: codeMatch[1].trimEnd() });
+  }
+
   return files;
 }
 
@@ -56,7 +95,7 @@ export function useGenerate() {
       prompt: string,
       existingFiles: FileNode[],
       onFileGenerated: (path: string, content: string) => void
-    ) => {
+    ): Promise<GenerateResult> => {
       // Cancel any ongoing generation
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -76,35 +115,43 @@ export function useGenerate() {
         });
 
         if (!response.ok) {
-          const err = await response.json();
-          setState((prev) => ({
-            ...prev,
-            isGenerating: false,
-            error: err.error || "Generation failed",
-          }));
-          return;
+          let errMsg = "Generation failed";
+          try {
+            const err = await response.json();
+            errMsg = err.error || errMsg;
+          } catch {
+            // response wasn't JSON
+          }
+          setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
+          return { files: [], error: errMsg };
         }
 
         const reader = response.body?.getReader();
         if (!reader) {
-          setState((prev) => ({ ...prev, isGenerating: false, error: "No response stream" }));
-          return;
+          const errMsg = "No response stream";
+          setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
+          return { files: [], error: errMsg };
         }
 
         const decoder = new TextDecoder();
         let fullText = "";
         let lastParsedCount = 0;
+        let buffer = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          // Parse SSE events
-          const lines = chunk.split("\n");
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete lines from buffer
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? ""; // keep incomplete line in buffer
+
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
-            const jsonStr = line.slice(6);
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
             try {
               const event = JSON.parse(jsonStr);
               if (event.type === "text") {
@@ -121,11 +168,25 @@ export function useGenerate() {
                   setState((prev) => ({ ...prev, files: parsed }));
                 }
               } else if (event.type === "error") {
-                setState((prev) => ({ ...prev, error: event.error }));
+                const errMsg = event.error || "Generation error";
+                setState((prev) => ({ ...prev, error: errMsg }));
+                return { files: [], error: errMsg };
               }
             } catch {
               // skip malformed JSON
             }
+          }
+        }
+
+        // Process any remaining buffer
+        if (buffer.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(buffer.slice(6).trim());
+            if (event.type === "text") {
+              fullText += event.content;
+            }
+          } catch {
+            // ignore
           }
         }
 
@@ -141,14 +202,21 @@ export function useGenerate() {
           ...prev,
           isGenerating: false,
           files: finalFiles,
+          streamedText: fullText,
         }));
+
+        return { files: finalFiles, error: null };
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if ((err as Error).name === "AbortError") {
+          return { files: [], error: null };
+        }
+        const errMsg = err instanceof Error ? err.message : "Generation failed";
         setState((prev) => ({
           ...prev,
           isGenerating: false,
-          error: err instanceof Error ? err.message : "Generation failed",
+          error: errMsg,
         }));
+        return { files: [], error: errMsg };
       }
     },
     []
