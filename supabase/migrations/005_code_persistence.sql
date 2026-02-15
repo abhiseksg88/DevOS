@@ -41,9 +41,7 @@ ALTER TABLE project_versions ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view own project versions" ON project_versions FOR SELECT
     USING (
-        EXISTS (
-            SELECT 1 FROM projects WHERE projects.id = project_id AND projects.user_id = auth.uid()
-        )
+        (SELECT tenant_id FROM projects WHERE id = project_id) = ANY(public.get_tenant_ids())
     );
 
 CREATE POLICY "Service role can manage all versions" ON project_versions FOR ALL
@@ -68,16 +66,12 @@ ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view own project chat" ON chat_messages FOR SELECT
     USING (
-        EXISTS (
-            SELECT 1 FROM projects WHERE projects.id = project_id AND projects.user_id = auth.uid()
-        )
+        (SELECT tenant_id FROM projects WHERE id = project_id) = ANY(public.get_tenant_ids())
     );
 
 CREATE POLICY "Users can insert chat to own projects" ON chat_messages FOR INSERT
     WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM projects WHERE projects.id = project_id AND projects.user_id = auth.uid()
-        )
+        (SELECT tenant_id FROM projects WHERE id = project_id) = ANY(public.get_tenant_ids())
     );
 
 CREATE POLICY "Service role can manage chat" ON chat_messages FOR ALL
@@ -150,20 +144,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- ---------------------------------------------------------------------------
--- 6. Trigger: Auto-update projects.updated_at when code changes
--- ---------------------------------------------------------------------------
-
-CREATE OR REPLACE TRIGGER update_projects_updated_at
-BEFORE UPDATE ON projects
-FOR EACH ROW
-BEGIN
-  NEW.updated_at = NOW();
-END;
-
-CREATE OR REPLACE TRIGGER update_workspace_state_updated_at
-BEFORE UPDATE ON workspace_state
-FOR EACH ROW
-BEGIN
-  NEW.updated_at = NOW();
-END;
+-- Note: Triggers for updated_at are already defined in 001_core_schema.sql
+-- via the trigger_set_updated_at() function and are applied globally to
+-- projects and workspace_state tables.
