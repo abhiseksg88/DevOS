@@ -1,16 +1,16 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
-import { useBuildStream } from "@/hooks/useBuildStream";
+import { useGenerate } from "@/hooks/useGenerate";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
 import { FileTree } from "@/components/editor/FileTree";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { BuildLog } from "@/components/build/BuildLog";
-import type { ChatMessage, FileNode } from "@/types";
+import type { ChatMessage, FileNode, BuildEvent } from "@/types";
 import {
   Zap,
   ArrowLeft,
@@ -49,16 +49,18 @@ function updateInTree(nodes: FileNode[], path: string, content: string): FileNod
 
 export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
-  const { project, tenantId, loading, createBuild, getToken } = useProject(projectId);
-  const buildStream = useBuildStream();
+  const { project, loading } = useProject(projectId);
+  const generator = useGenerate();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [rightTab, setRightTab] = useState<RightTab>("code");
+  const [rightTab, setRightTab] = useState<RightTab>("preview");
   const [activeFile, setActiveFile] = useState<FileNode | null>(null);
   const [openFiles, setOpenFiles] = useState<FileNode[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewUrl] = useState<string | null>(null);
+  const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
+  const seqRef = useRef(0);
 
-  // File tree — updated from build output or editor changes
+  // File tree — updated from Claude output or editor changes
   const [fileTree, setFileTree] = useState<FileNode[]>([
     {
       name: "src",
@@ -117,7 +119,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content } : f)));
   }, []);
 
-  /** Add or update a file in the tree from build output */
+  /** Add or update a file in the tree */
   const addFileToTree = useCallback((path: string, content: string, language?: string) => {
     const parts = path.split("/");
     const fileName = parts[parts.length - 1];
@@ -136,32 +138,24 @@ export function Workspace({ projectId }: { projectId: string }) {
       if (flat.some((f) => f.path === path)) {
         return updateInTree(prev, path, content);
       }
-      // Build directory structure for the new file
       return addToDirectory(prev, parts, 0, content, detectedLang);
     });
+
+    // Add a build event for the console
+    seqRef.current += 1;
+    setGenerationEvents((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        build_id: "",
+        kind: "patch",
+        agent: "sonnet",
+        payload: { message: `Generated ${path}` },
+        seq: seqRef.current,
+        created_at: new Date().toISOString(),
+      },
+    ]);
   }, []);
-
-  // Process build events to update file tree and preview
-  useEffect(() => {
-    if (buildStream.events.length === 0) return;
-    const lastEvent = buildStream.events[buildStream.events.length - 1];
-
-    // Handle "patch" events that contain file changes
-    if (lastEvent.kind === "patch" && lastEvent.payload) {
-      const payload = lastEvent.payload as Record<string, unknown>;
-      const filePath = (payload.path ?? payload.file_path ?? payload.filename) as string | undefined;
-      const fileContent = (payload.content ?? payload.code ?? payload.source) as string | undefined;
-      if (filePath && fileContent) {
-        addFileToTree(filePath, fileContent);
-        setRightTab("preview");
-      }
-    }
-
-    // Handle build completion — check for preview URL
-    if (!buildStream.isStreaming && buildStream.status === "succeeded") {
-      setRightTab("preview");
-    }
-  }, [buildStream.events.length, buildStream.isStreaming, buildStream.status, addFileToTree]);
 
   const handleFileSelect = useCallback((file: FileNode) => {
     if (file.type !== "file") return;
@@ -183,6 +177,28 @@ export function Workspace({ projectId }: { projectId: string }) {
     [activeFile, openFiles]
   );
 
+  // When generation completes, switch to preview
+  useEffect(() => {
+    if (!generator.isGenerating && generator.files.length > 0) {
+      setRightTab("preview");
+
+      // Add completion event
+      seqRef.current += 1;
+      setGenerationEvents((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          build_id: "",
+          kind: "build_progress",
+          agent: null,
+          payload: { message: `Build complete — ${generator.files.length} files generated`, status: "succeeded" },
+          seq: seqRef.current,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    }
+  }, [generator.isGenerating, generator.files.length]);
+
   const handleSendMessage = useCallback(
     async (content: string) => {
       const userMsg: ChatMessage = {
@@ -193,36 +209,64 @@ export function Workspace({ projectId }: { projectId: string }) {
       };
       setMessages((prev) => [...prev, userMsg]);
 
-      try {
-        const build = await createBuild(content);
-
-        const assistantMsg: ChatMessage = {
+      // Reset events
+      seqRef.current = 0;
+      setGenerationEvents([
+        {
           id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Building your request... I'll plan the architecture, write the code, and deploy a preview.`,
-          timestamp: Date.now(),
-          buildId: build.id,
-          status: build.status,
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
+          build_id: "",
+          kind: "agent_start",
+          agent: "sonnet",
+          payload: { message: "Starting code generation with Claude..." },
+          seq: 1,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      seqRef.current = 1;
 
-        // Start SSE stream
-        const token = await getToken();
-        buildStream.startStream(token, tenantId, projectId, build.id);
+      // Show "generating" message
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "Generating your app with Claude Sonnet...",
+        timestamp: Date.now(),
+        status: "coding",
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
 
-        // Switch to console to show build progress
-        setRightTab("console");
-      } catch (err) {
-        const errMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Build failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errMsg]);
+      // Switch to console to show progress
+      setRightTab("console");
+
+      // Call Claude directly via our API route
+      await generator.generate(content, fileTree, (path, fileContent) => {
+        addFileToTree(path, fileContent);
+      });
+
+      // Show completion message
+      if (generator.error) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Error: ${generator.error}`,
+            timestamp: Date.now(),
+          },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "Done! Check the Preview tab to see your app, or the Code tab to inspect the files.",
+            timestamp: Date.now(),
+            status: "succeeded",
+          },
+        ]);
       }
     },
-    [createBuild, buildStream, tenantId, projectId, getToken]
+    [generator, fileTree, addFileToTree]
   );
 
   if (loading) {
@@ -253,11 +297,11 @@ export function Workspace({ projectId }: { projectId: string }) {
               {project?.name ?? "Project"}
             </span>
           </div>
-          {buildStream.isStreaming && (
+          {generator.isGenerating && (
             <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
               <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
               <span className="text-2xs text-amber-400 font-medium uppercase tracking-wider">
-                Building
+                Generating
               </span>
             </div>
           )}
@@ -285,8 +329,8 @@ export function Workspace({ projectId }: { projectId: string }) {
           <ChatPanel
             messages={messages}
             onSendMessage={handleSendMessage}
-            isStreaming={buildStream.isStreaming}
-            buildEvents={buildStream.events}
+            isStreaming={generator.isGenerating}
+            buildEvents={generationEvents}
           />
         </Panel>
 
@@ -316,7 +360,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {label}
-                  {key === "console" && buildStream.isStreaming && (
+                  {key === "console" && generator.isGenerating && (
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
                   )}
                 </button>
@@ -355,9 +399,9 @@ export function Workspace({ projectId }: { projectId: string }) {
 
               {rightTab === "console" && (
                 <BuildLog
-                  events={buildStream.events}
-                  isStreaming={buildStream.isStreaming}
-                  status={buildStream.status}
+                  events={generationEvents}
+                  isStreaming={generator.isGenerating}
+                  status={generator.isGenerating ? "coding" : generator.files.length > 0 ? "succeeded" : null}
                 />
               )}
             </div>
@@ -377,7 +421,6 @@ function addToDirectory(
   language: string
 ): FileNode[] {
   if (depth === parts.length - 1) {
-    // We're at the file level — add it
     const fileName = parts[depth];
     return [
       ...nodes,
@@ -391,7 +434,6 @@ function addToDirectory(
     ];
   }
 
-  // We're at a directory level
   const dirName = parts[depth];
   const dirPath = parts.slice(0, depth + 1).join("/");
   const existingDir = nodes.find((n) => n.type === "directory" && n.name === dirName);
@@ -408,7 +450,6 @@ function addToDirectory(
     });
   }
 
-  // Create the directory
   return [
     ...nodes,
     {
