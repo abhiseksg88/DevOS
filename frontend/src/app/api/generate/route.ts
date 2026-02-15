@@ -12,19 +12,29 @@ For each file, use this exact delimiter format:
 
 Rules:
 - Use React with TypeScript and Tailwind CSS for styling
-- The main entry point MUST be "src/app/page.tsx" with a default export
+- The main entry point MUST be "src/app/page.tsx" with a default export function component
 - Use modern, clean, responsive design with Tailwind utility classes
 - Use className (React) not class
 - Make it visually impressive with gradients, shadows, proper spacing
 - Include ALL necessary files (page.tsx, components, globals.css)
 - CSS file should be "src/app/globals.css"
-- Do NOT use any import statements — no external packages (no next/image, no next/link) and no local component imports
-- Do NOT use React hooks like useState or useEffect - keep components as pure render functions
-- Export components as default functions
-- CRITICAL: In page.tsx, define ALL component functions directly in the same file. Do NOT import components from other files. The page must be fully self-contained and renderable on its own. You can define helper components as named functions above the default export.
-- You may also create separate component files (e.g., src/components/Header.tsx) for code organization, but page.tsx must NOT depend on them
-- Make the page fully self-contained and renderable as static HTML with Tailwind
-- Do NOT include any explanation text outside of ===FILE: ... === blocks`;
+
+Code architecture:
+- CRITICAL: In page.tsx, define ALL helper component functions (Header, Hero, Footer, etc.) directly in the same file ABOVE the default export. The page MUST be fully self-contained.
+- You MAY import from "react" (e.g. import { useState, useEffect } from "react"). React hooks ARE supported.
+- Do NOT import from next/image, next/link, next/router, or any Next.js packages
+- Do NOT import from third-party packages (no lucide-react, no framer-motion, etc.) — use inline SVG icons or emoji instead
+- Do NOT import local component files — define everything inline in page.tsx
+- You may create separate component files for code organization, but page.tsx must NOT depend on them
+- Export the main page component as the default export
+
+Interactivity:
+- You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext
+- You CAN use event handlers: onClick, onChange, onSubmit, etc.
+- You CAN use conditional rendering, .map(), ternaries — all standard React patterns work
+- Make components interactive and functional where appropriate
+
+Do NOT include any explanation text outside of ===FILE: ... === blocks`;
 
 export async function POST(req: NextRequest) {
   const { prompt, existingFiles } = await req.json();
