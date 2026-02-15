@@ -354,6 +354,217 @@ ${cleanCSS}
 }
 
 // ---------------------------------------------------------------------------
+// Deployment HTML — variant for Netlify publish
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a self-contained HTML document for Netlify deployment.
+ *
+ * Same rendering approach as `buildPreviewDocument` but with:
+ * - Supabase credentials hardcoded (not postMessage)
+ * - Production React builds (minified)
+ * - SEO meta tags for social sharing
+ */
+export function buildDeployDocument(
+  files: FileNode[],
+  supabaseUrl: string,
+  supabaseAnonKey: string,
+  appTitle: string = "App",
+): string {
+  const allFiles = flattenFiles(files);
+  const css = collectCSS(allFiles);
+  const mainCode = findMainFile(allFiles);
+
+  const cleanCSS = css
+    .replace(/@tailwind\s+\w+;/g, "")
+    .replace(/@import\s+[^;]+;/g, "")
+    .trim();
+
+  const mainB64 = mainCode ? toBase64(mainCode) : "";
+
+  // Build component registry (same as preview)
+  const entries: string[] = [];
+  for (const f of allFiles) {
+    if (
+      !f.content ||
+      f.path.includes("layout.") ||
+      f.path.includes("page.") ||
+      f.path.endsWith(".css") ||
+      f.path.endsWith(".json")
+    )
+      continue;
+    if (
+      !(
+        f.name.endsWith(".tsx") ||
+        f.name.endsWith(".jsx") ||
+        f.name.endsWith(".ts") ||
+        f.name.endsWith(".js")
+      )
+    )
+      continue;
+
+    const b64 = toBase64(f.content);
+    const noExt = f.path.replace(/\.(tsx|jsx|ts|js)$/, "");
+    const keys = [f.path, noExt];
+    if (f.path.startsWith("src/")) {
+      keys.push("@/" + f.path.slice(4), "@/" + noExt.slice(4));
+      keys.push("./" + f.path.slice(4), "./" + noExt.slice(4));
+    }
+    for (const k of keys)
+      entries.push(`${JSON.stringify(k)}:${JSON.stringify(b64)}`);
+  }
+
+  const registry = `{${entries.join(",")}}`;
+
+  const safeSupabaseUrl = supabaseUrl.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeAnonKey = supabaseAnonKey.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeTitle = appTitle.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>${safeTitle} \u2014 Built with DevOS</title>
+<meta name="description" content="${safeTitle} \u2014 Built and deployed with DevOS, the AI-powered no-code platform."/>
+<meta property="og:title" content="${safeTitle}"/>
+<meta property="og:description" content="Built and deployed with DevOS"/>
+
+<script>
+window.__errs=[];
+window.onerror=function(m,s,l,c,e){window.__errs.push({message:String(m),line:l,stack:e?e.stack:''})};
+window.onunhandledrejection=function(e){window.__errs.push({message:e.reason?(e.reason.message||String(e.reason)):'Unhandled rejection'})};
+<\/script>
+
+<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"><\/script>
+<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"><\/script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"><\/script>
+<script src="https://cdn.tailwindcss.com"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>
+
+<style>
+html,body,#root{height:100%;width:100%;margin:0;padding:0;overflow-x:hidden}
+*,*::before,*::after{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased}
+#root{display:flex;flex-direction:column;min-height:100%}
+${cleanCSS}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function(){
+  /* --- Initialize Supabase directly --- */
+  window.__supabase_ready=false;
+  window.supabase=null;
+  try{
+    if(typeof supabase!=='undefined'&&supabase.createClient){
+      window.supabase=supabase.createClient("${safeSupabaseUrl}","${safeAnonKey}");
+      window.__supabase_ready=true;
+    }
+  }catch(err){console.error('Failed to init Supabase:',err)}
+
+  function b64d(b){
+    var s=atob(b),a=new Uint8Array(s.length);
+    for(var i=0;i<s.length;i++) a[i]=s.charCodeAt(i);
+    return new TextDecoder().decode(a);
+  }
+  function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  function showErr(msg,stack){
+    document.getElementById('root').innerHTML=
+      '<div style="padding:24px;font-family:ui-monospace,monospace;font-size:13px;color:#f38ba8;background:#1e1e2e;min-height:100vh">'+
+      '<div style="max-width:640px;margin:40px auto">'+
+      '<h2 style="color:#cdd6f4;font-size:16px;margin:0 0 16px">Error</h2>'+
+      '<div style="background:#181825;padding:16px;border-radius:8px;border:1px solid #313244;white-space:pre-wrap;word-break:break-word;line-height:1.6">'+
+      esc(msg)+(stack?'\\n\\n<span style="color:#6c7086">'+esc(stack)+'</span>':'')+
+      '</div></div></div>';
+  }
+
+  var __reg=${registry};
+  var __cache={};
+
+  function __req(mod){
+    if(mod==='react') return React;
+    if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
+    if(__cache[mod]) return __cache[mod];
+
+    var enc=__reg[mod];
+    if(!enc){
+      var tries=[mod];
+      if(mod.startsWith('./'))  tries.push('src/'+mod.slice(2),'src/app/'+mod.slice(2));
+      if(mod.startsWith('../')) tries.push('src/'+mod.replace(/^\\.\\.\\/*/,''));
+      for(var t=0;t<tries.length&&!enc;t++){
+        enc=__reg[tries[t]];
+        if(!enc){var exts=['.tsx','.jsx','.ts','.js'];for(var e=0;e<exts.length&&!enc;e++) enc=__reg[tries[t]+exts[e]];}
+      }
+    }
+    if(enc){
+      var code=b64d(enc), mm={exports:{}};
+      try{
+        var tr=Babel.transform(code,{presets:['react','typescript',['env',{modules:'commonjs'}]],filename:mod+'.tsx'}).code;
+        (new Function('module','exports','require','React','ReactDOM',tr))(mm,mm.exports,__req,React,ReactDOM);
+        __cache[mod]=mm.exports;
+        return mm.exports;
+      }catch(err){console.error('Failed to load '+mod+':',err.message);return {}}
+    }
+
+    console.warn('Module not available: '+mod);
+    try{
+      return new Proxy({},{
+        get:function(_,p){
+          if(p==='__esModule') return false;
+          if(p==='default') return function(){return React.createElement('div')};
+          if(typeof p==='symbol') return undefined;
+          return function(props){
+            return React.createElement('span',{
+              style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:(props&&props.size)||20,height:(props&&props.size)||20,opacity:0.35},
+              className:(props&&props.className)||''
+            },'\\u25A1');
+          };
+        }
+      });
+    }catch(e){return {}}
+  }
+
+  var enc="${mainB64}";
+  if(!enc){
+    document.getElementById('root').innerHTML=
+      '<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#64748b;font-family:system-ui">'+
+      '<p style="font-size:14px">This app is being set up...</p></div>';
+    return;
+  }
+
+  var code;
+  try{ code=b64d(enc); }catch(e){ showErr('Failed to decode: '+e.message); return; }
+  if(typeof Babel==='undefined'){ showErr('Babel failed to load.'); return; }
+  if(typeof React==='undefined'||typeof ReactDOM==='undefined'){ showErr('React failed to load.'); return; }
+
+  try{
+    var transpiled=Babel.transform(code,{
+      presets:['react','typescript',['env',{modules:'commonjs'}]],
+      filename:'page.tsx'
+    }).code;
+
+    var mod={exports:{}};
+    (new Function('module','exports','require','React','ReactDOM',transpiled))(mod,mod.exports,__req,React,ReactDOM);
+
+    var App=mod.exports['default']||mod.exports;
+    if(typeof App!=='function'){
+      showErr('No valid React component found.\\nThe default export must be a function component.');
+      return;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+  }catch(err){
+    showErr(err.message,err.stack);
+  }
+})();
+<\/script>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
 // React component
 // ---------------------------------------------------------------------------
 

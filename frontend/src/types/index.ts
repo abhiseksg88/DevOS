@@ -18,6 +18,23 @@ export interface Project {
   stack: Record<string, string>;
   created_at: string;
   updated_at: string;
+  // Netlify deployment fields
+  netlify_site_id?: string;
+  deployed_url?: string;
+  deployed_at?: string;
+  deployment_status?: "not_deployed" | "deploying" | "deployed" | "failed";
+}
+
+export interface PublishResult {
+  deploy_id: string;
+  url: string;
+  status: string;
+  netlify_site_id: string;
+}
+
+export interface PublishStatus {
+  state: string;
+  url: string;
 }
 
 export type BuildStatus =

@@ -97,6 +97,20 @@ class DeploymentCreate(BaseModel):
 class RollbackRequest(BaseModel):
     deployment_id: UUID
 
+class PublishRequest(BaseModel):
+    """Frontend sends the fully-built HTML document to deploy."""
+    html: str = Field(..., min_length=1, description="Complete HTML to deploy to Netlify")
+
+class PublishResponse(BaseModel):
+    deploy_id: str
+    url: str
+    status: str  # 'deploying' | 'ready' | 'failed'
+    netlify_site_id: str
+
+class PublishStatusResponse(BaseModel):
+    state: str  # 'preparing' | 'uploading' | 'uploaded' | 'ready' | 'error'
+    url: str
+
 
 # ---------------------------------------------------------------------------
 # Response schemas

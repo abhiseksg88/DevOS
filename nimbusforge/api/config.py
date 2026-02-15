@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     rate_limit_pro: int = 100
     rate_limit_enterprise: int = 500
 
+    # --- Netlify (One-Click Publish) ---
+    netlify_token: str = ""              # Personal access token
+    netlify_team_slug: str = "devos"     # Team slug on Netlify
+    netlify_site_prefix: str = "devos"   # Prefix for site names (devos-{slug})
+
     # --- Plan Cache ---
     plan_cache_ttl_seconds: int = 3600  # 1 hour
 

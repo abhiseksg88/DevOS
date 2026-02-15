@@ -19,9 +19,9 @@ import {
   Eye,
   Terminal,
   Loader2,
-  Rocket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PublishButton } from "@/components/workspace/PublishButton";
 
 type RightTab = "code" | "preview" | "console";
 
@@ -102,7 +102,7 @@ function updateInTree(nodes: FileNode[], path: string, content: string): FileNod
 
 export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
-  const { project, loading, userId } = useProject(projectId);
+  const { project, loading, userId, tenantId: resolvedTenantId, token } = useProject(projectId);
   const generator = useGenerate();
   const persistence = useCodePersistence(projectId, userId);
 
@@ -110,8 +110,15 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [rightTab, setRightTab] = useState<RightTab>("preview");
   const [activeFile, setActiveFile] = useState<FileNode | null>(null);
   const [openFiles, setOpenFiles] = useState<FileNode[]>([]);
-  const [previewUrl] = useState<string | null>(null);
+  const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
+
+  // Sync deployed URL from project when loaded
+  useEffect(() => {
+    if (project?.deployed_url) {
+      setDeployedUrl(project.deployed_url);
+    }
+  }, [project?.deployed_url]);
   const seqRef = useRef(0);
 
   // Ref to track last prompt for saving with generation
@@ -435,17 +442,13 @@ export function Workspace({ projectId }: { projectId: string }) {
         </div>
 
         <div className="flex items-center gap-2">
-          {previewUrl && (
-            <a
-              href={previewUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/20 transition-all"
-            >
-              <Rocket className="w-3 h-3" />
-              Live
-            </a>
-          )}
+          <PublishButton
+            project={project}
+            tenantId={resolvedTenantId}
+            fileTree={fileTree}
+            token={token}
+            onPublished={(url) => setDeployedUrl(url)}
+          />
         </div>
       </header>
 
@@ -521,7 +524,7 @@ export function Workspace({ projectId }: { projectId: string }) {
               )}
 
               {rightTab === "preview" && (
-                <PreviewPane url={previewUrl} files={fileTree} />
+                <PreviewPane url={deployedUrl} files={fileTree} />
               )}
 
               {rightTab === "console" && (

@@ -45,6 +45,9 @@ from .models import (
     ProjectCreate,
     ProjectResponse,
     ProjectUpdate,
+    PublishRequest,
+    PublishResponse,
+    PublishStatusResponse,
     RollbackRequest,
     TenantCreate,
     TenantResponse,
@@ -754,6 +757,177 @@ async def _execute_rollback(deploy_data: dict, settings: Settings):
     """Execute rollback — delegates to pipeline module."""
     from ..pipeline.deployer import rollback_revision
     await rollback_revision(deploy_data, settings)
+
+
+# ===========================================================================
+# NETLIFY PUBLISH (One-Click Deploy)
+# ===========================================================================
+
+@app.post(
+    "/tenants/{tenant_id}/projects/{project_id}/publish",
+    response_model=PublishResponse,
+    status_code=201,
+)
+async def publish_project(
+    tenant_id: UUID,
+    project_id: UUID,
+    body: PublishRequest,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+    settings: Settings = Depends(get_settings),
+):
+    """
+    One-click publish to Netlify.
+
+    Frontend generates a self-contained HTML document (React + Babel + Tailwind +
+    Supabase credentials embedded) and sends it here. Backend creates a Netlify
+    site if needed, deploys the HTML, and waits for it to be ready.
+
+    Auto-retries up to 3 times on deploy failure.
+    """
+    user.assert_tenant_access(tenant_id)
+
+    if not settings.netlify_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Netlify not configured. Set NETLIFY_TOKEN in environment.",
+        )
+
+    from ..services.netlify import NetlifyService
+
+    netlify = NetlifyService(
+        token=settings.netlify_token,
+        team_slug=settings.netlify_team_slug,
+        site_prefix=settings.netlify_site_prefix,
+    )
+
+    # Fetch project
+    project = (
+        db.table("projects")
+        .select("*")
+        .eq("id", str(project_id))
+        .eq("tenant_id", str(tenant_id))
+        .single()
+        .execute()
+    )
+
+    # Create or reuse Netlify site
+    site_id = project.data.get("netlify_site_id")
+    if not site_id:
+        try:
+            site = netlify.create_site(project.data["slug"])
+            site_id = site["site_id"]
+            db.table("projects").update({
+                "netlify_site_id": site_id,
+                "deployment_status": "deploying",
+            }).eq("id", str(project_id)).execute()
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to create Netlify site: {e}",
+            )
+    else:
+        db.table("projects").update({
+            "deployment_status": "deploying",
+        }).eq("id", str(project_id)).execute()
+
+    # Deploy with auto-retry (up to 3 attempts, exponential backoff)
+    max_retries = 3
+    last_error: Exception | None = None
+    result = None
+
+    for attempt in range(max_retries):
+        try:
+            result = netlify.deploy_html(site_id, body.html)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s, 4s
+
+    if result is None:
+        db.table("projects").update({
+            "deployment_status": "failed",
+        }).eq("id", str(project_id)).execute()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Deploy failed after {max_retries} attempts: {last_error}",
+        )
+
+    deploy_url = result["url"]
+    deploy_status = "deploying"
+
+    # Wait for Netlify to finish (blocking, but fast for single-file deploys)
+    try:
+        final = netlify.wait_for_ready(result["deploy_id"], max_wait=60)
+        deploy_url = final["url"] or deploy_url
+        deploy_status = "ready"
+    except (TimeoutError, RuntimeError):
+        # Still in progress — frontend will poll
+        deploy_status = "deploying"
+
+    # Update project record
+    update_data = {
+        "deployed_url": deploy_url,
+        "deployed_at": datetime.now(timezone.utc).isoformat(),
+        "deployment_status": "deployed" if deploy_status == "ready" else "deploying",
+    }
+    db.table("projects").update(update_data).eq("id", str(project_id)).execute()
+
+    # Record deployment in history
+    db.table("netlify_deployments").insert({
+        "tenant_id": str(tenant_id),
+        "project_id": str(project_id),
+        "netlify_site_id": site_id,
+        "netlify_deploy_id": result["deploy_id"],
+        "status": deploy_status,
+        "url": deploy_url,
+    }).execute()
+
+    return PublishResponse(
+        deploy_id=result["deploy_id"],
+        url=deploy_url,
+        status=deploy_status,
+        netlify_site_id=site_id,
+    )
+
+
+@app.get(
+    "/tenants/{tenant_id}/projects/{project_id}/publish-status",
+    response_model=PublishStatusResponse,
+)
+async def get_publish_status(
+    tenant_id: UUID,
+    project_id: UUID,
+    deploy_id: str = Query(..., description="Netlify deploy ID to check"),
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+    settings: Settings = Depends(get_settings),
+):
+    """Poll Netlify deploy status for the progress UI."""
+    user.assert_tenant_access(tenant_id)
+
+    from ..services.netlify import NetlifyService
+
+    netlify = NetlifyService(
+        token=settings.netlify_token,
+        team_slug=settings.netlify_team_slug,
+        site_prefix=settings.netlify_site_prefix,
+    )
+
+    try:
+        status = netlify.get_deploy_status(deploy_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to check status: {e}")
+
+    # If ready, update the project record
+    if status["state"] == "ready":
+        db.table("projects").update({
+            "deployment_status": "deployed",
+            "deployed_url": status["url"],
+        }).eq("id", str(project_id)).execute()
+
+    return PublishStatusResponse(state=status["state"], url=status["url"])
 
 
 # ===========================================================================

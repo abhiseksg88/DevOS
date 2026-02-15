@@ -3,7 +3,7 @@
  * All calls go through the FastAPI backend.
  */
 
-import type { Build, Deployment, Project, Tenant, UsageSummary } from "@/types";
+import type { Build, Deployment, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -62,6 +62,23 @@ export const builds = {
 export const deployments = {
   list: (token: string, tenantId: string, projectId: string) =>
     request<Deployment[]>("GET", `/tenants/${tenantId}/projects/${projectId}/deployments`, token),
+};
+
+// --- Publish (Netlify One-Click Deploy) ---
+export const publish = {
+  deploy: (token: string, tenantId: string, projectId: string, html: string) =>
+    request<PublishResult>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/publish`,
+      token,
+      { html },
+    ),
+  status: (token: string, tenantId: string, projectId: string, deployId: string) =>
+    request<PublishStatus>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/publish-status?deploy_id=${encodeURIComponent(deployId)}`,
+      token,
+    ),
 };
 
 // --- Usage ---
