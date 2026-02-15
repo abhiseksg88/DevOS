@@ -45,7 +45,7 @@ export default async function DeploymentPage({ params }: { params: { slug: strin
 
   return (
     <div className="w-screen h-screen bg-white">
-      <PreviewPane files={fileTree} />
+      <PreviewPane url={null} files={fileTree} />
     </div>
   );
 }
