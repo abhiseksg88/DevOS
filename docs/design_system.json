@@ -1,0 +1,64 @@
+{
+  "name": "NimbusForge Design System",
+  "version": "0.1.0",
+  "theme": {
+    "colors": {
+      "primary": "#6366F1",
+      "primary_hover": "#4F46E5",
+      "secondary": "#0EA5E9",
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "background": "#0F172A",
+      "surface": "#1E293B",
+      "surface_elevated": "#334155",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "text_muted": "#64748B",
+      "border": "#334155"
+    },
+    "typography": {
+      "font_family": "Inter, system-ui, -apple-system, sans-serif",
+      "font_mono": "JetBrains Mono, Fira Code, monospace",
+      "scale": {
+        "xs": "0.75rem",
+        "sm": "0.875rem",
+        "base": "1rem",
+        "lg": "1.125rem",
+        "xl": "1.25rem",
+        "2xl": "1.5rem",
+        "3xl": "1.875rem"
+      }
+    },
+    "spacing": {
+      "unit": "4px",
+      "scale": [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24]
+    },
+    "radii": {
+      "sm": "4px",
+      "md": "8px",
+      "lg": "12px",
+      "full": "9999px"
+    }
+  },
+  "components": {
+    "build_status_colors": {
+      "queued": "#64748B",
+      "planning": "#6366F1",
+      "scaffolding": "#8B5CF6",
+      "coding": "#0EA5E9",
+      "reviewing": "#F59E0B",
+      "building": "#F97316",
+      "deploying": "#10B981",
+      "succeeded": "#10B981",
+      "failed": "#EF4444",
+      "cancelled": "#64748B"
+    },
+    "model_badge_colors": {
+      "opus": "#6366F1",
+      "sonnet": "#0EA5E9",
+      "haiku": "#10B981",
+      "deepseek": "#F59E0B"
+    }
+  }
+}

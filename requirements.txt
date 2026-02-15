@@ -1,0 +1,27 @@
+# NimbusForge — Python Dependencies
+# Control Plane + Agent Orchestrator
+
+# --- Web Framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# --- Supabase ---
+supabase==2.11.0
+postgrest==0.17.0
+
+# --- LLM Providers ---
+anthropic==0.42.0
+httpx==0.28.1
+
+# --- Agent Orchestrator ---
+langgraph==0.2.60
+langchain-core==0.3.28
+
+# --- Build Pipeline ---
+# (kaniko/docker are system dependencies, not pip packages)
+
+# --- Utilities ---
+python-multipart==0.0.19
+python-jose[cryptography]==3.3.0
