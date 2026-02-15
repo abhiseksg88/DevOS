@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import traceback
 from datetime import datetime, timezone
 from typing import AsyncGenerator
@@ -23,6 +24,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from supabase import Client
+
+logger = logging.getLogger(__name__)
 
 from .config import Settings, get_settings
 from .dependencies import (

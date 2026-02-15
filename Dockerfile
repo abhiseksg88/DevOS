@@ -47,4 +47,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "nimbusforge.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Single worker mode for Railway (memory constrained)
+# Use --workers for production deployments with more resources
+CMD ["uvicorn", "nimbusforge.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
