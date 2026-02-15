@@ -9,7 +9,7 @@ pydantic-settings==2.7.1
 
 # --- Supabase ---
 supabase==2.11.0
-postgrest==0.17.0
+# postgrest pulled automatically by supabase (>=0.19)
 
 # --- LLM Providers ---
 anthropic==0.42.0
