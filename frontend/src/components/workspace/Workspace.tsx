@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
 import { useGenerate } from "@/hooks/useGenerate";
+import { useAutoFix } from "@/hooks/useAutoFix";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
@@ -113,6 +114,9 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
 
+  // File tree — updated from Claude output or editor changes
+  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
+
   // Sync deployed URL from project when loaded
   useEffect(() => {
     if (project?.deployed_url) {
@@ -123,6 +127,107 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
+
+  // -------------------------------------------------------------------------
+  // Auto-fix loop: preview errors → fix agent → apply → re-render
+  // -------------------------------------------------------------------------
+  const autoFix = useAutoFix(
+    fileTree,
+    // onFileFix — apply the fixed file
+    useCallback((path: string, content: string) => {
+      setFileTree((prev) => updateInTree(prev, path, content));
+      seqRef.current += 1;
+      setGenerationEvents((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          build_id: "",
+          kind: "patch",
+          agent: "fix-agent",
+          payload: { message: `Auto-fixed ${path}` },
+          seq: seqRef.current,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    }, []),
+    // onFixStart
+    useCallback(() => {
+      seqRef.current += 1;
+      setGenerationEvents((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          build_id: "",
+          kind: "agent_start",
+          agent: "fix-agent",
+          payload: { message: "Auto-fixing preview errors..." },
+          seq: seqRef.current,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "Detected preview errors — auto-fixing...",
+          timestamp: Date.now(),
+          status: "coding",
+        },
+      ]);
+    }, []),
+    // onFixEnd
+    useCallback((success: boolean, iteration: number) => {
+      seqRef.current += 1;
+      if (success) {
+        setGenerationEvents((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            build_id: "",
+            kind: "build_progress",
+            agent: "fix-agent",
+            payload: {
+              message: `Auto-fix succeeded (iteration ${iteration})`,
+              status: "succeeded",
+            },
+            seq: seqRef.current,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Auto-fix applied successfully. Check the preview.`,
+            timestamp: Date.now(),
+            status: "succeeded",
+          },
+        ]);
+      } else if (iteration >= 3) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Auto-fix couldn't resolve all errors after ${iteration} attempts. You can describe the issue and I'll try a different approach.`,
+            timestamp: Date.now(),
+          },
+        ]);
+      }
+    }, []),
+  );
+
+  // Callback for PreviewPane error reporting
+  const handlePreviewError = useCallback(
+    (msg: string) => {
+      if (!generator.isGenerating && !autoFix.isFixing) {
+        autoFix.reportError(msg);
+      }
+    },
+    [generator.isGenerating, autoFix],
+  );
 
   // Helper: Convert file tree to code map for persistence
   function treeToCodeMap(tree: FileNode[]): Record<string, string> {
@@ -193,9 +298,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       node.content = content;
     }
   }
-
-  // File tree — updated from Claude output or editor changes
-  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
 
   // Hydrate state from persistence on load
   useEffect(() => {
@@ -325,6 +427,9 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const handleSendMessage = useCallback(
     async (content: string) => {
+      // Reset auto-fix counter on new user prompt
+      autoFix.reset();
+
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
@@ -400,7 +505,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
     },
-    [generator, fileTree, addFileToTree, persistence]
+    [generator, fileTree, addFileToTree, persistence, autoFix]
   );
 
   if (loading) {
@@ -436,6 +541,14 @@ export function Workspace({ projectId }: { projectId: string }) {
               <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
               <span className="text-2xs text-amber-400 font-medium uppercase tracking-wider">
                 Generating
+              </span>
+            </div>
+          )}
+          {autoFix.isFixing && (
+            <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/20">
+              <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse-dot" />
+              <span className="text-2xs text-teal-400 font-medium uppercase tracking-wider">
+                Auto-fixing ({autoFix.iteration}/{autoFix.maxIterations})
               </span>
             </div>
           )}
@@ -524,7 +637,7 @@ export function Workspace({ projectId }: { projectId: string }) {
               )}
 
               {rightTab === "preview" && (
-                <PreviewPane url={deployedUrl} files={fileTree} />
+                <PreviewPane url={deployedUrl} files={fileTree} onError={handlePreviewError} />
               )}
 
               {rightTab === "console" && (

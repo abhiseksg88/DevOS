@@ -28,6 +28,8 @@ const VIEWPORTS: Record<
 interface PreviewPaneProps {
   url: string | null;
   files?: FileNode[];
+  /** Called when the preview iframe reports a runtime error */
+  onError?: (message: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +574,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -589,15 +591,15 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (e.data?.type === "PREVIEW_ERROR") {
-        setPreviewErrors((prev) => [
-          ...prev.slice(-19),
-          e.data.payload?.message || "Unknown error",
-        ]);
+        const msg = e.data.payload?.message || "Unknown error";
+        setPreviewErrors((prev) => [...prev.slice(-19), msg]);
+        // Forward to auto-fix pipeline
+        onError?.(msg);
       }
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, []);
+  }, [onError]);
 
   // Handle Supabase credential requests from preview iframe
   useEffect(() => {
