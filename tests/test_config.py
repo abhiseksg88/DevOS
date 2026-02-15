@@ -33,8 +33,9 @@ class TestSettingsValidation:
         assert s.cors_allowed_origins == ["http://localhost:3000"]
         assert "*" not in s.cors_allowed_origins
 
-    def test_debug_mode_default_false(self):
+    def test_debug_mode_default_false(self, monkeypatch):
         """Debug mode should default to False."""
+        monkeypatch.delenv("DEBUG_MODE", raising=False)
         from nimbusforge.api.config import Settings
 
         s = Settings(supabase_service_role_key="test-key")
