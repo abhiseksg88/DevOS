@@ -1,5 +1,15 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { NextRequest } from "next/server";
+/**
+ * Code generation API route using Anthropic Claude.
+ *
+ * Uses Edge Runtime so that Netlify deploys this as an Edge Function
+ * instead of a regular serverless function. This avoids the 10-second
+ * timeout on the free tier and gives proper SSE streaming support.
+ *
+ * We call the Anthropic REST API directly (no SDK) to avoid Node.js
+ * module dependencies that are unavailable in the Edge Runtime.
+ */
+
+export const runtime = "edge";
 
 const SYSTEM_PROMPT = `You are an expert full-stack developer. The user will describe an app or feature they want built.
 
@@ -36,7 +46,7 @@ Interactivity:
 
 Do NOT include any explanation text outside of ===FILE: ... === blocks`;
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   const { prompt, existingFiles } = await req.json();
 
   if (!prompt || typeof prompt !== "string") {
@@ -51,13 +61,11 @@ export async function POST(req: NextRequest) {
     return new Response(
       JSON.stringify({
         error:
-          "ANTHROPIC_API_KEY not configured. Add it to frontend/.env.local",
+          "ANTHROPIC_API_KEY not configured. Set it in your Netlify environment variables.",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
-
-  const client = new Anthropic({ apiKey });
 
   // Build context from existing files
   let context = "";
@@ -71,39 +79,106 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Stream the response
+  // Call Anthropic REST API directly (Edge-compatible, no Node.js SDK needed)
+  const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 8192,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: prompt + context,
+        },
+      ],
+      stream: true,
+    }),
+  });
+
+  if (!anthropicResponse.ok) {
+    const errBody = await anthropicResponse.text();
+    let errorMessage = `Anthropic API error (${anthropicResponse.status})`;
+    try {
+      const parsed = JSON.parse(errBody);
+      errorMessage = parsed.error?.message || errorMessage;
+    } catch {
+      // use default message
+    }
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (!anthropicResponse.body) {
+    return new Response(
+      JSON.stringify({ error: "No response stream from Anthropic" }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // Transform the Anthropic SSE stream into our own SSE stream
   const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
   const stream = new ReadableStream({
     async start(controller) {
-      try {
-        const response = await client.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 8192,
-          system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: prompt + context,
-            },
-          ],
-          stream: true,
-        });
+      const reader = anthropicResponse.body!.getReader();
+      let buffer = "";
 
-        for await (const event of response) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            // Send as SSE
-            const data = JSON.stringify({ type: "text", content: event.delta.text });
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === "[DONE]" || !jsonStr) continue;
+
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (
+                event.type === "content_block_delta" &&
+                event.delta?.type === "text_delta"
+              ) {
+                const data = JSON.stringify({
+                  type: "text",
+                  content: event.delta.text,
+                });
+                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              } else if (event.type === "message_stop") {
+                // Stream complete
+              } else if (event.type === "error") {
+                const errData = JSON.stringify({
+                  type: "error",
+                  error: event.error?.message || "Anthropic stream error",
+                });
+                controller.enqueue(encoder.encode(`data: ${errData}\n\n`));
+              }
+            } catch {
+              // skip malformed JSON lines
+            }
           }
         }
 
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`)
+        );
         controller.close();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
+        const message = err instanceof Error ? err.message : "Stream error";
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({ type: "error", error: message })}\n\n`
