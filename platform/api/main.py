@@ -369,7 +369,8 @@ async def _run_build_pipeline(
         )
     except Exception as e:
         # If the pipeline crashes, mark the build as failed
-        db = get_supabase_service(settings)
+        from supabase import create_client
+        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
         db.table("builds").update({
             "status": "failed",
             "error_message": str(e),
@@ -600,7 +601,8 @@ async def _run_deployment(
             settings=settings,
         )
     except Exception as e:
-        db = get_supabase_service(settings)
+        from supabase import create_client
+        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
         db.table("deployments").update({
             "status": "failed",
         }).eq("id", deploy_id).execute()
