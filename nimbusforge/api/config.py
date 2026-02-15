@@ -4,7 +4,11 @@ Loaded from environment variables with sensible defaults.
 """
 
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from functools import lru_cache
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -46,6 +50,24 @@ class Settings(BaseSettings):
     # --- Build ---
     build_timeout_seconds: int = 600  # 10 minutes
     max_agent_iterations: int = 5
+
+    @model_validator(mode='after')
+    def validate_supabase_credentials(self):
+        """Validate that essential Supabase credentials are configured."""
+        if not self.supabase_url:
+            logger.warning("SUPABASE_URL not set. Preview apps may not persist data.")
+
+        if not self.supabase_anon_key:
+            logger.warning("SUPABASE_ANON_KEY not set. Preview apps cannot connect to database.")
+
+        if not self.supabase_service_role_key:
+            logger.error("SUPABASE_SERVICE_ROLE_KEY not set. Backend operations will fail.")
+
+        # Log successful configuration
+        if self.supabase_url and self.supabase_anon_key and self.supabase_service_role_key:
+            logger.info(f"Supabase configured: {self.supabase_url}")
+
+        return self
 
     class Config:
         env_file = ".env"

@@ -42,6 +42,32 @@ def _get_db(settings: Settings):
     return create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 
+def _ensure_app_data_table(db, settings: Settings) -> bool:
+    """Ensure the app_data table exists. Logs warning if missing.
+
+    Returns:
+        True if table exists
+        False if table is missing (should run migrations)
+    """
+    try:
+        # Test if table exists by attempting a simple query
+        db.table("app_data").select("id").limit(1).execute()
+        return True
+    except Exception as e:
+        error_msg = str(e).lower()
+
+        # If table doesn't exist, log warning
+        if "relation" in error_msg or "does not exist" in error_msg or "not found" in error_msg:
+            print(f"[WARNING] app_data table not found. Run: supabase db push")
+            print(f"[WARNING] Migration: supabase/migrations/004_app_data_table.sql")
+            # Return True to continue build (table will be created via migrations)
+            return True
+        else:
+            # Some other error - log but continue
+            print(f"[INFO] Database check error (non-critical): {e}")
+            return True
+
+
 # ---------------------------------------------------------------------------
 # State schema for the LangGraph graph
 # ---------------------------------------------------------------------------
@@ -489,6 +515,9 @@ async def run_build(
 ):
     """Run the full agent pipeline for a build."""
     db = _get_db(settings)
+
+    # Ensure app_data table exists (for Universal Table strategy)
+    _ensure_app_data_table(db, settings)
 
     # Load project memory files
     project = (

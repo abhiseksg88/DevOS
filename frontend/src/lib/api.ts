@@ -70,6 +70,12 @@ export const usage = {
     request<UsageSummary>("GET", `/tenants/${tenantId}/usage?period=${period ?? "current_month"}`, token),
 };
 
+// --- Preview ---
+export const preview = {
+  getCredentials: (token: string) =>
+    request<{ url: string; anonKey: string }>("GET", "/preview/credentials", token),
+};
+
 // --- SSE Stream ---
 export function streamBuildEvents(
   token: string,

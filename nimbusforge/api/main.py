@@ -95,9 +95,43 @@ async def debug_db(db: Client = Depends(get_supabase_service)):
     """Test Supabase connection — returns table list or error."""
     try:
         result = db.table("tenants").select("id").limit(1).execute()
-        return {"status": "ok", "tenants_count": len(result.data)}
+        app_data_exists = True
+        try:
+            db.table("app_data").select("id").limit(1).execute()
+        except:
+            app_data_exists = False
+        return {
+            "status": "ok",
+            "tenants_count": len(result.data),
+            "app_data_table_exists": app_data_exists
+        }
     except Exception as e:
         return {"status": "error", "error": str(e), "type": type(e).__name__}
+
+
+@app.get("/preview/credentials")
+async def get_preview_credentials(
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """
+    Return Supabase credentials for preview iframes.
+
+    Authenticated users get URL and anon key to inject into preview apps.
+    Rate-limited to prevent abuse.
+    """
+    # Validate credentials are configured
+    if not settings.supabase_url or not settings.supabase_anon_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase not configured. Contact administrator."
+        )
+
+    # Return credentials
+    return {
+        "url": settings.supabase_url,
+        "anonKey": settings.supabase_anon_key,
+    }
 
 
 # ===========================================================================

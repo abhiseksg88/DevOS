@@ -176,6 +176,9 @@ console.error=function(){
 <!-- 4. Tailwind CSS CDN -->
 <script src="https://cdn.tailwindcss.com"><\/script>
 
+<!-- 5. Supabase Client SDK (for data persistence) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>
+
 <style>
 html,body,#root{height:100%;width:100%;margin:0;padding:0;overflow-x:hidden}
 *,*::before,*::after{box-sizing:border-box}
@@ -188,6 +191,32 @@ ${cleanCSS}
 <div id="root"></div>
 <script>
 (function(){
+  /* --- Supabase initialization (postMessage from parent) --- */
+  window.__supabase_ready=false;
+  window.supabase=null;
+
+  window.addEventListener('message',function(e){
+    if(e.data&&e.data.type==='SUPABASE_INIT'){
+      try{
+        if(typeof supabase==='undefined'||!supabase.createClient){
+          console.error('[Preview] Supabase SDK not loaded');
+          return;
+        }
+        window.supabase=supabase.createClient(e.data.url,e.data.anonKey);
+        window.__supabase_ready=true;
+        window.dispatchEvent(new Event('supabase:ready'));
+        console.log('[Preview] Supabase initialized:',e.data.url);
+      }catch(err){
+        console.error('[Preview] Failed to initialize Supabase:',err);
+      }
+    }
+  });
+
+  /* Request credentials from parent */
+  try{
+    window.parent.postMessage({type:'REQUEST_SUPABASE_CREDENTIALS'},'*');
+  }catch(e){console.warn('[Preview] Could not request Supabase credentials');}
+
   /* --- helpers --- */
   function b64d(b){
     var s=atob(b),a=new Uint8Array(s.length);
@@ -268,27 +297,55 @@ ${cleanCSS}
 
   if(typeof Babel==='undefined'){ showErr('Babel failed to load — check your internet connection.'); return; }
   if(typeof React==='undefined'||typeof ReactDOM==='undefined'){ showErr('React failed to load — check your internet connection.'); return; }
+  if(typeof supabase==='undefined'){ console.warn('[Preview] Supabase SDK not loaded (continuing without persistence)'); }
 
-  try{
-    var transpiled=Babel.transform(code,{
-      presets:['react','typescript',['env',{modules:'commonjs'}]],
-      filename:'page.tsx'
-    }).code;
+  /* --- Show loading state while waiting for database connection --- */
+  function showLoading(msg){
+    document.getElementById('root').innerHTML=
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;color:#94a3b8;font-family:system-ui;gap:12px">'+
+      '<div style="width:40px;height:40px;border:3px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:spin 0.8s linear infinite"></div>'+
+      '<p style="font-size:13px">'+msg+'</p>'+
+      '<style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>';
+  }
 
-    var mod={exports:{}};
-    (new Function('module','exports','require','React','ReactDOM',transpiled))(mod,mod.exports,__req,React,ReactDOM);
+  /* Wait for Supabase to be ready before rendering */
+  function renderApp(){
+    try{
+      var transpiled=Babel.transform(code,{
+        presets:['react','typescript',['env',{modules:'commonjs'}]],
+        filename:'page.tsx'
+      }).code;
 
-    var App=mod.exports['default']||mod.exports;
+      var mod={exports:{}};
+      (new Function('module','exports','require','React','ReactDOM',transpiled))(mod,mod.exports,__req,React,ReactDOM);
 
-    if(typeof App!=='function'){
-      showErr('No valid React component found.\\n\\nThe default export must be a function component.\\nExample: export default function Home() { return <div>Hello</div>; }');
-      return;
+      var App=mod.exports['default']||mod.exports;
+
+      if(typeof App!=='function'){
+        showErr('No valid React component found.\\n\\nThe default export must be a function component.\\nExample: export default function Home() { return <div>Hello</div>; }');
+        return;
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+    }catch(err){
+      showErr(err.message,err.stack);
+      try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:err.message}},'*')}catch(x){}
     }
+  }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
-  }catch(err){
-    showErr(err.message,err.stack);
-    try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:err.message}},'*')}catch(x){}
+  /* Wait for Supabase ready event (max 3 seconds) */
+  if(window.__supabase_ready){
+    renderApp();
+  }else{
+    showLoading('Connecting to database...');
+    var timeout=setTimeout(function(){
+      console.warn('[Preview] Supabase initialization timeout - continuing anyway');
+      renderApp();
+    },3000);
+    window.addEventListener('supabase:ready',function(){
+      clearTimeout(timeout);
+      renderApp();
+    });
   }
 })();
 <\/script>
@@ -325,6 +382,50 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // Handle Supabase credential requests from preview iframe
+  useEffect(() => {
+    async function handleCredentialRequest(e: MessageEvent) {
+      if (e.data?.type === "REQUEST_SUPABASE_CREDENTIALS") {
+        try {
+          // Fetch credentials from backend
+          const { preview } = await import("@/lib/api");
+          const token = ""; // TODO: Get auth token from session/context
+
+          // For now, fetch without auth (endpoint should be public or we need to integrate auth)
+          const response = await fetch("/api/preview-credentials");
+          if (!response.ok) {
+            console.error("[PreviewPane] Failed to fetch credentials:", response.statusText);
+            return;
+          }
+
+          const credentials = await response.json();
+
+          // Send credentials to iframe
+          const iframes = document.getElementsByTagName("iframe");
+          for (let i = 0; i < iframes.length; i++) {
+            try {
+              iframes[i].contentWindow?.postMessage(
+                {
+                  type: "SUPABASE_INIT",
+                  url: credentials.url,
+                  anonKey: credentials.anonKey,
+                },
+                "*"
+              );
+            } catch (err) {
+              console.error("[PreviewPane] Failed to send credentials to iframe:", err);
+            }
+          }
+        } catch (error) {
+          console.error("[PreviewPane] Error handling credential request:", error);
+        }
+      }
+    }
+
+    window.addEventListener("message", handleCredentialRequest);
+    return () => window.removeEventListener("message", handleCredentialRequest);
   }, []);
 
   // Clear errors on new content / refresh
