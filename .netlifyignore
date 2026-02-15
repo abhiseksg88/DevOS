@@ -1,0 +1,14 @@
+# Ignore Python backend - only deploy Next.js frontend
+nimbusforge/
+requirements.txt
+Dockerfile
+.dockerignore
+.env
+.env.example
+supabase/
+scripts/
+docs/
+*.md
+!frontend/
+Makefile
+.gitignore

@@ -1,0 +1,20 @@
+[build]
+  # Build Next.js frontend only (ignore Python backend)
+  base = "frontend"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Use Node.js 20 (stable, recommended for Next.js 14)
+  NODE_VERSION = "20"
+  # Do NOT install Python packages
+  NPM_FLAGS = "--legacy-peer-deps"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[functions]
+  # Disable Netlify Functions (we use Railway for backend)
+  directory = "none"
