@@ -3,7 +3,7 @@
  * All calls go through the FastAPI backend.
  */
 
-import type { Build, Deployment, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
+import type { Build, Deployment, Integration, IntegrationContext, IntegrationTestResult, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -103,6 +103,72 @@ export const publish = {
     request<PublishStatus>(
       "GET",
       `/tenants/${tenantId}/projects/${projectId}/publish-status?deploy_id=${encodeURIComponent(deployId)}`,
+      token,
+    ),
+};
+
+// --- Integrations ---
+export const integrations = {
+  list: (token: string, tenantId: string, projectId: string) =>
+    request<Integration[]>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/integrations`,
+      token,
+    ),
+  create: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    data: {
+      provider: string;
+      category: string;
+      display_name: string;
+      credentials?: Record<string, string>;
+      config?: Record<string, unknown>;
+    },
+  ) =>
+    request<Integration>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/integrations`,
+      token,
+      data,
+    ),
+  update: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    integrationId: string,
+    data: {
+      display_name?: string;
+      credentials?: Record<string, string>;
+      config?: Record<string, unknown>;
+      status?: string;
+    },
+  ) =>
+    request<Integration>(
+      "PATCH",
+      `/tenants/${tenantId}/projects/${projectId}/integrations/${integrationId}`,
+      token,
+      data,
+    ),
+  delete: (token: string, tenantId: string, projectId: string, integrationId: string) =>
+    fetch(
+      `${API}/tenants/${tenantId}/projects/${projectId}/integrations/${integrationId}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    ),
+  test: (token: string, tenantId: string, projectId: string, integrationId: string) =>
+    request<IntegrationTestResult>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/integrations/${integrationId}/test`,
+      token,
+    ),
+  context: (token: string, tenantId: string, projectId: string) =>
+    request<IntegrationContext>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/integrations/context`,
       token,
     ),
 };

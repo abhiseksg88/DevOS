@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PublishButton } from "@/components/workspace/PublishButton";
+import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
+import * as api from "@/lib/api";
 
 type RightTab = "code" | "preview" | "console";
 
@@ -113,6 +115,17 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [openFiles, setOpenFiles] = useState<FileNode[]>([]);
   const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
+  const [showIntegrations, setShowIntegrations] = useState(false);
+  const [integrationContext, setIntegrationContext] = useState<string>("");
+
+  // Load integration context (what APIs are available) for code generation
+  useEffect(() => {
+    if (!token || !resolvedTenantId || !projectId) return;
+    api.integrations
+      .context(token, resolvedTenantId, projectId)
+      .then((ctx) => setIntegrationContext(ctx.context))
+      .catch(() => setIntegrationContext(""));
+  }, [token, resolvedTenantId, projectId]);
 
   // File tree — updated from Claude output or editor changes
   const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
@@ -473,8 +486,11 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Switch to console to show progress
       setRightTab("console");
 
-      // Call Claude directly — generate() now returns a result
-      const result = await generator.generate(content, fileTree, (path, fileContent) => {
+      // Call Claude directly — generate() passes integration context so Claude knows what APIs are available
+      const promptWithContext = integrationContext
+        ? `${content}\n\n${integrationContext}`
+        : content;
+      const result = await generator.generate(promptWithContext, fileTree, (path, fileContent) => {
         addFileToTree(path, fileContent);
       });
 
@@ -505,7 +521,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
     },
-    [generator, fileTree, addFileToTree, persistence, autoFix]
+    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext]
   );
 
   if (loading) {
@@ -555,6 +571,13 @@ export function Workspace({ projectId }: { projectId: string }) {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowIntegrations(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-brand-500/30 transition-all"
+          >
+            <Zap className="w-3 h-3" />
+            Integrations
+          </button>
           <PublishButton
             project={project}
             tenantId={resolvedTenantId}
@@ -651,6 +674,24 @@ export function Workspace({ projectId }: { projectId: string }) {
           </div>
         </Panel>
       </PanelGroup>
+
+      {/* Integrations drawer */}
+      <IntegrationsPanel
+        projectId={projectId}
+        tenantId={resolvedTenantId}
+        token={token}
+        open={showIntegrations}
+        onClose={() => {
+          setShowIntegrations(false);
+          // Refresh integration context after panel closes (user may have added/updated)
+          if (token && resolvedTenantId && projectId) {
+            api.integrations
+              .context(token, resolvedTenantId, projectId)
+              .then((ctx) => setIntegrationContext(ctx.context))
+              .catch(() => {});
+          }
+        }}
+      />
     </div>
   );
 }

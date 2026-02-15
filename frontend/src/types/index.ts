@@ -102,6 +102,60 @@ export interface UsageSummary {
   by_model: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// Integrations
+// ---------------------------------------------------------------------------
+
+export type IntegrationCategory =
+  | "llm"
+  | "auth"
+  | "database"
+  | "payment"
+  | "email"
+  | "storage"
+  | "analytics"
+  | "custom";
+
+export type IntegrationStatus = "active" | "inactive" | "error";
+
+export interface CredentialHint {
+  hint: string;
+  name: string;
+  is_set: boolean;
+}
+
+export interface Integration {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  provider: string;
+  category: IntegrationCategory;
+  display_name: string;
+  status: IntegrationStatus;
+  credentials: Record<string, CredentialHint>;
+  config: Record<string, unknown>;
+  last_tested_at: string | null;
+  last_test_ok: boolean | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IntegrationTestResult {
+  ok: boolean;
+  message: string;
+  latency_ms: number | null;
+}
+
+export interface IntegrationContext {
+  context: string;
+  integrations: Array<{
+    provider: string;
+    category: string;
+    has_credentials: boolean;
+  }>;
+}
+
 /** Chat message in the workspace */
 export interface ChatMessage {
   id: string;
