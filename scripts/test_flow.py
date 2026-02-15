@@ -353,12 +353,12 @@ def test_usage(token: str, tenant_id: str):
 # ---------------------------------------------------------------------------
 
 def main():
+    global API_URL
     parser = argparse.ArgumentParser(description="NimbusForge E2E Test Flow")
     parser.add_argument("--api-url", default=API_URL, help="API base URL")
     parser.add_argument("--skip-auth", action="store_true", help="Use service-role key instead of user auth")
     args = parser.parse_args()
 
-    global API_URL
     API_URL = args.api_url
 
     print("=" * 60)
