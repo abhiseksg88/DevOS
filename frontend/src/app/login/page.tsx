@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
-import { Zap, Github, Mail, ArrowRight, Loader2 } from "lucide-react";
+import { Zap, Github, Mail, ArrowRight, Loader2, CheckCircle } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,31 +12,74 @@ export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
   async function handleEmailAuth(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
+    setConfirmationSent(false);
     const supabase = createClient();
 
-    const { error: authError } = isSignUp
-      ? await supabase.auth.signUp({ email, password })
-      : await supabase.auth.signInWithPassword({ email, password });
+    if (isSignUp) {
+      const { data, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
 
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
-      return;
+      if (authError) {
+        setError(authError.message);
+        setLoading(false);
+        return;
+      }
+
+      // If session is null but user exists, email confirmation is required
+      if (data.user && !data.session) {
+        setConfirmationSent(true);
+        setLoading(false);
+        return;
+      }
+
+      // Auto-confirmed — go to dashboard
+      router.push("/dashboard");
+    } else {
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) {
+        // Provide friendlier error messages
+        if (authError.message === "Invalid login credentials") {
+          setError("Invalid email or password. If you just signed up, check your email to confirm your account first.");
+        } else if (authError.message === "Email not confirmed") {
+          setError("Please confirm your email address. Check your inbox for the confirmation link.");
+        } else {
+          setError(authError.message);
+        }
+        setLoading(false);
+        return;
+      }
+      router.push("/dashboard");
     }
-    router.push("/dashboard");
+    setLoading(false);
   }
 
   async function handleOAuth(provider: "github" | "google") {
+    setError("");
     const supabase = createClient();
-    await supabase.auth.signInWithOAuth({
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider,
       options: { redirectTo: `${window.location.origin}/auth/callback` },
     });
+    if (oauthError) {
+      setError(
+        `${provider === "github" ? "GitHub" : "Google"} login is not configured yet. Please use email/password or ask the admin to enable ${provider} OAuth in Supabase.`
+      );
+    }
   }
 
   return (
@@ -99,6 +142,20 @@ export default function LoginPage() {
           <p className="text-slate-500 mb-8">
             {isSignUp ? "Start building with AI agents" : "Sign in to your workspace"}
           </p>
+
+          {/* Email confirmation message */}
+          {confirmationSent && (
+            <div className="mb-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle className="w-5 h-5 text-emerald-400" />
+                <span className="text-emerald-400 font-medium">Check your email</span>
+              </div>
+              <p className="text-sm text-slate-400">
+                We sent a confirmation link to <span className="text-white font-medium">{email}</span>.
+                Click the link to activate your account, then come back and sign in.
+              </p>
+            </div>
+          )}
 
           {/* OAuth */}
           <div className="space-y-3 mb-6">

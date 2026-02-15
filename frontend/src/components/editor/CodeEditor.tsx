@@ -21,9 +21,10 @@ interface CodeEditorProps {
   openFiles: FileNode[];
   onSelectFile: (file: FileNode) => void;
   onCloseFile: (path: string) => void;
+  onContentChange?: (path: string, content: string) => void;
 }
 
-export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile }: CodeEditorProps) {
+export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile, onContentChange }: CodeEditorProps) {
   const handleEditorMount = useCallback((editor: unknown, monaco: unknown) => {
     // Configure Monaco theme
     const m = monaco as { editor: { defineTheme: (name: string, theme: unknown) => void; setTheme: (name: string) => void } };
@@ -102,6 +103,11 @@ export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile }: CodeE
           value={file.content ?? ""}
           theme="nimbus-dark"
           onMount={handleEditorMount}
+          onChange={(value) => {
+            if (value !== undefined && onContentChange) {
+              onContentChange(file.path, value);
+            }
+          }}
           options={{
             fontSize: 13,
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
