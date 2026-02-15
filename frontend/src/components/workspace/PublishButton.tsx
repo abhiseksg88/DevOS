@@ -298,7 +298,10 @@ export function PublishButton({
                   status={
                     state === "generating"
                       ? "active"
-                      : state !== "idle"
+                      : state === "uploading" ||
+                          state === "deploying" ||
+                          state === "polling" ||
+                          state === "success"
                         ? "done"
                         : "pending"
                   }
