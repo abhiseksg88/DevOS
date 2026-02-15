@@ -115,12 +115,32 @@ export function useGenerate() {
         });
 
         if (!response.ok) {
-          let errMsg = "Generation failed";
+          let errMsg = `Generation failed (HTTP ${response.status})`;
           try {
             const err = await response.json();
             errMsg = err.error || errMsg;
           } catch {
-            // response wasn't JSON
+            // Response wasn't JSON — try reading as text for debugging
+            try {
+              const text = await response.text();
+              if (text.includes("<!DOCTYPE") || text.includes("<html")) {
+                errMsg = `Server returned an HTML error page (HTTP ${response.status}). The API route may not be deployed correctly.`;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
+          return { files: [], error: errMsg };
+        }
+
+        // Validate that we got an SSE stream, not an HTML page
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.includes("text/event-stream") && !contentType.includes("text/plain")) {
+          const body = await response.text();
+          let errMsg = `Unexpected response type: ${contentType || "unknown"}`;
+          if (body.includes("<!DOCTYPE") || body.includes("<html")) {
+            errMsg = "Server returned an HTML page instead of a code generation stream. The API route may not be deployed correctly.";
           }
           setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
           return { files: [], error: errMsg };
@@ -135,6 +155,7 @@ export function useGenerate() {
 
         const decoder = new TextDecoder();
         let fullText = "";
+        let rawBytes = 0;
         let lastParsedCount = 0;
         let buffer = "";
 
@@ -142,6 +163,7 @@ export function useGenerate() {
           const { done, value } = await reader.read();
           if (done) break;
 
+          rawBytes += value?.byteLength ?? 0;
           buffer += decoder.decode(value, { stream: true });
 
           // Process complete lines from buffer
@@ -169,7 +191,7 @@ export function useGenerate() {
                 }
               } else if (event.type === "error") {
                 const errMsg = event.error || "Generation error";
-                setState((prev) => ({ ...prev, error: errMsg }));
+                setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
                 return { files: [], error: errMsg };
               }
             } catch {
@@ -196,6 +218,20 @@ export function useGenerate() {
           for (let i = lastParsedCount; i < finalFiles.length; i++) {
             onFileGenerated(finalFiles[i].path, finalFiles[i].content);
           }
+        }
+
+        // If the stream completed but produced no files, report a clear error
+        if (finalFiles.length === 0) {
+          let errMsg: string;
+          if (rawBytes === 0) {
+            errMsg = "The API returned an empty response. This usually means the server function timed out or the ANTHROPIC_API_KEY is not configured. Check your Netlify environment variables.";
+          } else if (fullText.length === 0) {
+            errMsg = `Received ${rawBytes} bytes from server but no text content was extracted. The stream may have been interrupted.`;
+          } else {
+            errMsg = `Claude responded but the output could not be parsed into files. Raw length: ${fullText.length} chars.`;
+          }
+          setState((prev) => ({ ...prev, isGenerating: false, error: errMsg, streamedText: fullText }));
+          return { files: [], error: errMsg };
         }
 
         setState((prev) => ({

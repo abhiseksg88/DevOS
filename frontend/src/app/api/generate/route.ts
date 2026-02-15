@@ -1,15 +1,13 @@
 /**
  * Code generation API route using Anthropic Claude.
  *
- * Uses Edge Runtime so that Netlify deploys this as an Edge Function
- * instead of a regular serverless function. This avoids the 10-second
- * timeout on the free tier and gives proper SSE streaming support.
- *
- * We call the Anthropic REST API directly (no SDK) to avoid Node.js
- * module dependencies that are unavailable in the Edge Runtime.
+ * Uses the standard Node.js serverless runtime (NOT Edge) so that Netlify
+ * "Secret" environment variables are accessible. We call the Anthropic REST
+ * API directly instead of importing the SDK to keep the bundle small and
+ * cold-starts fast.
  */
 
-export const runtime = "edge";
+import { NextRequest } from "next/server";
 
 const SYSTEM_PROMPT = `You are an expert full-stack developer. The user will describe an app or feature they want built.
 
@@ -46,7 +44,7 @@ Interactivity:
 
 Do NOT include any explanation text outside of ===FILE: ... === blocks`;
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const { prompt, existingFiles } = await req.json();
 
   if (!prompt || typeof prompt !== "string") {
@@ -61,7 +59,7 @@ export async function POST(req: Request) {
     return new Response(
       JSON.stringify({
         error:
-          "ANTHROPIC_API_KEY not configured. Set it in your Netlify environment variables.",
+          "ANTHROPIC_API_KEY is not set. Add it to your Netlify environment variables (Site settings > Environment variables). Make sure it is NOT marked as 'Secret' — Netlify Edge/serverless functions need it as a 'General' variable.",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
@@ -72,34 +70,52 @@ export async function POST(req: Request) {
   if (existingFiles && Array.isArray(existingFiles)) {
     const fileDescriptions = existingFiles
       .filter((f: { content?: string }) => f.content)
-      .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content}`)
+      .map(
+        (f: { path: string; content: string }) =>
+          `--- ${f.path} ---\n${f.content}`
+      )
       .join("\n\n");
     if (fileDescriptions) {
       context = `\n\nHere are the existing project files for context:\n${fileDescriptions}\n\nModify or add files as needed based on the user's request.`;
     }
   }
 
-  // Call Anthropic REST API directly (Edge-compatible, no Node.js SDK needed)
-  const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 8192,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: prompt + context,
+  // Call Anthropic REST API directly (no SDK — smaller bundle, faster cold start)
+  let anthropicResponse: Response;
+  try {
+    anthropicResponse = await fetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
         },
-      ],
-      stream: true,
-    }),
-  });
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 8192,
+          system: SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: prompt + context,
+            },
+          ],
+          stream: true,
+        }),
+      }
+    );
+  } catch (fetchErr) {
+    const msg =
+      fetchErr instanceof Error ? fetchErr.message : "Network error";
+    return new Response(
+      JSON.stringify({
+        error: `Failed to reach Anthropic API: ${msg}`,
+      }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
 
   if (!anthropicResponse.ok) {
     const errBody = await anthropicResponse.text();
@@ -123,7 +139,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // Transform the Anthropic SSE stream into our own SSE stream
+  // Transform the Anthropic SSE stream into our own SSE stream for the client
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -174,11 +190,14 @@ export async function POST(req: Request) {
         }
 
         controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`)
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "done" })}\n\n`
+          )
         );
         controller.close();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Stream error";
+        const message =
+          err instanceof Error ? err.message : "Stream error";
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({ type: "error", error: message })}\n\n`
