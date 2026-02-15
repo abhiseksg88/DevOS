@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase";
-import * as api from "@/lib/api";
+import * as db from "@/lib/supabase-db";
 import { cn, timeAgo } from "@/lib/utils";
 import type { Tenant, Project } from "@/types";
 import {
@@ -15,6 +14,7 @@ import {
   Loader2,
   Layers,
   ArrowRight,
+  AlertTriangle,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -23,45 +23,70 @@ export default function DashboardPage() {
   const [activeTenant, setActiveTenant] = useState<Tenant | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewTenant, setShowNewTenant] = useState(false);
 
-  const getToken = useCallback(async () => {
-    const supabase = createClient();
-    const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ?? "";
-  }, []);
-
   useEffect(() => {
     (async () => {
-      const token = await getToken();
-      if (!token) return;
       try {
-        const t = await api.tenants.list(token);
+        const t = await db.listTenants();
         setTenants(t);
         if (t.length > 0) {
           setActiveTenant(t[0]);
-          const p = await api.projects.list(token, t[0].id);
+          const p = await db.listProjects(t[0].id);
           setProjects(p);
         }
-      } catch {
-        // first time — no tenants yet
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to load. Make sure Supabase migrations are applied."
+        );
       }
       setLoading(false);
     })();
-  }, [getToken]);
+  }, []);
 
   async function handleSelectTenant(tenant: Tenant) {
     setActiveTenant(tenant);
-    const token = await getToken();
-    const p = await api.projects.list(token, tenant.id);
-    setProjects(p);
+    try {
+      const p = await db.listProjects(tenant.id);
+      setProjects(p);
+    } catch {
+      setProjects([]);
+    }
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-3.5rem)]">
         <Loader2 className="w-6 h-6 animate-spin text-brand-500" />
+      </div>
+    );
+  }
+
+  // Show setup error
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[calc(100vh-3.5rem)] px-6">
+        <div className="w-20 h-20 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-6">
+          <AlertTriangle className="w-10 h-10 text-red-400" />
+        </div>
+        <h1 className="text-2xl font-bold text-white mb-3">Database Setup Required</h1>
+        <p className="text-slate-400 text-center max-w-lg mb-4">{error}</p>
+        <div className="text-left bg-surface-2 border border-surface-3 rounded-xl p-4 max-w-lg w-full">
+          <p className="text-sm text-slate-300 mb-2 font-medium">Run these SQL files in your Supabase Dashboard &gt; SQL Editor:</p>
+          <ol className="text-sm text-slate-400 space-y-1 list-decimal list-inside">
+            <li><code className="text-brand-400">supabase/migrations/001_core_schema.sql</code></li>
+            <li><code className="text-brand-400">supabase/migrations/002_rpc_functions.sql</code></li>
+            <li><code className="text-brand-400">supabase/migrations/003_frontend_rpc.sql</code></li>
+          </ol>
+        </div>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-6 px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-medium transition-all"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -88,8 +113,7 @@ export default function DashboardPage() {
           <CreateTenantModal
             onClose={() => setShowNewTenant(false)}
             onCreate={async (name, slug) => {
-              const token = await getToken();
-              const t = await api.tenants.create(token, { name, slug });
+              const t = await db.createTenant(name, slug);
               setTenants([t]);
               setActiveTenant(t);
               setShowNewTenant(false);
@@ -189,13 +213,13 @@ export default function DashboardPage() {
         <CreateProjectModal
           onClose={() => setShowNewProject(false)}
           onCreate={async (name, slug, description) => {
-            const token = await getToken();
-            const p = await api.projects.create(token, activeTenant.id, {
+            const p = await db.createProject(
+              activeTenant.id,
               name,
               slug,
               description,
-              stack: { framework: "nextjs", language: "typescript" },
-            });
+              { framework: "nextjs", language: "typescript" }
+            );
             setProjects((prev) => [p, ...prev]);
             setShowNewProject(false);
             router.push(`/project/${p.id}?tenant=${activeTenant.id}`);
@@ -207,8 +231,7 @@ export default function DashboardPage() {
         <CreateTenantModal
           onClose={() => setShowNewTenant(false)}
           onCreate={async (name, slug) => {
-            const token = await getToken();
-            const t = await api.tenants.create(token, { name, slug });
+            const t = await db.createTenant(name, slug);
             setTenants((prev) => [...prev, t]);
             setActiveTenant(t);
             setProjects([]);
@@ -234,6 +257,7 @@ function CreateProjectModal({
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const slug = name
     .toLowerCase()
@@ -246,13 +270,22 @@ function CreateProjectModal({
         onSubmit={async (e) => {
           e.preventDefault();
           setLoading(true);
-          await onCreate(name, slug, desc);
+          setError("");
+          try {
+            await onCreate(name, slug, desc);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to create project");
+            setLoading(false);
+          }
         }}
         className="space-y-4"
       >
         <Field label="Project name" value={name} onChange={setName} placeholder="My Awesome App" required />
         <div className="text-xs text-slate-600 -mt-2 pl-1 font-mono">{slug || "my-awesome-app"}</div>
         <Field label="Description" value={desc} onChange={setDesc} placeholder="A brief description..." />
+        {error && (
+          <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>
+        )}
         <button
           type="submit"
           disabled={loading || !name}
@@ -274,6 +307,7 @@ function CreateTenantModal({
 }) {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const slug = name
     .toLowerCase()
@@ -286,12 +320,21 @@ function CreateTenantModal({
         onSubmit={async (e) => {
           e.preventDefault();
           setLoading(true);
-          await onCreate(name, slug);
+          setError("");
+          try {
+            await onCreate(name, slug);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to create organization");
+            setLoading(false);
+          }
         }}
         className="space-y-4"
       >
         <Field label="Organization name" value={name} onChange={setName} placeholder="My Company" required />
         <div className="text-xs text-slate-600 -mt-2 pl-1 font-mono">{slug || "my-company"}</div>
+        {error && (
+          <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>
+        )}
         <button
           type="submit"
           disabled={loading || !name}

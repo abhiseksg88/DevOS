@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
+import * as db from "@/lib/supabase-db";
 import * as api from "@/lib/api";
 import type { Project, Build } from "@/types";
 
@@ -27,24 +28,20 @@ export function useProject(projectId: string) {
   useEffect(() => {
     if (!projectId) return;
     (async () => {
-      const t = await getToken();
-      if (!t) {
-        setLoading(false);
-        return;
-      }
+      await getToken();
 
       let tid = tenantParam;
 
-      // If no tenant param, resolve by listing tenants
+      // If no tenant param, resolve by listing tenants via Supabase
       if (!tid) {
         try {
-          const tenants = await api.tenants.list(t);
+          const tenants = await db.listTenants();
           if (tenants.length > 0) {
             tid = tenants[0].id;
             setResolvedTenantId(tid);
           }
         } catch {
-          // Backend not available — load workspace in offline mode
+          // DB not ready — load workspace in offline mode
         }
       } else {
         setResolvedTenantId(tid);
@@ -55,20 +52,26 @@ export function useProject(projectId: string) {
         return;
       }
 
+      // Load project and builds via Supabase directly
       try {
-        const [p, b] = await Promise.all([
-          api.projects.get(t, tid, projectId),
-          api.builds.list(t, tid, projectId),
-        ]);
+        const p = await db.getProject(tid, projectId);
         setProject(p);
+      } catch {
+        // Project may not exist yet
+      }
+
+      try {
+        const b = await db.listBuilds(tid, projectId);
         setBuilds(b);
       } catch {
-        // Backend may be offline — workspace still loads
+        // No builds yet
       }
+
       setLoading(false);
     })();
   }, [tenantParam, projectId, getToken]);
 
+  // Build creation still goes through the backend API (needs LLM pipeline)
   const createBuild = useCallback(
     async (prompt: string) => {
       const t = await getToken();
