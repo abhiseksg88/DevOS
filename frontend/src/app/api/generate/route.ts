@@ -18,9 +18,11 @@ Rules:
 - Make it visually impressive with gradients, shadows, proper spacing
 - Include ALL necessary files (page.tsx, components, globals.css)
 - CSS file should be "src/app/globals.css"
-- Do NOT use any import statements for external packages (no next/image, no next/link etc.)
+- Do NOT use any import statements — no external packages (no next/image, no next/link) and no local component imports
 - Do NOT use React hooks like useState or useEffect - keep components as pure render functions
 - Export components as default functions
+- CRITICAL: In page.tsx, define ALL component functions directly in the same file. Do NOT import components from other files. The page must be fully self-contained and renderable on its own. You can define helper components as named functions above the default export.
+- You may also create separate component files (e.g., src/components/Header.tsx) for code organization, but page.tsx must NOT depend on them
 - Make the page fully self-contained and renderable as static HTML with Tailwind
 - Do NOT include any explanation text outside of ===FILE: ... === blocks`;
 

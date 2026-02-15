@@ -48,6 +48,70 @@ function collectCSS(files: FileNode[]): string {
     .join("\n");
 }
 
+/** Extract content between balanced open/close characters starting at startIdx */
+function extractBalanced(code: string, startIdx: number, open: string, close: string): string {
+  let depth = 0;
+  for (let i = startIdx; i < code.length; i++) {
+    // Skip string literals to avoid counting parens inside strings
+    if (code[i] === '"' || code[i] === "'" || code[i] === "`") {
+      const quote = code[i];
+      i++;
+      while (i < code.length && code[i] !== quote) {
+        if (code[i] === "\\") i++;
+        i++;
+      }
+      continue;
+    }
+    if (code[i] === open) depth++;
+    else if (code[i] === close) {
+      depth--;
+      if (depth === 0) return code.slice(startIdx + 1, i).trim();
+    }
+  }
+  return "";
+}
+
+/** Extract the JSX block from a React component's source code */
+function extractJSXBlock(code: string): string {
+  // Pattern 1: return (...) — function component with return statement
+  const returnIdx = code.search(/return\s*\(/);
+  if (returnIdx !== -1) {
+    const openParen = code.indexOf("(", returnIdx);
+    if (openParen !== -1) {
+      const result = extractBalanced(code, openParen, "(", ")");
+      if (result) return result;
+    }
+  }
+
+  // Pattern 2: => (...) — arrow function with parenthesized body
+  const arrowParenIdx = code.search(/=>\s*\(/);
+  if (arrowParenIdx !== -1) {
+    const openParen = code.indexOf("(", arrowParenIdx);
+    if (openParen !== -1) {
+      const result = extractBalanced(code, openParen, "(", ")");
+      if (result) return result;
+    }
+  }
+
+  // Pattern 3: => <tag — arrow function returning JSX directly (no parens)
+  const arrowJsxMatch = code.match(/=>\s*(<[a-zA-Z][\s\S]*<\/[a-zA-Z][\w]*>)/);
+  if (arrowJsxMatch) return arrowJsxMatch[1];
+
+  // Pattern 4: Find the outermost JSX element
+  const jsxStartMatch = code.match(/<([a-zA-Z][\w.]*)/);
+  if (jsxStartMatch && jsxStartMatch.index !== undefined) {
+    const tagName = jsxStartMatch[1];
+    const startIdx = jsxStartMatch.index;
+    const closingTag = `</${tagName}>`;
+    const endIdx = code.lastIndexOf(closingTag);
+    if (endIdx > startIdx) {
+      return code.slice(startIdx, endIdx + closingTag.length);
+    }
+  }
+
+  return "";
+}
+
 /** Extract the main page/component JSX content */
 function extractMainContent(files: FileNode[]): string {
   const mainFile =
@@ -60,27 +124,91 @@ function extractMainContent(files: FileNode[]): string {
   return mainFile.content;
 }
 
+/** Find a component file and extract its JSX */
+function getComponentJSX(componentName: string, allFiles: FileNode[]): string | null {
+  const variations = [
+    `${componentName}.tsx`,
+    `${componentName}.jsx`,
+    `${componentName}.ts`,
+    `${componentName}.js`,
+  ];
+  const file = allFiles.find(
+    (f) => f.type === "file" && variations.includes(f.name) && f.content
+  );
+  if (!file?.content) return null;
+  return extractJSXBlock(file.content) || null;
+}
+
+/**
+ * Inline sub-components: replace <Component /> and <Component>...</Component>
+ * with the actual JSX from the component's source file.
+ */
+function inlineComponents(jsx: string, allFiles: FileNode[], depth = 0): string {
+  if (depth > 5) return jsx; // prevent infinite recursion
+  let result = jsx;
+
+  // Replace self-closing component tags: <PascalCase ... />
+  result = result.replace(
+    /<([A-Z][a-zA-Z0-9]*)\b[^>]*?\/>/g,
+    (_match, componentName) => {
+      const componentJSX = getComponentJSX(componentName, allFiles);
+      if (componentJSX) {
+        return inlineComponents(componentJSX, allFiles, depth + 1);
+      }
+      return ""; // remove unknown component tags
+    }
+  );
+
+  // Replace paired component tags: <Component>...</Component>
+  result = result.replace(
+    /<([A-Z][a-zA-Z0-9]*)\b[^>]*>([\s\S]*?)<\/\1>/g,
+    (_match, componentName, _children) => {
+      const componentJSX = getComponentJSX(componentName, allFiles);
+      if (componentJSX) {
+        return inlineComponents(componentJSX, allFiles, depth + 1);
+      }
+      return ""; // remove unknown component tags
+    }
+  );
+
+  return result;
+}
+
 /** Convert JSX-like code to renderable HTML preview */
-function jsxToPreviewHTML(jsxContent: string): string {
-  const returnMatch = jsxContent.match(/return\s*\(\s*([\s\S]*?)\s*\);\s*\}?/);
-  let jsx = returnMatch ? returnMatch[1] : "";
-
-  if (!jsx) {
-    const jsxBlockMatch = jsxContent.match(/<[a-zA-Z][\s\S]*>/);
-    jsx = jsxBlockMatch ? jsxBlockMatch[0] : "";
-  }
-
+function convertJSXToHTML(jsx: string): string {
   if (!jsx) return "";
 
   let html = jsx
+    // className → class
     .replace(/className=/g, "class=")
+    // Template literal attributes: ={`...`} → ="..."
     .replace(/=\{`([^`]*)`\}/g, '="$1"')
+    // String expressions: {"text"} → text
     .replace(/\{"([^"]*)"\}/g, "$1")
-    .replace(/\{([a-zA-Z_]\w*)\}/g, "$1")
-    .replace(/<(\w+)([^>]*)\s\/>/g, "<$1$2></$1>")
-    .replace(/\s(on[A-Z]\w*)=\{[^}]*\}/g, "")
-    .replace(/\s\{\.\.\.[\w]+\}/g, "")
-    .replace(/htmlFor=/g, "for=");
+    // JSX comments: {/* ... */}
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+    // Remove .map() calls (dynamic lists can't be statically rendered)
+    .replace(/\{[\w.]+\.map\([\s\S]*?\)\)\}/g, "")
+    // Remove ternary expressions
+    .replace(/\{[^{}]*\?[^{}]*:[^{}]*\}/g, "")
+    // Remove short-circuit rendering: {condition && <...>}
+    .replace(/\{[\w.!]+\s*&&\s*[^}]*\}/g, "")
+    // Simple variable references → show as text placeholder
+    .replace(/\{([a-zA-Z_][\w.]*)\}/g, "$1")
+    // Remove any remaining {...} expressions with nested braces
+    .replace(/\{[^}]*\}/g, "")
+    // Self-closing tags → explicit close
+    .replace(/<(\w+)([^>]*?)\s*\/>/g, "<$1$2></$1>")
+    // Remove event handlers: onClick={...}, onChange={...}, etc.
+    .replace(/\s+on[A-Z]\w*=\{[^}]*\}/g, "")
+    // Remove spread props: {...props}
+    .replace(/\s+\{\.\.\.[\w]+\}/g, "")
+    // htmlFor → for
+    .replace(/htmlFor=/g, "for=")
+    // Remove React-specific attributes
+    .replace(/\s+key=\{[^}]*\}/g, "")
+    .replace(/\s+key="[^"]*"/g, "")
+    .replace(/\s+ref=\{[^}]*\}/g, "");
 
   return html;
 }
@@ -90,7 +218,17 @@ function buildPreviewDocument(files: FileNode[]): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
   const mainContent = extractMainContent(allFiles);
-  const previewHTML = jsxToPreviewHTML(mainContent);
+
+  // Extract JSX from the main component using balanced parenthesis matching
+  let jsx = extractJSXBlock(mainContent);
+
+  // Inline sub-components (e.g., <Header />, <Hero />) from other generated files
+  if (jsx) {
+    jsx = inlineComponents(jsx, allFiles);
+  }
+
+  // Convert JSX → static HTML
+  const previewHTML = convertJSXToHTML(jsx);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -101,7 +239,7 @@ function buildPreviewDocument(files: FileNode[]): string {
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    ${css.replace(/@tailwind\s+\w+;/g, "")}
+    ${css.replace(/@tailwind\s+\w+;/g, "").replace(/@import\s+[^;]+;/g, "")}
   </style>
 </head>
 <body>
