@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/client";
 import { Zap, LogOut, CreditCard, Settings } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 

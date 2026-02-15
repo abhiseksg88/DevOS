@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/client";
 import { Zap, Github, Mail, ArrowRight, Loader2, CheckCircle } from "lucide-react";
 
 export default function LoginPage() {

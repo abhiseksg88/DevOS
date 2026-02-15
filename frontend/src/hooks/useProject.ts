@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/client";
 import * as db from "@/lib/supabase-db";
 import * as api from "@/lib/api";
 import type { Project, Build } from "@/types";
