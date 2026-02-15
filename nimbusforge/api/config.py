@@ -3,7 +3,7 @@ NimbusForge API Configuration.
 Loaded from environment variables with sensible defaults.
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
 from functools import lru_cache
 import logging
@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
     # --- Supabase ---
     supabase_url: str = "http://localhost:54321"
     supabase_anon_key: str = ""
@@ -74,11 +80,6 @@ class Settings(BaseSettings):
             logger.info(f"Supabase configured: {self.supabase_url}")
 
         return self
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
 
 @lru_cache()

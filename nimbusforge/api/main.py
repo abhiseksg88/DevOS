@@ -78,6 +78,40 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Startup validation
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+async def startup_event():
+    """Validate configuration on startup and log important info."""
+    from .config import get_settings
+    settings = get_settings()
+
+    logger.info("=" * 60)
+    logger.info("NimbusForge API Starting...")
+    logger.info(f"Supabase URL: {settings.supabase_url}")
+    logger.info(f"Supabase Anon Key configured: {bool(settings.supabase_anon_key)}")
+    logger.info(f"Supabase Service Role Key configured: {bool(settings.supabase_service_role_key)}")
+    logger.info(f"Anthropic API Key configured: {bool(settings.anthropic_api_key)}")
+    logger.info(f"Netlify Token configured: {bool(settings.netlify_token)}")
+    logger.info("=" * 60)
+
+    # Test Supabase connection
+    if settings.supabase_service_role_key:
+        try:
+            from .dependencies import get_supabase_service
+            db = get_supabase_service(settings)
+            # Simple query to test connection
+            result = db.table("tenants").select("id").limit(1).execute()
+            logger.info(f"✓ Supabase connection successful")
+        except Exception as e:
+            logger.error(f"✗ Supabase connection failed: {e}")
+            logger.error("App will start but database operations may fail")
+    else:
+        logger.warning("⚠ SUPABASE_SERVICE_ROLE_KEY not set - database operations will fail")
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
