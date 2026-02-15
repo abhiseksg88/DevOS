@@ -96,19 +96,14 @@ async def startup_event():
     logger.info(f"Netlify Token configured: {bool(settings.netlify_token)}")
     logger.info("=" * 60)
 
-    # Test Supabase connection
-    if settings.supabase_service_role_key:
-        try:
-            from .dependencies import get_supabase_service
-            db = get_supabase_service(settings)
-            # Simple query to test connection
-            result = db.table("tenants").select("id").limit(1).execute()
-            logger.info(f"✓ Supabase connection successful")
-        except Exception as e:
-            logger.error(f"✗ Supabase connection failed: {e}")
-            logger.error("App will start but database operations may fail")
-    else:
-        logger.warning("⚠ SUPABASE_SERVICE_ROLE_KEY not set - database operations will fail")
+    # Warn about missing critical env vars (but don't block startup)
+    if not settings.supabase_service_role_key:
+        logger.warning("⚠️  SUPABASE_SERVICE_ROLE_KEY not set - database operations will fail")
+
+    if not settings.anthropic_api_key:
+        logger.warning("⚠️  ANTHROPIC_API_KEY not set - LLM generation will fail")
+
+    logger.info("✓ Startup validation complete")
 
 
 # ---------------------------------------------------------------------------
