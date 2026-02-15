@@ -46,9 +46,9 @@ CREATE INDEX idx_tenants_slug ON tenants(slug);
 CREATE TABLE tenant_members (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL,
     role        tenant_role NOT NULL DEFAULT 'member',
-    invited_by  UUID REFERENCES auth.users(id),
+    invited_by  UUID,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, user_id)
@@ -90,7 +90,7 @@ CREATE TABLE builds (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    user_id         UUID NOT NULL REFERENCES auth.users(id),
+    user_id         UUID NOT NULL ,
     status          build_status NOT NULL DEFAULT 'queued',
     prompt          TEXT NOT NULL,                       -- user's natural language request
     plan_json       JSONB,                              -- planner output (cached)
@@ -168,7 +168,7 @@ CREATE INDEX idx_deployments_preview ON deployments(preview_url) WHERE preview_u
 CREATE TABLE usage_events (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    user_id         UUID REFERENCES auth.users(id),
+    user_id         UUID ,
     build_id        UUID REFERENCES builds(id),
     event_type      TEXT NOT NULL,                      -- 'llm_call', 'build', 'deploy', 'api_call'
     model           model_tier,
@@ -208,7 +208,7 @@ CREATE INDEX idx_plan_cache_expiry ON plan_cache(expires_at);
 CREATE TABLE api_keys (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    user_id         UUID NOT NULL REFERENCES auth.users(id),
+    user_id         UUID NOT NULL ,
     name            TEXT NOT NULL,
     key_hash        TEXT NOT NULL,                      -- bcrypt hash of the key
     key_prefix      TEXT NOT NULL,                      -- first 8 chars for identification
