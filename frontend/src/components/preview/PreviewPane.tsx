@@ -429,10 +429,10 @@ export function buildDeployDocument(
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>${safeTitle} \u2014 Built with DevOS</title>
-<meta name="description" content="${safeTitle} \u2014 Built and deployed with DevOS, the AI-powered no-code platform."/>
+<title>${safeTitle} \u2014 Built with Vedaa</title>
+<meta name="description" content="${safeTitle} \u2014 Built and deployed with Vedaa, the Agentic Development OS."/>
 <meta property="og:title" content="${safeTitle}"/>
-<meta property="og:description" content="Built and deployed with DevOS"/>
+<meta property="og:description" content="Built and deployed with Vedaa"/>
 
 <script>
 window.__errs=[];

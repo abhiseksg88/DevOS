@@ -176,8 +176,14 @@ export function PublishButton({
         const message =
           err instanceof Error ? err.message : "Publish failed";
 
-        // Auto-retry up to 3 times
-        if (retryCountRef.current < 3) {
+        // Don't retry on config/auth errors — only retry on transient failures
+        const isRetryable =
+          !message.includes("not configured") &&
+          !message.includes("503") &&
+          !message.includes("401") &&
+          !message.includes("403");
+
+        if (isRetryable && retryCountRef.current < 3) {
           retryCountRef.current += 1;
           setState("uploading");
           setError(`Retrying (${retryCountRef.current}/3)...`);
