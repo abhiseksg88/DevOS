@@ -866,12 +866,28 @@ async def publish_project(
         # Still in progress — frontend will poll
         deploy_status = "deploying"
 
+    # Add custom domain if configured
+    custom_domain = None
+    if settings.netlify_custom_domain:
+        custom_domain = f"{project.data['slug']}.{settings.netlify_custom_domain}"
+        try:
+            netlify.add_custom_domain(site_id, custom_domain)
+            deploy_url = f"https://{custom_domain}"  # Use custom domain as primary URL
+            logger.info("Custom domain assigned: %s", custom_domain)
+        except Exception as e:
+            # If custom domain fails, fall back to netlify.app URL
+            logger.warning("Failed to add custom domain %s: %s", custom_domain, e)
+            custom_domain = None  # Don't save failed domain
+
     # Update project record
     update_data = {
         "deployed_url": deploy_url,
         "deployed_at": datetime.now(timezone.utc).isoformat(),
         "deployment_status": "deployed" if deploy_status == "ready" else "deploying",
     }
+    if custom_domain:
+        update_data["custom_domain"] = custom_domain
+
     db.table("projects").update(update_data).eq("id", str(project_id)).execute()
 
     # Record deployment in history

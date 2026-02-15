@@ -76,6 +76,42 @@ class NetlifyService:
         logger.info("Deleted Netlify site: %s", site_id)
 
     # ------------------------------------------------------------------
+    # Custom Domains
+    # ------------------------------------------------------------------
+
+    def add_custom_domain(self, site_id: str, custom_domain: str) -> dict:
+        """Add a custom domain alias to a Netlify site.
+
+        API: POST /api/v1/sites/{site_id}/domains
+        Body: { "domain_name": "meal-planner.vedaa.io" }
+
+        Returns ``{"id": ..., "domain": ..., "ssl": ...}``.
+        """
+        resp = httpx.post(
+            f"{BASE_URL}/sites/{site_id}/domains",
+            headers=self.headers,
+            json={"domain_name": custom_domain},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        logger.info("Added custom domain %s to site %s", custom_domain, site_id)
+        return data
+
+    def remove_custom_domain(self, site_id: str, custom_domain: str) -> None:
+        """Remove a custom domain alias from a Netlify site.
+
+        API: DELETE /api/v1/sites/{site_id}/domains/{domain_name}
+        """
+        resp = httpx.delete(
+            f"{BASE_URL}/sites/{site_id}/domains/{custom_domain}",
+            headers=self.headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        logger.info("Removed custom domain %s from site %s", custom_domain, site_id)
+
+    # ------------------------------------------------------------------
     # Deploys
     # ------------------------------------------------------------------
 

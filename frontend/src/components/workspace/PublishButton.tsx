@@ -344,6 +344,16 @@ export function PublishButton({
                   </span>
                 </div>
 
+                {/* Show custom domain if available */}
+                {project?.custom_domain && (
+                  <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5 border border-emerald-500/20">
+                    🌐 Live at:{" "}
+                    <span className="font-mono font-semibold">
+                      {project.custom_domain}
+                    </span>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-2 p-2.5 rounded-lg bg-surface-2 border border-surface-3">
                   <Globe className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                   <span className="text-xs text-slate-300 truncate flex-1 font-mono">

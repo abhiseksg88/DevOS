@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     netlify_token: str = ""              # Personal access token
     netlify_team_slug: str = "devos"     # Team slug on Netlify
     netlify_site_prefix: str = "devos"   # Prefix for site names (devos-{slug})
+    netlify_custom_domain: str = ""      # Base domain for user apps (e.g., "vedaa.io")
 
     # --- Plan Cache ---
     plan_cache_ttl_seconds: int = 3600  # 1 hour

@@ -1,0 +1,36 @@
+# Railway ignore file - exclude from deployment
+
+# Frontend
+frontend/
+node_modules/
+
+# Development
+.git/
+.vscode/
+*.md
+.env.local
+.env.development
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Docs
+docs/
+*.pdf
+
+# Tests
+tests/
+test_*.py
+*_test.py

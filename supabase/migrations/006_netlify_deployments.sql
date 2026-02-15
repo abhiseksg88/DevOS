@@ -7,6 +7,10 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS deployed_url TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS deployed_at TIMESTAMPTZ;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS deployment_status TEXT NOT NULL DEFAULT 'not_deployed';
 -- deployment_status values: 'not_deployed', 'deploying', 'deployed', 'failed'
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS custom_domain TEXT;
+-- custom_domain: e.g., "meal-planner.vedaa.io" (NULL if using default netlify.app only)
+
+CREATE INDEX IF NOT EXISTS idx_projects_custom_domain ON projects(custom_domain);
 
 -- 2. Netlify deployment history table
 CREATE TABLE IF NOT EXISTS netlify_deployments (
