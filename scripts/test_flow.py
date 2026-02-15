@@ -217,7 +217,15 @@ def test_create_tenant(token: str) -> str | None:
         ok(f"Tenant created: {data['name']} (id: {data['id'][:8]}...)")
         return data["id"]
     else:
-        fail(f"Create tenant failed: {resp.status_code} {resp.text[:200]}")
+        fail(f"Create tenant failed: {resp.status_code}")
+        try:
+            err = resp.json()
+            if "detail" in err:
+                print(f"    Detail: {str(err['detail'])[:300]}")
+            if "traceback" in err:
+                print(f"    Traceback:\n{err['traceback'][-500:]}")
+        except Exception:
+            print(f"    Response: {resp.text[:300]}")
         return None
 
 

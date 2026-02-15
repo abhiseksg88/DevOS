@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import traceback
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 from uuid import UUID, uuid4
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from supabase import Client
 
 from .config import Settings, get_settings
@@ -74,9 +75,29 @@ app.add_middleware(
 # Health
 # ---------------------------------------------------------------------------
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch ALL unhandled exceptions and return the traceback as JSON."""
+    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "traceback": "".join(tb)},
+    )
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "nimbusforge-api"}
+
+
+@app.get("/debug/db")
+async def debug_db(db: Client = Depends(get_supabase_service)):
+    """Test Supabase connection — returns table list or error."""
+    try:
+        result = db.table("tenants").select("id").limit(1).execute()
+        return {"status": "ok", "tenants_count": len(result.data)}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "type": type(e).__name__}
 
 
 # ===========================================================================
