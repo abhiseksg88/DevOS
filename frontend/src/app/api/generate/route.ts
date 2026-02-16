@@ -17,22 +17,33 @@ Respond with ONLY code files. No explanations, no markdown outside files. Use th
 (file content)
 ===END_FILE===
 
-## Architecture
+## Architecture — MULTI-FILE IS THE DEFAULT
 - Main entry: \`src/app/page.tsx\` with a default export React function component
-- For simple apps (under ~300 lines): define all components inline in page.tsx
-- For complex apps (dashboards, CRMs, multi-view apps): split into multiple files:
-  - \`src/app/page.tsx\` — main layout, state management, routing between views
-  - \`src/components/ComponentName.tsx\` — reusable UI components (tables, forms, modals, sidebars)
+- ALWAYS split your code into multiple files. The system CRASHES if any single file exceeds 250 lines.
+  - \`src/app/page.tsx\` — main page: imports components, manages top-level state, renders layout (under 150 lines)
+  - \`src/components/[Name].tsx\` — one file per major UI section (table, form, modal, sidebar, chart, card grid)
+  - \`src/types.ts\` — shared TypeScript interfaces and types (if more than 2 interfaces)
+  - \`src/data.ts\` — mock data arrays and constants (if more than 10 items)
   - \`src/app/globals.css\` — custom CSS animations or base styles
-  - Import components with: \`import ComponentName from "@/components/ComponentName"\`
-- CRITICAL: Keep each file under 250 lines. If a file would exceed this, split it into smaller components.
+- Import components with: \`import ComponentName from "@/components/ComponentName"\` or \`import { Thing } from "@/types"\`
+- The ONLY exception: if the ENTIRE app is truly a single tiny widget under 150 lines total (e.g., "a counter", "a color picker")
 - Use React + TypeScript + Tailwind CSS
 - Use \`className\` (not \`class\`)
 - You MAY import from "react" (useState, useEffect, useRef, useMemo, useCallback, useContext, useReducer)
 - Do NOT import from next/image, next/link, next/router, or any Next.js modules
 - Do NOT import from external packages (no lucide-react, no framer-motion, no date-fns, etc.)
-- You MAY import from local component files using \`@/components/...\` or relative paths \`./components/...\`
-- You MAY create a globals.css at \`src/app/globals.css\` for custom CSS animations or base styles
+- Each component file MUST have a default export: \`export default function ComponentName() { ... }\`
+
+### Example file structure for a meal tracker app:
+\`\`\`
+src/types.ts              — Meal, NutritionGoal interfaces
+src/data.ts               — MOCK_MEALS array, NUTRITION_GOALS
+src/components/MealForm.tsx      — add/edit meal form with validation
+src/components/MealTable.tsx     — meal list/table with search & filter
+src/components/NutritionStats.tsx — calorie/macro summary cards
+src/app/page.tsx          — imports above, manages state, renders layout
+src/app/globals.css       — animations
+\`\`\`
 
 ## Design System — THIS IS CRITICAL
 
@@ -456,18 +467,23 @@ export async function POST(req: NextRequest) {
 
         console.log(`[generate] Calling Anthropic API with model=${model}, maxTokens=${maxTokens}`);
 
-        const response = await client.messages.create({
+        // Extended output: if maxTokens > 16384, we need the output-128k beta header
+        const createParams = {
           model,
           max_tokens: maxTokens,
           system: systemPrompt,
           messages: [
             {
-              role: "user",
+              role: "user" as const,
               content: prompt + context,
             },
           ],
-          stream: true,
-        });
+          stream: true as const,
+        };
+        const requestOptions = maxTokens > 16384
+          ? { headers: { "anthropic-beta": "output-128k-2025-02-19" } }
+          : undefined;
+        const response = await client.messages.create(createParams, requestOptions);
 
         let charCount = 0;
         let stopReason = "end_turn";
