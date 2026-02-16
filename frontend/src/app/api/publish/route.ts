@@ -1,15 +1,16 @@
 /**
- * Publish API route — marks a project as published and optionally deploys to Netlify.
+ * Publish API route — deploys a project to its own Netlify site and maps
+ * a custom subdomain (e.g. {slug}.vedaa.io) so users get a clean URL.
  *
- * Published apps are served via subdomain routing:
- *   {slug}.vedaa.io → middleware → /api/serve-app?slug={slug} → HTML from Supabase
+ * Flow:
+ *   1. Create (or reuse) a per-project Netlify site.
+ *   2. Deploy the self-contained HTML via the file-digest API.
+ *   3. Add a custom domain alias ({slug}.{NF_CUSTOM_DOMAIN}) to the site
+ *      so that Netlify routes the subdomain directly to the deployed app.
+ *   4. Store the result in Supabase.
  *
- * The Netlify deploy is kept as a backup/CDN fallback, but the primary URL
- * is the subdomain URL which is served by the main app's middleware.
- *
- * NOTE: We do NOT try to add custom domains to separate Netlify sites because
- * the *.vedaa.io wildcard DNS is claimed by the main site. Instead, subdomain
- * routing in middleware.ts handles serving published apps.
+ * Prerequisite DNS: A wildcard CNAME record for *.vedaa.io (or your domain)
+ * pointing to Netlify's load balancer (e.g. apex-loadbalancer.netlify.com).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -67,17 +68,14 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // --- Determine the primary published URL ---
-  // The subdomain URL is the primary URL (served by our middleware)
+  // --- Build the custom domain for this project ---
   const customDomain = customDomainBase ? `${projectSlug}.${customDomainBase}` : null;
-  const primaryUrl = customDomain
-    ? `https://${customDomain}`
-    : `https://vedaa.io/p/${projectSlug}`; // Fallback to path-based URL
 
-  // --- Optional: Deploy to Netlify as a CDN backup ---
+  // --- Deploy to Netlify ---
   let netlifyDeployId: string | null = null;
   let netlifySiteId: string | null = null;
   let netlifyUrl: string | null = null;
+  let domainMapped = false;
 
   if (netlifyToken) {
     try {
@@ -175,12 +173,79 @@ export async function POST(req: NextRequest) {
             });
           }
         }
+
+        // --- Map custom domain to this Netlify site ---
+        // Add the subdomain (e.g. meal-planner.vedaa.io) as a domain alias
+        // so Netlify routes traffic for that subdomain to this site.
+        // Requires *.vedaa.io wildcard DNS pointing to Netlify.
+        if (customDomain) {
+          try {
+            // First check if domain is already added (avoid duplicates)
+            const domainsResp = await fetch(
+              `${NETLIFY_API}/sites/${siteId}`,
+              { headers: { Authorization: `Bearer ${netlifyToken}` } }
+            );
+            let alreadyMapped = false;
+            if (domainsResp.ok) {
+              const siteData = await domainsResp.json();
+              const aliases: string[] = siteData.domain_aliases || [];
+              const primaryDomain: string = siteData.custom_domain || "";
+              alreadyMapped =
+                primaryDomain === customDomain ||
+                aliases.includes(customDomain);
+            }
+
+            if (!alreadyMapped) {
+              // Use the site update endpoint to set the custom domain
+              const domainResp = await fetch(
+                `${NETLIFY_API}/sites/${siteId}`,
+                {
+                  method: "PATCH",
+                  headers: netlifyHeaders(netlifyToken),
+                  body: JSON.stringify({
+                    custom_domain: customDomain,
+                  }),
+                }
+              );
+              if (domainResp.ok) {
+                domainMapped = true;
+                console.log(
+                  `[Publish] Mapped custom domain ${customDomain} to site ${siteId}`
+                );
+              } else {
+                const errText = await domainResp.text();
+                console.error(
+                  `[Publish] Failed to map domain ${customDomain}: ${domainResp.status} ${errText}`
+                );
+              }
+            } else {
+              domainMapped = true;
+              console.log(
+                `[Publish] Domain ${customDomain} already mapped to site ${siteId}`
+              );
+            }
+          } catch (domainErr) {
+            console.error(
+              "[Publish] Domain mapping failed (non-fatal):",
+              domainErr
+            );
+          }
+        }
       }
     } catch (err) {
       // Netlify deploy is optional — don't fail the whole publish
       console.error("[Publish] Netlify deploy failed (non-fatal):", err);
     }
   }
+
+  // --- Determine the primary URL to show the user ---
+  // If custom domain was mapped, use it. Otherwise fall back to the
+  // Netlify default URL, then the path-based URL.
+  const primaryUrl = customDomain && domainMapped
+    ? `https://${customDomain}`
+    : netlifyUrl
+      ? netlifyUrl
+      : `https://vedaa.io/p/${projectSlug}`;
 
   // --- Update project in Supabase ---
   if (supabase) {
