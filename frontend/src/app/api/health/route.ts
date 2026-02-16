@@ -85,7 +85,26 @@ export async function GET() {
     detail: nfCustomDomain || "NOT SET (no custom domain for published apps)",
   };
 
-  // 4. Test Anthropic API connectivity (quick, non-streaming)
+  // 4. Check DEEPSEEK_API_KEY (Swarm analyzer)
+  const deepseekKey = process.env.DEEPSEEK_API_KEY;
+  if (!deepseekKey) {
+    checks.DEEPSEEK_API_KEY = {
+      ok: false,
+      detail: "NOT SET — required for AI Swarm analyzer. Set at Site level (Site settings > Environment variables).",
+    };
+  } else if (deepseekKey.length < 10) {
+    checks.DEEPSEEK_API_KEY = {
+      ok: false,
+      detail: `Set but looks invalid (length: ${deepseekKey.length})`,
+    };
+  } else {
+    checks.DEEPSEEK_API_KEY = {
+      ok: true,
+      detail: `Set (${deepseekKey.slice(0, 6)}...${deepseekKey.slice(-4)})`,
+    };
+  }
+
+  // 5. Test Anthropic API connectivity (quick, non-streaming)
   if (apiKey) {
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {

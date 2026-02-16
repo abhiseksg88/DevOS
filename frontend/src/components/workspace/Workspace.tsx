@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
-import { useGenerate } from "@/hooks/useGenerate";
+import { useGenerate, type PipelineEvent } from "@/hooks/useGenerate";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
@@ -124,6 +124,9 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }, [project?.deployed_url]);
   const seqRef = useRef(0);
+
+  // Track pipeline events we've already converted to build events
+  const pipelineSeenRef = useRef(0);
 
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
@@ -302,6 +305,54 @@ export function Workspace({ projectId }: { projectId: string }) {
     [activeFile, openFiles]
   );
 
+  // Sync pipeline events from the swarm into the build log
+  useEffect(() => {
+    const events = generator.pipelineEvents;
+    if (events.length <= pipelineSeenRef.current) return;
+
+    const newEvents = events.slice(pipelineSeenRef.current);
+    pipelineSeenRef.current = events.length;
+
+    const agentMap: Record<string, string> = {
+      analyzer: "deepseek",
+      coder: "sonnet",
+      reviewer: "haiku",
+      fixer: "sonnet",
+    };
+
+    const kindMap: Record<string, string> = {
+      running: "agent_start",
+      completed: "agent_end",
+      failed: "error",
+      skipped: "warning",
+    };
+
+    const converted: BuildEvent[] = newEvents.map((pe: PipelineEvent) => {
+      seqRef.current += 1;
+      const costStr = pe.meta?.cost_usd
+        ? ` ($${pe.meta.cost_usd.toFixed(4)})`
+        : "";
+      const latencyStr = pe.meta?.latency_ms
+        ? ` (${(pe.meta.latency_ms / 1000).toFixed(1)}s)`
+        : "";
+      const detailStr = pe.detail ? `\n   ${pe.detail}` : "";
+
+      return {
+        id: pe.id,
+        build_id: "",
+        kind: kindMap[pe.status] || "log",
+        agent: agentMap[pe.agent] || pe.agent,
+        payload: {
+          message: `${pe.message}${latencyStr}${costStr}${detailStr}`,
+        },
+        seq: seqRef.current,
+        created_at: new Date().toISOString(),
+      };
+    });
+
+    setGenerationEvents((prev) => [...prev, ...converted]);
+  }, [generator.pipelineEvents]);
+
   // When generation completes, switch to preview and save code
   useEffect(() => {
     if (!generator.isGenerating && generator.files.length > 0) {
@@ -343,15 +394,16 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Store prompt for saving with generation
       lastPromptRef.current = content;
 
-      // Reset events
+      // Reset events and pipeline tracking
       seqRef.current = 0;
+      pipelineSeenRef.current = 0;
       setGenerationEvents([
         {
           id: crypto.randomUUID(),
           build_id: "",
           kind: "agent_start",
-          agent: "sonnet",
-          payload: { message: "Starting code generation with Claude..." },
+          agent: null,
+          payload: { message: "Starting AI pipeline — Analyze → Code → Review..." },
           seq: 1,
           created_at: new Date().toISOString(),
         },
@@ -362,7 +414,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       const generatingMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: "Generating your app with Claude Sonnet...",
+        content: "Running AI pipeline: Analyzer (DeepSeek) → Coder (Claude Sonnet) → Reviewer (Claude Haiku)...",
         timestamp: Date.now(),
         status: "coding",
       };
@@ -440,14 +492,37 @@ export function Workspace({ projectId }: { projectId: string }) {
               {project?.name ?? "Project"}
             </span>
           </div>
-          {generator.isGenerating && (
-            <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
-              <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
-              <span className="text-2xs text-amber-400 font-medium uppercase tracking-wider">
-                Generating
-              </span>
-            </div>
-          )}
+          {generator.isGenerating && (() => {
+            const activeEvent = [...generator.pipelineEvents].reverse().find(
+              (e) => e.status === "running"
+            );
+            const stageLabel = activeEvent
+              ? { analyzer: "Analyzing", coder: "Coding", reviewer: "Reviewing", fixer: "Fixing" }[activeEvent.agent] || "Generating"
+              : "Generating";
+            const stageStyles: Record<string, string> = {
+              analyzer: "bg-amber-500/10 border-amber-500/20 text-amber-400",
+              coder: "bg-blue-500/10 border-blue-500/20 text-blue-400",
+              reviewer: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
+              fixer: "bg-violet-500/10 border-violet-500/20 text-violet-400",
+            };
+            const dotStyles: Record<string, string> = {
+              analyzer: "bg-amber-400",
+              coder: "bg-blue-400",
+              reviewer: "bg-emerald-400",
+              fixer: "bg-violet-400",
+            };
+            const agent = activeEvent?.agent || "";
+            const badgeClass = stageStyles[agent] || "bg-amber-500/10 border-amber-500/20 text-amber-400";
+            const dotClass = dotStyles[agent] || "bg-amber-400";
+            return (
+              <div className={cn("flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full border", badgeClass)}>
+                <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse-dot", dotClass)} />
+                <span className="text-2xs font-medium uppercase tracking-wider">
+                  {stageLabel}
+                </span>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="flex items-center gap-2">
@@ -561,7 +636,20 @@ export function Workspace({ projectId }: { projectId: string }) {
                 <BuildLog
                   events={generationEvents}
                   isStreaming={generator.isGenerating}
-                  status={generator.isGenerating ? "coding" : generator.files.length > 0 ? "succeeded" : null}
+                  status={
+                    generator.isGenerating
+                      ? (() => {
+                          const active = [...generator.pipelineEvents].reverse().find(
+                            (e) => e.status === "running"
+                          );
+                          if (active?.agent === "analyzer") return "planning" as const;
+                          if (active?.agent === "reviewer") return "reviewing" as const;
+                          return "coding" as const;
+                        })()
+                      : generator.files.length > 0
+                      ? "succeeded"
+                      : null
+                  }
                 />
               )}
 

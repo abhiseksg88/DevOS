@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { prompt, existingFiles, messages: chatHistory } = await req.json();
+  const { prompt, existingFiles, messages: chatHistory, prd } = await req.json();
 
   if ((!prompt || typeof prompt !== "string") && (!chatHistory || !Array.isArray(chatHistory))) {
     return new Response(JSON.stringify({ error: "prompt or messages is required" }), {
@@ -160,10 +160,28 @@ export async function POST(req: NextRequest) {
   // Select system prompt: update mode when modifying existing project, initial for greenfield
   const systemPrompt = hasExistingProject ? UPDATE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT;
 
+  // Build PRD block if provided by the Analyzer agent
+  let prdBlock = "";
+  if (prd && typeof prd === "object") {
+    prdBlock = `<build-plan>
+${JSON.stringify(prd, null, 2)}
+</build-plan>
+
+Follow this build plan precisely. Implement exactly the components, changes, and integration described above.
+`;
+  }
+
   // Build the user message with structured context for updates
   function buildUserMessage(userPrompt: string): string {
-    if (!hasExistingProject) return userPrompt;
-    return `${existingProjectBlock}\n\nUser request: ${userPrompt}\n\nRemember: Only output files that need to change or are new. Do not regenerate unchanged files.`;
+    if (!hasExistingProject && !prdBlock) return userPrompt;
+    const parts: string[] = [];
+    if (existingProjectBlock) parts.push(existingProjectBlock);
+    if (prdBlock) parts.push(prdBlock);
+    parts.push(`User request: ${userPrompt}`);
+    if (hasExistingProject) {
+      parts.push("Remember: Only output files that need to change or are new. Do not regenerate unchanged files.");
+    }
+    return parts.join("\n\n");
   }
 
   // Call Anthropic REST API directly (no SDK — smaller bundle, faster cold start)
