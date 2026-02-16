@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
     let siteName = `${sitePrefix}-${projectSlug}`;
     const headers = netlifyHeaders(netlifyToken);
 
-    let resp = await fetch(`${NETLIFY_API}/${teamSlug}/sites`, {
+    let resp = await fetch(`${NETLIFY_API}/sites`, {
       method: "POST",
       headers,
       body: JSON.stringify({ name: siteName }),
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
     // 422 = name taken, append random suffix
     if (resp.status === 422) {
       siteName = `${siteName}-${randomBytes(3).toString("hex")}`;
-      resp = await fetch(`${NETLIFY_API}/${teamSlug}/sites`, {
+      resp = await fetch(`${NETLIFY_API}/sites`, {
         method: "POST",
         headers,
         body: JSON.stringify({ name: siteName }),

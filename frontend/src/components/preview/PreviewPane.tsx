@@ -760,15 +760,7 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
           className="bg-white rounded-lg shadow-2xl overflow-hidden transition-all duration-300 h-full"
           style={{ width: VIEWPORTS[viewport].width, maxWidth: "100%" }}
         >
-          {hasUrl ? (
-            <iframe
-              key={refreshKey}
-              src={url}
-              className="w-full h-full border-0"
-              title="App Preview"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          ) : (
+          {hasLivePreview ? (
             <iframe
               key={`live-${refreshKey}`}
               srcDoc={srcdoc!}
@@ -776,7 +768,15 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
               title="Live Preview"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             />
-          )}
+          ) : hasUrl ? (
+            <iframe
+              key={refreshKey}
+              src={url}
+              className="w-full h-full border-0"
+              title="App Preview"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          ) : null}
         </div>
       </div>
     </div>
