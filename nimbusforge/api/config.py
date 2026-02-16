@@ -4,7 +4,7 @@ Loaded from environment variables with sensible defaults.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from functools import lru_cache
 import logging
 
@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     max_agent_iterations: int = 5
 
     # --- CORS ---
+    frontend_url: str = ""  # Set to your Netlify URL (e.g. https://devos-app.netlify.app)
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "https://vedaa.io",
@@ -74,9 +75,29 @@ class Settings(BaseSettings):
     # --- Debug ---
     debug_mode: bool = False
 
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Accept comma-separated string OR JSON list from env vars."""
+        if isinstance(v, str):
+            # Try JSON first, then comma-separated
+            v = v.strip()
+            if v.startswith("["):
+                import json
+                return json.loads(v)
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
+
     @model_validator(mode='after')
     def validate_critical_config(self):
         """Validate that essential credentials are configured."""
+        # Auto-add frontend_url to CORS origins if set
+        if self.frontend_url:
+            url = self.frontend_url.rstrip("/")
+            if url not in self.cors_allowed_origins:
+                self.cors_allowed_origins.append(url)
+                logger.info("Added FRONTEND_URL to CORS origins: %s", url)
+
         if not self.supabase_url:
             logger.warning("SUPABASE_URL not set. Preview apps may not persist data.")
 
