@@ -43,18 +43,22 @@ interface GenerateState {
  * 2. ```tsx // path/to/file.tsx ... ```
  * 3. // File: path/to/file.tsx ... (next file or end)
  */
-/** Sanitize file path to prevent directory traversal */
+/** Sanitize and normalize file path to prevent directory traversal */
 function sanitizePath(path: string): string | null {
   let clean = path.replace(/\0/g, "");
   clean = clean.replace(/\\/g, "/");
   clean = clean.replace(/^\/+/, "");
+  // Strip leading ./ prefix (Claude sometimes outputs ./src/app/page.tsx)
+  clean = clean.replace(/^\.\/+/, "");
+  // Strip trailing whitespace
+  clean = clean.trim();
   if (clean.includes("..")) return null;
   if (clean.startsWith("~")) return null;
   if (clean.length === 0 || clean.length > 500) return null;
   return clean;
 }
 
-function parseFiles(text: string): GeneratedFile[] {
+function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
   // Format 1: ===FILE: path=== ... ===END_FILE===
@@ -67,6 +71,27 @@ function parseFiles(text: string): GeneratedFile[] {
       files.push({ path: safePath, content: match[2].trimEnd() });
     }
   }
+
+  // Format 1b: Truncated file — has ===FILE: path=== but NO ===END_FILE===
+  // This happens when the response hits max_tokens and gets cut off
+  if (allowTruncated) {
+    const truncatedRegex = /===FILE:\s*(.+?)===\n([\s\S]+?)$/g;
+    // Reset lastIndex for fresh search
+    truncatedRegex.lastIndex = 0;
+    while ((match = truncatedRegex.exec(text)) !== null) {
+      const safePath = sanitizePath(match[1].trim());
+      if (!safePath) continue;
+      // Skip if we already have this file from the complete match
+      if (files.some(f => f.path === safePath)) continue;
+      const content = match[2].trimEnd();
+      // Only include if there's substantial content (at least 100 chars)
+      if (content.length >= 100) {
+        console.log('[parseFiles] Found TRUNCATED file:', safePath, 'content length:', content.length);
+        files.push({ path: safePath, content });
+      }
+    }
+  }
+
   if (files.length > 0) {
     console.log('[parseFiles] Returning', files.length, 'files from delimiter format');
     return files;
@@ -175,6 +200,7 @@ async function streamGenerate(
   let rawBytes = 0;
   let lastParsedCount = 0;
   let buffer = "";
+  let stopReason = "end_turn"; // Track whether response was truncated
 
   while (true) {
     const { done, value } = await reader.read();
@@ -203,6 +229,9 @@ async function streamGenerate(
             lastParsedCount = parsed.length;
           }
           onStreamUpdate(fullText, parsed);
+        } else if (event.type === "stop") {
+          stopReason = event.stop_reason || "end_turn";
+          console.log('[useGenerate] Stream stop_reason:', stopReason);
         } else if (event.type === "error") {
           return { files: [], error: event.error || "Generation error" };
         }
@@ -215,11 +244,22 @@ async function streamGenerate(
     try {
       const event = JSON.parse(buffer.slice(6).trim());
       if (event.type === "text") fullText += event.content;
+      if (event.type === "stop") stopReason = event.stop_reason || "end_turn";
     } catch { /* ignore */ }
   }
 
-  const finalFiles = parseFiles(fullText);
-  console.log('[useGenerate] Stream complete. Final parse:', { totalFiles: finalFiles.length, lastParsedCount, fullTextLength: fullText.length });
+  const wasTruncated = stopReason === "max_tokens";
+  if (wasTruncated) {
+    console.warn('[useGenerate] Response was TRUNCATED (hit max_tokens). Attempting to recover partial files...');
+  }
+
+  // Try standard parse first, then truncated fallback if needed
+  let finalFiles = parseFiles(fullText);
+  if (finalFiles.length === 0 && wasTruncated) {
+    finalFiles = parseFiles(fullText, true); // Allow truncated files
+  }
+
+  console.log('[useGenerate] Stream complete. Final parse:', { totalFiles: finalFiles.length, lastParsedCount, fullTextLength: fullText.length, stopReason });
   if (finalFiles.length > lastParsedCount) {
     console.log('[useGenerate] Sending remaining files to onFileGenerated');
     for (let i = lastParsedCount; i < finalFiles.length; i++) {
@@ -234,13 +274,15 @@ async function streamGenerate(
       errMsg = "The API returned an empty response. Check ANTHROPIC_API_KEY in Netlify environment variables.";
     } else if (fullText.length === 0) {
       errMsg = `Received ${rawBytes} bytes but no text content extracted.`;
+    } else if (wasTruncated) {
+      errMsg = `Response was truncated (hit token limit). The app may be too complex for a single generation. Try a simpler prompt or break it into steps.`;
     } else {
       errMsg = `Claude responded but output could not be parsed into files. Raw: ${fullText.length} chars.`;
     }
     return { files: [], error: errMsg };
   }
 
-  return { files: finalFiles, error: null };
+  return { files: finalFiles, error: wasTruncated ? null : null };
 }
 
 export function useGenerate() {

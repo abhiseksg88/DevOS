@@ -260,9 +260,11 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   /** Add or update a file in the tree */
   const addFileToTree = useCallback((path: string, content: string, language?: string) => {
-    console.log('[Workspace] addFileToTree called:', { path, contentLength: content.length });
+    // Normalize path: strip leading ./ and /
+    let normalizedPath = path.replace(/^\.\/+/, "").replace(/^\/+/, "").trim();
+    console.log('[Workspace] addFileToTree called:', { path: normalizedPath, contentLength: content.length });
 
-    const parts = path.split("/");
+    const parts = normalizedPath.split("/");
     const fileName = parts[parts.length - 1];
 
     const ext = fileName.split(".").pop() ?? "";
@@ -276,11 +278,11 @@ export function Workspace({ projectId }: { projectId: string }) {
 
     setFileTree((prev) => {
       const flat = flattenTree(prev);
-      const exists = flat.some((f) => f.path === path);
-      console.log('[Workspace] Updating file tree:', { path, exists, prevTreeSize: flat.length });
+      const exists = flat.some((f) => f.path === normalizedPath);
+      console.log('[Workspace] Updating file tree:', { path: normalizedPath, exists, prevTreeSize: flat.length });
 
       if (exists) {
-        const updated = updateInTree(prev, path, content);
+        const updated = updateInTree(prev, normalizedPath, content);
         console.log('[Workspace] Updated existing file in tree');
         return updated;
       }
@@ -298,7 +300,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         build_id: "",
         kind: "patch",
         agent: "sonnet",
-        payload: { message: `Generated ${path}` },
+        payload: { message: `Generated ${normalizedPath}` },
         seq: seqRef.current,
         created_at: new Date().toISOString(),
       },

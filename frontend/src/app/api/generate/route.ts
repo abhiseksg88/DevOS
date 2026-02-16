@@ -198,7 +198,7 @@ Follow this build plan precisely. Implement exactly the components, changes, and
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 8192,
+          max_tokens: 16384,
           system: systemPrompt,
           messages: chatHistory && chatHistory.length > 0
             ? [
@@ -291,6 +291,13 @@ Follow this build plan precisely. Implement exactly the components, changes, and
                   content: event.delta.text,
                 });
                 controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              } else if (event.type === "message_delta" && event.delta?.stop_reason) {
+                // Forward stop_reason so client knows if response was truncated
+                const stopData = JSON.stringify({
+                  type: "stop",
+                  stop_reason: event.delta.stop_reason,
+                });
+                controller.enqueue(encoder.encode(`data: ${stopData}\n\n`));
               } else if (event.type === "message_stop") {
                 // Stream complete
               } else if (event.type === "error") {

@@ -52,7 +52,28 @@ function collectCSS(files: FileNode[]): string {
 }
 
 function findMainFile(files: FileNode[]): string {
+  // Helper: check if content is real generated code vs placeholder
+  const isRealContent = (f: FileNode) =>
+    f.content && !f.content.includes("Your generated code will appear here");
+
+  // Prefer files with real generated content over placeholder
   const main =
+    files.find(
+      (f) => (f.path.includes("page.tsx") || f.path.includes("page.jsx")) && isRealContent(f)
+    ) ??
+    files.find(
+      (f) => (f.path.includes("App.tsx") || f.path.includes("App.jsx")) && isRealContent(f)
+    ) ??
+    files.find(
+      (f) => (f.path.includes("index.tsx") || f.path.includes("index.jsx")) && isRealContent(f)
+    ) ??
+    files.find(
+      (f) =>
+        (f.language === "typescriptreact" ||
+          f.language === "javascriptreact") &&
+        isRealContent(f)
+    ) ??
+    // Fallback: accept any matching file including placeholder
     files.find(
       (f) => f.path.includes("page.tsx") || f.path.includes("page.jsx")
     ) ??
@@ -574,13 +595,27 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
 
+  // Compute a content hash from file tree to detect changes
+  const contentHash = useMemo(() => {
+    if (!files || files.length === 0) return "";
+    const flat = flattenFiles(files);
+    let hash = 0;
+    for (const f of flat) {
+      const s = f.path + (f.content || "");
+      for (let i = 0; i < s.length; i++) {
+        hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+      }
+    }
+    return String(hash);
+  }, [files]);
+
   const srcdoc = useMemo(() => {
     if (files && files.length > 0) {
       return buildPreviewDocument(files);
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, refreshKey]);
+  }, [files, refreshKey, contentHash]);
 
   // Listen for error messages from the preview iframe
   useEffect(() => {
@@ -762,7 +797,7 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
         >
           {hasLivePreview ? (
             <iframe
-              key={`live-${refreshKey}`}
+              key={`live-${refreshKey}-${contentHash}`}
               srcDoc={srcdoc!}
               className="w-full h-full border-0"
               title="Live Preview"
