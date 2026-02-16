@@ -130,6 +130,12 @@ export async function POST(req: NextRequest) {
   // --- Step 2: Deploy HTML via file digest ---
   const htmlBytes = Buffer.from(html, "utf-8");
   const sha1 = createHash("sha1").update(htmlBytes).digest("hex");
+
+  // Create _redirects for SPA routing (all routes serve index.html)
+  const redirectsContent = "/*    /index.html   200";
+  const redirectsBytes = Buffer.from(redirectsContent, "utf-8");
+  const redirectsSha1 = createHash("sha1").update(redirectsBytes).digest("hex");
+
   const headers = netlifyHeaders(netlifyToken);
 
   let deployId: string;
@@ -138,11 +144,16 @@ export async function POST(req: NextRequest) {
   // Retry up to 3 times
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      // Create deploy with digest
+      // Create deploy with digest for both index.html and _redirects
       const digestResp = await fetch(`${NETLIFY_API}/sites/${siteId}/deploys`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ files: { "/index.html": sha1 } }),
+        body: JSON.stringify({
+          files: {
+            "index.html": sha1,
+            "_redirects": redirectsSha1
+          }
+        }),
       });
 
       if (!digestResp.ok) {
@@ -153,9 +164,13 @@ export async function POST(req: NextRequest) {
       deployId = deploy.id;
       deployUrl = deploy.ssl_url || deploy.url || "";
 
-      // Upload file if needed
+      console.log('[Publish] Deploy created:', { deployId, required: deploy.required });
+
+      // Upload files if needed
       const required: string[] = deploy.required || [];
+
       if (required.includes(sha1)) {
+        console.log('[Publish] Uploading index.html...');
         const uploadResp = await fetch(
           `${NETLIFY_API}/deploys/${deployId}/files/index.html`,
           {
@@ -171,6 +186,27 @@ export async function POST(req: NextRequest) {
         if (!uploadResp.ok) {
           throw new Error(`File upload failed: ${uploadResp.status}`);
         }
+        console.log('[Publish] index.html uploaded successfully');
+      }
+
+      if (required.includes(redirectsSha1)) {
+        console.log('[Publish] Uploading _redirects...');
+        const redirectsUploadResp = await fetch(
+          `${NETLIFY_API}/deploys/${deployId}/files/_redirects`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${netlifyToken}`,
+              "Content-Type": "application/octet-stream",
+            },
+            body: redirectsBytes,
+          }
+        );
+
+        if (!redirectsUploadResp.ok) {
+          throw new Error(`_redirects upload failed: ${redirectsUploadResp.status}`);
+        }
+        console.log('[Publish] _redirects uploaded successfully');
       }
 
       break; // Success
