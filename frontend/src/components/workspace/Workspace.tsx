@@ -249,6 +249,8 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   /** Add or update a file in the tree */
   const addFileToTree = useCallback((path: string, content: string, language?: string) => {
+    console.log('[Workspace] addFileToTree called:', { path, contentLength: content.length });
+
     const parts = path.split("/");
     const fileName = parts[parts.length - 1];
 
@@ -263,10 +265,17 @@ export function Workspace({ projectId }: { projectId: string }) {
 
     setFileTree((prev) => {
       const flat = flattenTree(prev);
-      if (flat.some((f) => f.path === path)) {
-        return updateInTree(prev, path, content);
+      const exists = flat.some((f) => f.path === path);
+      console.log('[Workspace] Updating file tree:', { path, exists, prevTreeSize: flat.length });
+
+      if (exists) {
+        const updated = updateInTree(prev, path, content);
+        console.log('[Workspace] Updated existing file in tree');
+        return updated;
       }
-      return addToDirectory(prev, parts, 0, content, detectedLang);
+      const newTree = addToDirectory(prev, parts, 0, content, detectedLang);
+      console.log('[Workspace] Added new file to tree');
+      return newTree;
     });
 
     // Add a build event for the console

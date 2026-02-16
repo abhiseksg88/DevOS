@@ -62,9 +62,15 @@ function parseFiles(text: string): GeneratedFile[] {
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1].trim());
-    if (safePath) files.push({ path: safePath, content: match[2].trimEnd() });
+    if (safePath) {
+      console.log('[parseFiles] Found file via delimiter format:', safePath, 'content length:', match[2].trimEnd().length);
+      files.push({ path: safePath, content: match[2].trimEnd() });
+    }
   }
-  if (files.length > 0) return files;
+  if (files.length > 0) {
+    console.log('[parseFiles] Returning', files.length, 'files from delimiter format');
+    return files;
+  }
 
   // Format 2: ```language\n// filepath\n...``` or ```language:filepath\n...```
   const codeBlockRegex = /```(?:\w+)?\s*\n?\s*(?:\/\/\s*|\/\*\s*|#\s*)?(?:file:\s*|File:\s*|path:\s*)?([^\n*]+\.\w+)\s*\n([\s\S]*?)```/gi;
@@ -189,7 +195,9 @@ async function streamGenerate(
           fullText += event.content;
           const parsed = parseFiles(fullText);
           if (parsed.length > lastParsedCount) {
+            console.log('[useGenerate] Parsed new files:', parsed.slice(lastParsedCount).map(f => ({ path: f.path, contentLength: f.content.length })));
             for (let i = lastParsedCount; i < parsed.length; i++) {
+              console.log('[useGenerate] Calling onFileGenerated:', parsed[i].path);
               onFileGenerated(parsed[i].path, parsed[i].content);
             }
             lastParsedCount = parsed.length;
@@ -211,8 +219,11 @@ async function streamGenerate(
   }
 
   const finalFiles = parseFiles(fullText);
+  console.log('[useGenerate] Stream complete. Final parse:', { totalFiles: finalFiles.length, lastParsedCount, fullTextLength: fullText.length });
   if (finalFiles.length > lastParsedCount) {
+    console.log('[useGenerate] Sending remaining files to onFileGenerated');
     for (let i = lastParsedCount; i < finalFiles.length; i++) {
+      console.log('[useGenerate] Final onFileGenerated:', finalFiles[i].path);
       onFileGenerated(finalFiles[i].path, finalFiles[i].content);
     }
   }
