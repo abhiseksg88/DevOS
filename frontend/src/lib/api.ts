@@ -30,7 +30,7 @@ async function request<T>(
         "Backend API unreachable. Set NEXT_PUBLIC_API_URL in your environment variables to point to your deployed backend (e.g. https://your-backend.railway.app)."
       );
     }
-    throw new Error(`Cannot reach backend at ${API}. Check your NEXT_PUBLIC_API_URL setting.`);
+    throw new Error(`Cannot reach backend at ${API}. This may be a CORS issue — ensure the backend allows requests from this origin. Check your NEXT_PUBLIC_API_URL and CORS settings.`);
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));

@@ -90,6 +90,18 @@ function parseFiles(text: string): GeneratedFile[] {
     if (safePath) files.push({ path: safePath, content: match[2].trimEnd() });
   }
 
+  // Format 1b: Handle truncated responses where ===END_FILE=== was cut off
+  // (e.g., when AI hits max_tokens limit mid-output)
+  if (files.length === 0 && /===FILE:/.test(text)) {
+    const truncatedRegex = /===FILE:\s*(.+?)===\r?\n([\s\S]*?)(?====FILE:\s|$)/g;
+    while ((match = truncatedRegex.exec(text)) !== null) {
+      const safePath = sanitizePath(match[1]);
+      const content = match[2].trimEnd();
+      if (safePath && content) files.push({ path: safePath, content });
+    }
+    if (files.length > 0) return files;
+  }
+
   // Format 2: ===EDIT: path=== with SEARCH/REPLACE blocks
   // These are parsed but converted to full files by applying edits
   // (the actual application happens in the caller since we need existing content)
