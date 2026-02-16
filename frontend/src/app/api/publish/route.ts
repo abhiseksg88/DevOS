@@ -1,9 +1,15 @@
 /**
- * Publish API route — deploys generated apps to Netlify.
+ * Publish API route — marks a project as published and optionally deploys to Netlify.
  *
- * Ported from nimbusforge/services/netlify.py to run as a Next.js
- * serverless function on Netlify. Uses the Netlify file-digest API
- * to deploy a self-contained index.html.
+ * Published apps are served via subdomain routing:
+ *   {slug}.vedaa.io → middleware → /api/serve-app?slug={slug} → HTML from Supabase
+ *
+ * The Netlify deploy is kept as a backup/CDN fallback, but the primary URL
+ * is the subdomain URL which is served by the main app's middleware.
+ *
+ * NOTE: We do NOT try to add custom domains to separate Netlify sites because
+ * the *.vedaa.io wildcard DNS is claimed by the main site. Instead, subdomain
+ * routing in middleware.ts handles serving published apps.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -44,14 +50,6 @@ export async function POST(req: NextRequest) {
 
   // --- Env vars ---
   const netlifyToken = process.env.NF_TOKEN;
-  if (!netlifyToken) {
-    return NextResponse.json(
-      { error: "NF_TOKEN is not configured. Add it at Site level (Site settings > Environment variables), NOT team-level. Team-level vars may not reach serverless functions. Visit /api/health to diagnose." },
-      { status: 503 }
-    );
-  }
-
-  const teamSlug = process.env.NF_TEAM_SLUG || "devos";
   const sitePrefix = process.env.NF_SITE_PREFIX || "devos";
   const customDomainBase = process.env.NF_CUSTOM_DOMAIN || "";
 
@@ -69,236 +67,157 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // --- Step 1: Get or create Netlify site ---
-  let siteId: string | null = null;
+  // --- Determine the primary published URL ---
+  // The subdomain URL is the primary URL (served by our middleware)
+  const customDomain = customDomainBase ? `${projectSlug}.${customDomainBase}` : null;
+  const primaryUrl = customDomain
+    ? `https://${customDomain}`
+    : `https://vedaa.io/p/${projectSlug}`; // Fallback to path-based URL
 
-  // Try to get existing site_id from project
-  if (supabase) {
+  // --- Optional: Deploy to Netlify as a CDN backup ---
+  let netlifyDeployId: string | null = null;
+  let netlifySiteId: string | null = null;
+  let netlifyUrl: string | null = null;
+
+  if (netlifyToken) {
     try {
-      const { data: project } = await supabase
-        .from("projects")
-        .select("netlify_site_id")
-        .eq("id", projectId)
-        .single();
-      siteId = project?.netlify_site_id || null;
-    } catch {
-      // Continue without existing site
-    }
-  }
+      // Get or create Netlify site
+      let siteId: string | null = null;
 
-  if (!siteId) {
-    // Create a new Netlify site
-    let siteName = `${sitePrefix}-${projectSlug}`;
-    const headers = netlifyHeaders(netlifyToken);
-
-    let resp = await fetch(`${NETLIFY_API}/sites`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ name: siteName }),
-    });
-
-    // 422 = name taken, append random suffix
-    if (resp.status === 422) {
-      siteName = `${siteName}-${randomBytes(3).toString("hex")}`;
-      resp = await fetch(`${NETLIFY_API}/sites`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ name: siteName }),
-      });
-    }
-
-    if (!resp.ok) {
-      const err = await resp.text();
-      return NextResponse.json(
-        { error: `Failed to create Netlify site: ${err}` },
-        { status: 502 }
-      );
-    }
-
-    const siteData = await resp.json();
-    siteId = siteData.id;
-
-    // Save site_id to project
-    if (supabase) {
-      await supabase
-        .from("projects")
-        .update({ netlify_site_id: siteId, deployment_status: "deploying" })
-        .eq("id", projectId);
-    }
-  }
-
-  // --- Step 2: Deploy HTML via file digest ---
-  const htmlBytes = Buffer.from(html, "utf-8");
-  const sha1 = createHash("sha1").update(htmlBytes).digest("hex");
-
-  // Create _redirects for SPA routing (all routes serve index.html)
-  const redirectsContent = "/*    /index.html   200";
-  const redirectsBytes = Buffer.from(redirectsContent, "utf-8");
-  const redirectsSha1 = createHash("sha1").update(redirectsBytes).digest("hex");
-
-  const headers = netlifyHeaders(netlifyToken);
-
-  let deployId: string;
-  let deployUrl: string;
-
-  // Retry up to 3 times
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      // Create deploy with digest for both index.html and _redirects
-      const digestResp = await fetch(`${NETLIFY_API}/sites/${siteId}/deploys`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          files: {
-            "index.html": sha1,
-            "_redirects": redirectsSha1
-          }
-        }),
-      });
-
-      if (!digestResp.ok) {
-        throw new Error(`Deploy digest failed: ${digestResp.status}`);
-      }
-
-      const deploy = await digestResp.json();
-      deployId = deploy.id;
-      deployUrl = deploy.ssl_url || deploy.url || "";
-
-      console.log('[Publish] Deploy created:', { deployId, required: deploy.required });
-
-      // Upload files if needed
-      const required: string[] = deploy.required || [];
-
-      if (required.includes(sha1)) {
-        console.log('[Publish] Uploading index.html...');
-        const uploadResp = await fetch(
-          `${NETLIFY_API}/deploys/${deployId}/files/index.html`,
-          {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${netlifyToken}`,
-              "Content-Type": "application/octet-stream",
-            },
-            body: htmlBytes,
-          }
-        );
-
-        if (!uploadResp.ok) {
-          throw new Error(`File upload failed: ${uploadResp.status}`);
+      if (supabase) {
+        try {
+          const { data: project } = await supabase
+            .from("projects")
+            .select("netlify_site_id")
+            .eq("id", projectId)
+            .single();
+          siteId = project?.netlify_site_id || null;
+        } catch {
+          // Continue without existing site
         }
-        console.log('[Publish] index.html uploaded successfully');
       }
 
-      if (required.includes(redirectsSha1)) {
-        console.log('[Publish] Uploading _redirects...');
-        const redirectsUploadResp = await fetch(
-          `${NETLIFY_API}/deploys/${deployId}/files/_redirects`,
-          {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${netlifyToken}`,
-              "Content-Type": "application/octet-stream",
-            },
-            body: redirectsBytes,
-          }
-        );
+      if (!siteId) {
+        let siteName = `${sitePrefix}-${projectSlug}`;
+        const nfHeaders = netlifyHeaders(netlifyToken);
 
-        if (!redirectsUploadResp.ok) {
-          throw new Error(`_redirects upload failed: ${redirectsUploadResp.status}`);
+        let resp = await fetch(`${NETLIFY_API}/sites`, {
+          method: "POST",
+          headers: nfHeaders,
+          body: JSON.stringify({ name: siteName }),
+        });
+
+        if (resp.status === 422) {
+          siteName = `${siteName}-${randomBytes(3).toString("hex")}`;
+          resp = await fetch(`${NETLIFY_API}/sites`, {
+            method: "POST",
+            headers: nfHeaders,
+            body: JSON.stringify({ name: siteName }),
+          });
         }
-        console.log('[Publish] _redirects uploaded successfully');
+
+        if (resp.ok) {
+          const siteData = await resp.json();
+          siteId = siteData.id;
+        }
       }
 
-      break; // Success
+      if (siteId) {
+        netlifySiteId = siteId;
+
+        // Deploy HTML via file digest
+        const htmlBytes = Buffer.from(html, "utf-8");
+        const sha1 = createHash("sha1").update(htmlBytes).digest("hex");
+
+        const redirectsContent = "/*    /index.html   200";
+        const redirectsBytes = Buffer.from(redirectsContent, "utf-8");
+        const redirectsSha1 = createHash("sha1").update(redirectsBytes).digest("hex");
+
+        const nfHeaders = netlifyHeaders(netlifyToken);
+
+        const digestResp = await fetch(`${NETLIFY_API}/sites/${siteId}/deploys`, {
+          method: "POST",
+          headers: nfHeaders,
+          body: JSON.stringify({
+            files: {
+              "index.html": sha1,
+              "_redirects": redirectsSha1,
+            },
+          }),
+        });
+
+        if (digestResp.ok) {
+          const deploy = await digestResp.json();
+          netlifyDeployId = deploy.id;
+          netlifyUrl = deploy.ssl_url || deploy.url || null;
+
+          const required: string[] = deploy.required || [];
+
+          if (required.includes(sha1)) {
+            await fetch(`${NETLIFY_API}/deploys/${deploy.id}/files/index.html`, {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${netlifyToken}`,
+                "Content-Type": "application/octet-stream",
+              },
+              body: htmlBytes,
+            });
+          }
+
+          if (required.includes(redirectsSha1)) {
+            await fetch(`${NETLIFY_API}/deploys/${deploy.id}/files/_redirects`, {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${netlifyToken}`,
+                "Content-Type": "application/octet-stream",
+              },
+              body: redirectsBytes,
+            });
+          }
+        }
+      }
     } catch (err) {
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
-        continue;
-      }
-      return NextResponse.json(
-        { error: `Deploy failed after 3 attempts: ${err instanceof Error ? err.message : String(err)}` },
-        { status: 502 }
-      );
+      // Netlify deploy is optional — don't fail the whole publish
+      console.error("[Publish] Netlify deploy failed (non-fatal):", err);
     }
   }
 
-  // --- Step 3: Wait for deploy to be ready (max 30s) ---
-  let finalStatus = "deploying";
-  const deadline = Date.now() + 30_000;
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 2000));
-
-    const statusResp = await fetch(`${NETLIFY_API}/deploys/${deployId!}`, {
-      headers: { Authorization: `Bearer ${netlifyToken}` },
-    });
-
-    if (statusResp.ok) {
-      const statusData = await statusResp.json();
-      if (statusData.state === "ready") {
-        finalStatus = "ready";
-        deployUrl = statusData.ssl_url || statusData.url || deployUrl!;
-        break;
-      }
-      if (statusData.state === "error" || statusData.state === "failed") {
-        return NextResponse.json(
-          { error: "Deploy failed on Netlify" },
-          { status: 502 }
-        );
-      }
-    }
-  }
-
-  // --- Step 4: Add custom domain ---
-  let customDomain: string | null = null;
-  if (customDomainBase && siteId) {
-    customDomain = `${projectSlug}.${customDomainBase}`;
-    try {
-      await fetch(`${NETLIFY_API}/sites/${siteId}/domains`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ domain_name: customDomain }),
-      });
-      // If custom domain works, use it as primary URL
-      deployUrl = `https://${customDomain}`;
-    } catch {
-      // Custom domain failed — fall back to default URL
-      customDomain = null;
-    }
-  }
-
-  // --- Step 5: Update project in Supabase ---
+  // --- Update project in Supabase ---
   if (supabase) {
     try {
       await supabase
         .from("projects")
         .update({
-          deployed_url: deployUrl!,
+          deployed_url: primaryUrl,
           deployed_at: new Date().toISOString(),
-          deployment_status: finalStatus === "ready" ? "deployed" : "deploying",
+          deployment_status: "deployed",
           custom_domain: customDomain,
+          ...(netlifySiteId ? { netlify_site_id: netlifySiteId } : {}),
         })
         .eq("id", projectId);
 
       // Insert deployment record
-      await supabase.from("netlify_deployments").insert({
-        tenant_id: tenantId,
-        project_id: projectId,
-        netlify_site_id: siteId,
-        netlify_deploy_id: deployId!,
-        status: finalStatus === "ready" ? "ready" : "pending",
-        url: deployUrl!,
-      });
+      if (netlifyDeployId) {
+        await supabase.from("netlify_deployments").insert({
+          tenant_id: tenantId,
+          project_id: projectId,
+          netlify_site_id: netlifySiteId,
+          netlify_deploy_id: netlifyDeployId,
+          status: "ready",
+          url: primaryUrl,
+        });
+      }
     } catch {
       // Non-fatal — deploy succeeded even if DB update fails
     }
   }
 
   return NextResponse.json({
-    deploy_id: deployId!,
-    url: deployUrl!,
-    status: finalStatus,
-    netlify_site_id: siteId,
+    deploy_id: netlifyDeployId || projectId,
+    url: primaryUrl,
+    status: "ready",
+    netlify_site_id: netlifySiteId,
+    netlify_url: netlifyUrl,
     custom_domain: customDomain,
   });
 }
