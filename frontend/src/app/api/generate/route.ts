@@ -1,6 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
+// Allow long-running streaming generation (5 minutes)
+export const maxDuration = 300;
+
 // ---------------------------------------------------------------------------
 // System prompt — the single most important piece for output quality.
 // This is what makes the difference between "generic" and "Lovable-quality".
@@ -332,9 +335,10 @@ export async function POST(req: NextRequest) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
+    console.error("[generate] ANTHROPIC_API_KEY is not set in environment variables");
     return new Response(
       JSON.stringify({
-        error: "ANTHROPIC_API_KEY not configured. Add it to frontend/.env.local",
+        error: "ANTHROPIC_API_KEY not configured. Please add it to your Netlify environment variables (Site settings → Environment variables).",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
@@ -371,11 +375,15 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      const send = (obj: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      };
+
       try {
         // Send model info as first event
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ type: "meta", model })}\n\n`)
-        );
+        send({ type: "meta", model });
+
+        console.log(`[generate] Calling Anthropic API with model=${model}, maxTokens=${maxTokens}`);
 
         const response = await client.messages.create({
           model,
@@ -390,25 +398,24 @@ export async function POST(req: NextRequest) {
           stream: true,
         });
 
+        let charCount = 0;
         for await (const event of response) {
           if (
             event.type === "content_block_delta" &&
             event.delta.type === "text_delta"
           ) {
-            const data = JSON.stringify({ type: "text", content: event.delta.text });
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            charCount += event.delta.text.length;
+            send({ type: "text", content: event.delta.text });
           }
         }
 
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`));
+        console.log(`[generate] Stream complete — ${charCount} chars generated`);
+        send({ type: "done" });
         controller.close();
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unknown error";
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ type: "error", error: message })}\n\n`
-          )
-        );
+        console.error(`[generate] Error: ${message}`);
+        send({ type: "error", error: message });
         controller.close();
       }
     },
@@ -418,7 +425,7 @@ export async function POST(req: NextRequest) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

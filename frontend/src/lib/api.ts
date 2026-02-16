@@ -13,14 +13,25 @@ async function request<T>(
   token: string,
   body?: unknown
 ): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    // Network error — backend unreachable
+    if (API.includes("localhost")) {
+      throw new Error(
+        "Backend API unreachable. Set NEXT_PUBLIC_API_URL in your environment variables to point to your deployed backend (e.g. https://your-backend.railway.app)."
+      );
+    }
+    throw new Error(`Cannot reach backend at ${API}. Check your NEXT_PUBLIC_API_URL setting.`);
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail ?? `API error ${res.status}`);
