@@ -83,7 +83,7 @@ function parseFiles(text: string): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
   // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
-  const delimiterRegex = /===FILE:\s*(.+?)===\r?\n([\s\S]*?)===END_FILE===/g;
+  const delimiterRegex = /===FILE:\s*(.+?)===\s*\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1]);
@@ -93,8 +93,9 @@ function parseFiles(text: string): GeneratedFile[] {
   // Format 1b: Handle truncated responses where ===END_FILE=== was cut off
   // (e.g., when AI hits max_tokens limit mid-output)
   // This runs even if some complete files were found — recovers the truncated last file
+  // Uses permissive whitespace matching: ===FILE: path===<any whitespace>\n
   {
-    const allFileStarts = [...text.matchAll(/===FILE:\s*(.+?)===\r?\n/g)];
+    const allFileStarts = [...text.matchAll(/===FILE:\s*(.+?)===\s*\n/g)];
     const parsedPaths = new Set(files.map((f) => f.path));
     for (const fileStart of allFileStarts) {
       const safePath = sanitizePath(fileStart[1]);
@@ -114,7 +115,7 @@ function parseFiles(text: string): GeneratedFile[] {
   // Format 2: ===EDIT: path=== with SEARCH/REPLACE blocks
   // These are parsed but converted to full files by applying edits
   // (the actual application happens in the caller since we need existing content)
-  const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
+  const editRegex = /===EDIT:\s*(.+?)===\s*\n([\s\S]*?)===END_EDIT===/g;
   while ((match = editRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1]);
     if (!safePath) continue;
@@ -168,6 +169,33 @@ function parseFiles(text: string): GeneratedFile[] {
 
     const safePath = sanitizePath(pathMatch[2]);
     if (safePath) files.push({ path: safePath, content: codeMatch[1].trimEnd() });
+  }
+  if (files.length > 0) return files;
+
+  // Format 5 (LAST RESORT): If the raw output looks like React/TS code but no
+  // delimiters were found (or all regex failed), wrap it in page.tsx.
+  // This handles: truncated single-file output, or AI that forgot delimiters entirely.
+  {
+    // Strip the ===FILE: path=== header if present (even without proper newline)
+    let codeText = text;
+    const headerMatch = codeText.match(/^===FILE:\s*.+?===\s*/);
+    if (headerMatch) {
+      codeText = codeText.slice(headerMatch[0].length);
+    }
+    // Check if it looks like React/TypeScript code
+    const trimmed = codeText.trimStart();
+    const looksLikeCode =
+      trimmed.startsWith("'use client'") ||
+      trimmed.startsWith('"use client"') ||
+      trimmed.startsWith("import ") ||
+      trimmed.startsWith("export ") ||
+      trimmed.startsWith("const ") ||
+      trimmed.startsWith("function ") ||
+      trimmed.startsWith("interface ") ||
+      trimmed.startsWith("type ");
+    if (looksLikeCode && trimmed.length > 100) {
+      files.push({ path: "src/app/page.tsx", content: trimmed });
+    }
   }
 
   return files;
