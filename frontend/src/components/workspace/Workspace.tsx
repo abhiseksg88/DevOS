@@ -131,6 +131,17 @@ export function Workspace({ projectId }: { projectId: string }) {
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
 
+  // Ref to track current file tree state (avoid stale closures)
+  const fileTreeRef = useRef<FileNode[]>(fileTree);
+
+  // Track last saved file count to prevent duplicate saves
+  const lastSavedCountRef = useRef<number>(0);
+
+  // Sync ref with state
+  useEffect(() => {
+    fileTreeRef.current = fileTree;
+  }, [fileTree]);
+
   // Helper: Convert file tree to code map for persistence
   function treeToCodeMap(tree: FileNode[]): Record<string, string> {
     const map: Record<string, string> = {};
@@ -364,7 +375,8 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   // When generation completes, switch to preview and save code
   useEffect(() => {
-    if (!generator.isGenerating && generator.files.length > 0) {
+    if (!generator.isGenerating && generator.files.length > 0 && generator.files.length !== lastSavedCountRef.current) {
+      console.log('[Workspace] Generation completed, saving code...', { fileCount: generator.files.length });
       setRightTab("preview");
 
       // Add completion event
@@ -382,10 +394,15 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
 
-      // Save code after generation completes
-      persistence.saveCode(treeToCodeMap(fileTree), 'generation', lastPromptRef.current);
+      // Save code after generation completes using ref (not stale closure)
+      const currentTree = fileTreeRef.current;
+      const codeMap = treeToCodeMap(currentTree);
+      console.log('[Workspace] Saving file tree:', { treeSize: flattenTree(currentTree).length, codeMapSize: Object.keys(codeMap).length });
+
+      persistence.saveCode(codeMap, 'generation', lastPromptRef.current);
+      lastSavedCountRef.current = generator.files.length;
     }
-  }, [generator.isGenerating, generator.files.length, persistence, fileTree]);
+  }, [generator.isGenerating, generator.files.length, persistence]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -406,6 +423,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Reset events and pipeline tracking
       seqRef.current = 0;
       pipelineSeenRef.current = 0;
+      lastSavedCountRef.current = 0; // Reset save guard for new generation
       setGenerationEvents([
         {
           id: crypto.randomUUID(),
