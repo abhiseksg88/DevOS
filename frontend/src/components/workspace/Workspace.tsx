@@ -20,10 +20,12 @@ import {
   Eye,
   Terminal,
   Loader2,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PublishButton } from "@/components/workspace/PublishButton";
 import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
+import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
 import * as api from "@/lib/api";
 
 type RightTab = "code" | "preview" | "console";
@@ -116,7 +118,9 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
   const [showIntegrations, setShowIntegrations] = useState(false);
+  const [showNexus, setShowNexus] = useState(false);
   const [integrationContext, setIntegrationContext] = useState<string>("");
+  const [nexusContext, setNexusContext] = useState<string>("");
 
   // Load integration context (what APIs are available) for code generation
   useEffect(() => {
@@ -125,6 +129,15 @@ export function Workspace({ projectId }: { projectId: string }) {
       .context(token, resolvedTenantId, projectId)
       .then((ctx) => setIntegrationContext(ctx.context))
       .catch(() => setIntegrationContext(""));
+  }, [token, resolvedTenantId, projectId]);
+
+  // Load Neural Nexus context (persona + project state + business logic) for code generation
+  useEffect(() => {
+    if (!token || !resolvedTenantId || !projectId) return;
+    api.nexus
+      .getContext(token, resolvedTenantId, projectId)
+      .then((ctx) => setNexusContext(ctx.context))
+      .catch(() => setNexusContext(""));
   }, [token, resolvedTenantId, projectId]);
 
   // File tree — updated from Claude output or editor changes
@@ -486,10 +499,11 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Switch to console to show progress
       setRightTab("console");
 
-      // Call Claude directly — generate() passes integration context so Claude knows what APIs are available
-      const promptWithContext = integrationContext
-        ? `${content}\n\n${integrationContext}`
-        : content;
+      // Call Claude directly — inject Neural Nexus context + integration context
+      const contextParts = [content];
+      if (nexusContext) contextParts.push(nexusContext);
+      if (integrationContext) contextParts.push(integrationContext);
+      const promptWithContext = contextParts.join("\n\n");
       const result = await generator.generate(promptWithContext, fileTree, (path, fileContent) => {
         addFileToTree(path, fileContent);
       });
@@ -521,7 +535,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
     },
-    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext]
+    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext, nexusContext]
   );
 
   if (loading) {
@@ -571,6 +585,13 @@ export function Workspace({ projectId }: { projectId: string }) {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowNexus(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-purple-500/30 transition-all"
+          >
+            <Brain className="w-3 h-3" />
+            Neural Nexus
+          </button>
           <button
             onClick={() => setShowIntegrations(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-brand-500/30 transition-all"
@@ -688,6 +709,24 @@ export function Workspace({ projectId }: { projectId: string }) {
             api.integrations
               .context(token, resolvedTenantId, projectId)
               .then((ctx) => setIntegrationContext(ctx.context))
+              .catch(() => {});
+          }
+        }}
+      />
+
+      {/* Neural Nexus drawer */}
+      <NeuralNexusPanel
+        projectId={projectId}
+        tenantId={resolvedTenantId}
+        token={token}
+        open={showNexus}
+        onClose={() => {
+          setShowNexus(false);
+          // Refresh Nexus context after panel closes (state may have updated)
+          if (token && resolvedTenantId && projectId) {
+            api.nexus
+              .getContext(token, resolvedTenantId, projectId)
+              .then((ctx) => setNexusContext(ctx.context))
               .catch(() => {});
           }
         }}

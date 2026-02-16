@@ -3,7 +3,7 @@
  * All calls go through the FastAPI backend.
  */
 
-import type { Build, Deployment, Integration, IntegrationContext, IntegrationTestResult, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
+import type { Build, Deployment, Integration, IntegrationContext, IntegrationTestResult, NexusAgentExecution, NexusState, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -183,6 +183,63 @@ export const usage = {
 export const preview = {
   getCredentials: (token: string) =>
     request<{ url: string; anonKey: string }>("GET", "/preview/credentials", token),
+};
+
+// --- Neural Nexus ---
+export const nexus = {
+  /** Get full Neural Nexus state (UPP + PSM + Business Logic + Activity) */
+  getState: (token: string, tenantId: string, projectId: string) =>
+    request<NexusState>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/nexus`,
+      token,
+    ),
+  /** Get Neural Nexus context string for code generation */
+  getContext: (token: string, tenantId: string, projectId: string) =>
+    request<{ context: string }>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/context`,
+      token,
+    ),
+  /** Update user persona preferences/expertise */
+  updatePersona: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    data: { preferences?: Record<string, unknown>; expertise?: Record<string, string> },
+  ) =>
+    request<{ status: string }>(
+      "PATCH",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/persona`,
+      token,
+      data,
+    ),
+  /** Record feedback into the flywheel */
+  recordFeedback: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    data: {
+      event_type: string;
+      feedback: Record<string, unknown>;
+      agent?: string;
+      prompt?: string;
+      response_summary?: string;
+    },
+  ) =>
+    request<{ status: string }>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/feedback`,
+      token,
+      data,
+    ),
+  /** Get recent agent activity */
+  getActivity: (token: string, tenantId: string, projectId: string, limit = 20) =>
+    request<NexusAgentExecution[]>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/activity?limit=${limit}`,
+      token,
+    ),
 };
 
 // --- SSE Stream ---

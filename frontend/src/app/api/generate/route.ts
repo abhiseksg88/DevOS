@@ -179,19 +179,59 @@ Use INLINE SVGs or emoji. Common patterns:
 - Pricing table
 - CTA sections
 
-Do NOT include any explanation text outside of ===FILE: ... === blocks.`;
+Do NOT include any explanation text outside of file/edit blocks.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## TOKEN-OPTIMIZED OUTPUT — SEARCH & REPLACE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When EDITING an existing file (provided in the context), DO NOT rewrite the entire file.
+Use SEARCH & REPLACE blocks instead — this saves 95% of output tokens:
+
+===EDIT: path/to/existing_file.tsx===
+<<<SEARCH
+const oldCode = "before";
+>>>REPLACE
+const newCode = "after";
+===END_EDIT===
+
+Multiple edits in the same file use multiple EDIT blocks.
+
+When CREATING a brand new file, use the full file format:
+
+===FILE: path/to/new_file.tsx===
+(complete file content)
+===END_FILE===
+
+### Decision rules:
+- File exists in context + changing < 50% of it → use ===EDIT=== with SEARCH/REPLACE
+- File exists but rewriting > 50% → use ===FILE=== (full replacement)
+- File is brand new → use ===FILE===
+
+CRITICAL: The SEARCH text must match the existing code EXACTLY including whitespace.
+Include 2-3 lines of surrounding context to ensure unique matching.`;
 
 // ---------------------------------------------------------------------------
 // Fix agent system prompt — targeted error resolution
 // ---------------------------------------------------------------------------
 const FIX_SYSTEM_PROMPT = `You are a React debugging specialist. You receive runtime errors from a preview render and the source code that caused them.
 
-Your job: generate the MINIMUM fix needed. Do NOT rewrite the entire file. Only output the files that need changes.
+Your job: generate the MINIMUM fix needed. Do NOT rewrite the entire file.
 
-Output format (same as generation):
-===FILE: path/to/file.tsx===
-(complete fixed file content)
-===END_FILE===
+## Output Format — Use SEARCH & REPLACE for targeted fixes:
+
+===EDIT: path/to/file.tsx===
+<<<SEARCH
+const broken = something.undefined.value;
+>>>REPLACE
+const broken = something?.undefined?.value ?? "default";
+===END_EDIT===
+
+For each file, use ===EDIT=== with <<<SEARCH and >>>REPLACE blocks.
+The SEARCH text must match the existing code EXACTLY.
+Include 2-3 context lines around the bug for unique matching.
+
+Only use ===FILE: path=== (full file) if the fix requires rewriting > 50% of the file.
 
 Common fixes:
 - Null/undefined: add optional chaining (?.) or default values (?? [])
@@ -204,11 +244,10 @@ Common fixes:
 - Key prop: add unique key to .map() rendered elements
 
 Rules:
-- Output ONLY the fixed files — no explanations
-- Include the COMPLETE file content (not just the changed lines)
+- Use SEARCH/REPLACE blocks — do NOT rewrite entire files
 - Fix ALL errors mentioned, not just the first one
 - Preserve all existing functionality — don't remove features to fix errors
-- If an error is in page.tsx, output the full fixed page.tsx`;
+- No explanations outside of EDIT/FILE blocks`;
 
 // ---------------------------------------------------------------------------
 // Smart model routing — Haiku for small edits, Sonnet for everything else
