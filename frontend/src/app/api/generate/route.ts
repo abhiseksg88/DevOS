@@ -19,13 +19,19 @@ Respond with ONLY code files. No explanations, no markdown outside files. Use th
 
 ## Architecture
 - Main entry: \`src/app/page.tsx\` with a default export React function component
-- Define ALL components directly in page.tsx — it MUST be fully self-contained
+- For simple apps (under ~300 lines): define all components inline in page.tsx
+- For complex apps (dashboards, CRMs, multi-view apps): split into multiple files:
+  - \`src/app/page.tsx\` — main layout, state management, routing between views
+  - \`src/components/ComponentName.tsx\` — reusable UI components (tables, forms, modals, sidebars)
+  - \`src/app/globals.css\` — custom CSS animations or base styles
+  - Import components with: \`import ComponentName from "@/components/ComponentName"\`
+- CRITICAL: Keep each file under 250 lines. If a file would exceed this, split it into smaller components.
 - Use React + TypeScript + Tailwind CSS
 - Use \`className\` (not \`class\`)
 - You MAY import from "react" (useState, useEffect, useRef, useMemo, useCallback, useContext, useReducer)
 - Do NOT import from next/image, next/link, next/router, or any Next.js modules
 - Do NOT import from external packages (no lucide-react, no framer-motion, no date-fns, etc.)
-- Do NOT import from local files — everything must be inline in page.tsx
+- You MAY import from local component files using \`@/components/...\` or relative paths \`./components/...\`
 - You MAY create a globals.css at \`src/app/globals.css\` for custom CSS animations or base styles
 
 ## Design System — THIS IS CRITICAL
@@ -279,8 +285,11 @@ function selectModel(prompt: string, hasExistingFiles: boolean): { model: string
     return { model: "claude-haiku-4-5-20251001", maxTokens: 4096 };
   }
 
-  // Everything else → Sonnet (best quality/speed balance)
-  return { model: "claude-sonnet-4-5-20250929", maxTokens: 16384 };
+  // New app generation needs more output room (multiple files, full content)
+  // Editing existing files needs less (SEARCH/REPLACE blocks are compact)
+  const maxTokens = hasExistingFiles ? 16384 : 32768;
+
+  return { model: "claude-sonnet-4-5-20250929", maxTokens };
 }
 
 // ---------------------------------------------------------------------------

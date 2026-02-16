@@ -92,14 +92,23 @@ function parseFiles(text: string): GeneratedFile[] {
 
   // Format 1b: Handle truncated responses where ===END_FILE=== was cut off
   // (e.g., when AI hits max_tokens limit mid-output)
-  if (files.length === 0 && /===FILE:/.test(text)) {
-    const truncatedRegex = /===FILE:\s*(.+?)===\r?\n([\s\S]*?)(?====FILE:\s|$)/g;
-    while ((match = truncatedRegex.exec(text)) !== null) {
-      const safePath = sanitizePath(match[1]);
-      const content = match[2].trimEnd();
-      if (safePath && content) files.push({ path: safePath, content });
+  // This runs even if some complete files were found — recovers the truncated last file
+  {
+    const allFileStarts = [...text.matchAll(/===FILE:\s*(.+?)===\r?\n/g)];
+    const parsedPaths = new Set(files.map((f) => f.path));
+    for (const fileStart of allFileStarts) {
+      const safePath = sanitizePath(fileStart[1]);
+      if (!safePath || parsedPaths.has(safePath)) continue; // already parsed as complete
+      // Extract content from this ===FILE: start to the next ===FILE: or end of string
+      const startIdx = (fileStart.index ?? 0) + fileStart[0].length;
+      const remainingText = text.slice(startIdx);
+      // Stop at next ===FILE: or ===EDIT: or ===END_FILE=== (whichever comes first)
+      const nextDelim = remainingText.search(/===(?:FILE:|EDIT:|END_FILE===)/);
+      const content = (nextDelim >= 0 ? remainingText.slice(0, nextDelim) : remainingText).trimEnd();
+      if (content && content.length > 50) { // Minimum viable content
+        files.push({ path: safePath, content });
+      }
     }
-    if (files.length > 0) return files;
   }
 
   // Format 2: ===EDIT: path=== with SEARCH/REPLACE blocks
