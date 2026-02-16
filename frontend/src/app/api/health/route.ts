@@ -48,7 +48,44 @@ export async function GET() {
     detail: apiUrl || "NOT SET (will default to http://localhost:8000)",
   };
 
-  // 3. Test Anthropic API connectivity (quick, non-streaming)
+  // 3. Check NF_* vars (Netlify publish)
+  const nfToken = process.env.NF_TOKEN;
+  if (!nfToken) {
+    checks.NF_TOKEN = {
+      ok: false,
+      detail: "NOT SET — required for Publish. Set at Site level (Site settings > Environment variables), NOT team-level.",
+    };
+  } else if (nfToken.length < 10) {
+    checks.NF_TOKEN = {
+      ok: false,
+      detail: `Set but looks invalid (length: ${nfToken.length})`,
+    };
+  } else {
+    checks.NF_TOKEN = {
+      ok: true,
+      detail: `Set (${nfToken.slice(0, 6)}...${nfToken.slice(-4)})`,
+    };
+  }
+
+  const nfTeamSlug = process.env.NF_TEAM_SLUG;
+  checks.NF_TEAM_SLUG = {
+    ok: !!nfTeamSlug,
+    detail: nfTeamSlug || 'NOT SET (will default to "devos")',
+  };
+
+  const nfSitePrefix = process.env.NF_SITE_PREFIX;
+  checks.NF_SITE_PREFIX = {
+    ok: !!nfSitePrefix,
+    detail: nfSitePrefix || 'NOT SET (will default to "devos")',
+  };
+
+  const nfCustomDomain = process.env.NF_CUSTOM_DOMAIN;
+  checks.NF_CUSTOM_DOMAIN = {
+    ok: true, // optional
+    detail: nfCustomDomain || "NOT SET (no custom domain for published apps)",
+  };
+
+  // 4. Test Anthropic API connectivity (quick, non-streaming)
   if (apiKey) {
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {

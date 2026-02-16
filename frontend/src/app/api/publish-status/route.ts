@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
   const netlifyToken = process.env.NF_TOKEN;
   if (!netlifyToken) {
-    return NextResponse.json({ error: "NF_TOKEN not configured" }, { status: 503 });
+    return NextResponse.json({ error: "NF_TOKEN not configured. Set it at Site level in Netlify (Site settings > Environment variables). Visit /api/health to diagnose." }, { status: 503 });
   }
 
   try {

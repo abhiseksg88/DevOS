@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
   const netlifyToken = process.env.NF_TOKEN;
   if (!netlifyToken) {
     return NextResponse.json(
-      { error: "NF_TOKEN is not configured. Add it to your Netlify environment variables." },
+      { error: "NF_TOKEN is not configured. Add it at Site level (Site settings > Environment variables), NOT team-level. Team-level vars may not reach serverless functions. Visit /api/health to diagnose." },
       { status: 503 }
     );
   }

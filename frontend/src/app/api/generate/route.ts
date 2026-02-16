@@ -9,16 +9,19 @@
 
 import { NextRequest } from "next/server";
 
-const SYSTEM_PROMPT = `You are an expert full-stack developer. The user will describe an app or feature they want built.
-
-You MUST respond with ONLY code files in the following exact format. No explanations before or after the files.
+// ---------------------------------------------------------------------------
+// Shared coding rules & output format (used by both initial and update prompts)
+// ---------------------------------------------------------------------------
+const FILE_FORMAT = `You MUST respond with ONLY code files in the following exact format. No explanations before or after the files.
 
 For each file, use this exact delimiter format:
 ===FILE: path/to/file.tsx===
 (file content here)
 ===END_FILE===
 
-Rules:
+Do NOT include any explanation text outside of ===FILE: ... === blocks.`;
+
+const BASE_RULES = `Rules:
 - Use React with TypeScript and Tailwind CSS for styling
 - The main entry point MUST be "src/app/page.tsx" with a default export function component
 - Use modern, clean, responsive design with Tailwind utility classes
@@ -40,9 +43,40 @@ Interactivity:
 - You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext
 - You CAN use event handlers: onClick, onChange, onSubmit, etc.
 - You CAN use conditional rendering, .map(), ternaries — all standard React patterns work
-- Make components interactive and functional where appropriate
+- Make components interactive and functional where appropriate`;
 
-Do NOT include any explanation text outside of ===FILE: ... === blocks`;
+// ---------------------------------------------------------------------------
+// INITIAL prompt — used when no existing project files exist (greenfield build)
+// ---------------------------------------------------------------------------
+const INITIAL_SYSTEM_PROMPT = `You are an expert full-stack developer. The user will describe an app or feature they want built.
+
+${FILE_FORMAT}
+
+${BASE_RULES}`;
+
+// ---------------------------------------------------------------------------
+// UPDATE prompt — used when modifying an existing project
+// ---------------------------------------------------------------------------
+const UPDATE_SYSTEM_PROMPT = `You are an expert full-stack developer maintaining an EXISTING React application. The user has a working app and wants to ADD FEATURES, FIX BUGS, or MAKE CHANGES.
+
+CRITICAL — UPDATING EXISTING CODE:
+1. The user message contains an <existing-project> block with the current codebase. READ AND UNDERSTAND IT FIRST before writing any code.
+2. ONLY output files that NEED TO CHANGE or are NEW. Do NOT regenerate files that remain unchanged. This saves tokens and avoids overwriting working code.
+3. When modifying a file, output the COMPLETE updated file content (not a partial diff or snippet).
+4. MAINTAIN CONSISTENCY with the existing code:
+   - Same naming conventions, variable patterns, and code style
+   - Same Tailwind classes, color scheme, spacing, and design language
+   - Same component structure and state management approach
+5. INTEGRATE with existing features:
+   - If the app has navigation (tabs, sidebar, menu), ADD new items to it — do NOT create separate navigation
+   - If the app has shared state (useState at top level), extend it — do NOT create parallel state
+   - If the app has a data model (arrays, objects), follow the same patterns
+6. PRESERVE all existing functionality — do NOT break or remove features the user did not ask to change.
+7. If adding a new "page" or "view", use the existing navigation/tab/routing pattern to make it accessible.
+
+${FILE_FORMAT}
+
+${BASE_RULES}`;
 
 // Simple in-memory rate limiter: 10 requests per minute per IP
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -91,19 +125,45 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Build context from existing files
-  let context = "";
+  // Build structured context from existing project files
+  let existingProjectBlock = "";
+  let hasExistingProject = false;
+
   if (existingFiles && Array.isArray(existingFiles)) {
-    const fileDescriptions = existingFiles
-      .filter((f: { content?: string }) => f.content)
-      .map(
+    const validFiles = existingFiles.filter(
+      (f: { path?: string; content?: string }) =>
+        f.path && f.content && f.content.trim().length > 0
+    );
+    if (validFiles.length > 0) {
+      // Only switch to update mode if there's real generated content (not placeholder)
+      const hasRealContent = validFiles.some(
         (f: { path: string; content: string }) =>
-          `--- ${f.path} ---\n${f.content}`
-      )
-      .join("\n\n");
-    if (fileDescriptions) {
-      context = `\n\nHere are the existing project files for context:\n${fileDescriptions}\n\nModify or add files as needed based on the user's request.`;
+          f.path === "src/app/page.tsx" &&
+          !f.content.includes("Your generated code will appear here")
+      );
+      if (hasRealContent) {
+        hasExistingProject = true;
+        const fileSummary = validFiles
+          .map((f: { path: string }) => `  - ${f.path}`)
+          .join("\n");
+        const fileContents = validFiles
+          .map(
+            (f: { path: string; content: string }) =>
+              `--- ${f.path} ---\n${f.content}`
+          )
+          .join("\n\n");
+        existingProjectBlock = `<existing-project>\n<file-list>\n${fileSummary}\n</file-list>\n\n<file-contents>\n${fileContents}\n</file-contents>\n</existing-project>`;
+      }
     }
+  }
+
+  // Select system prompt: update mode when modifying existing project, initial for greenfield
+  const systemPrompt = hasExistingProject ? UPDATE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT;
+
+  // Build the user message with structured context for updates
+  function buildUserMessage(userPrompt: string): string {
+    if (!hasExistingProject) return userPrompt;
+    return `${existingProjectBlock}\n\nUser request: ${userPrompt}\n\nRemember: Only output files that need to change or are new. Do not regenerate unchanged files.`;
   }
 
   // Call Anthropic REST API directly (no SDK — smaller bundle, faster cold start)
@@ -121,7 +181,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 8192,
-          system: SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: chatHistory && chatHistory.length > 0
             ? [
                 // Use conversation history for iterative chat
@@ -129,16 +189,16 @@ export async function POST(req: NextRequest) {
                   role: m.role as "user" | "assistant",
                   content: m.content,
                 })),
-                // Append current prompt with file context
+                // Append current prompt with existing project context
                 ...(prompt ? [{
                   role: "user" as const,
-                  content: prompt + context,
+                  content: buildUserMessage(prompt),
                 }] : []),
               ]
             : [
                 {
                   role: "user" as const,
-                  content: prompt + context,
+                  content: buildUserMessage(prompt),
                 },
               ],
           stream: true,
