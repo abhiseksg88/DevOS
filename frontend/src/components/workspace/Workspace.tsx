@@ -11,6 +11,7 @@ import { CodeEditor } from "@/components/editor/CodeEditor";
 import { FileTree } from "@/components/editor/FileTree";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { BuildLog } from "@/components/build/BuildLog";
+import { InfrastructurePanel } from "@/components/infrastructure/InfrastructurePanel";
 import type { ChatMessage, FileNode, BuildEvent } from "@/types";
 import {
   Zap,
@@ -18,12 +19,15 @@ import {
   Code2,
   Eye,
   Terminal,
+  Database,
+  History,
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PublishButton } from "@/components/workspace/PublishButton";
+import { VersionHistory } from "@/components/workspace/VersionHistory";
 
-type RightTab = "code" | "preview" | "console";
+type RightTab = "code" | "preview" | "console" | "infra" | "history";
 
 // Default file tree for new projects
 const defaultFileTree: FileNode[] = [
@@ -42,7 +46,7 @@ const defaultFileTree: FileNode[] = [
             path: "src/app/page.tsx",
             type: "file",
             language: "typescriptreact",
-            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to NimbusForge</h1>\n    </main>\n  );\n}',
+            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to Vedaa.io</h1>\n    </main>\n  );\n}',
           },
           {
             name: "layout.tsx",
@@ -368,10 +372,15 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Switch to console to show progress
       setRightTab("console");
 
-      // Call Claude directly — generate() now returns a result
+      // Build conversation history for iterative chat (previous user+assistant turns)
+      const history = messages
+        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      // Call Claude with full conversation history
       const result = await generator.generate(content, fileTree, (path, fileContent) => {
         addFileToTree(path, fileContent);
-      });
+      }, history.length > 1 ? history.slice(0, -1) : undefined);
 
       // Use the returned result (not stale closure state)
       if (result.error) {
@@ -476,6 +485,8 @@ export function Workspace({ projectId }: { projectId: string }) {
                   { key: "code", icon: Code2, label: "Code" },
                   { key: "preview", icon: Eye, label: "Preview" },
                   { key: "console", icon: Terminal, label: "Console" },
+                  { key: "infra", icon: Database, label: "Infra" },
+                  { key: "history", icon: History, label: "History" },
                 ] as const
               ).map(({ key, icon: Icon, label }) => (
                 <button
@@ -524,7 +535,26 @@ export function Workspace({ projectId }: { projectId: string }) {
               )}
 
               {rightTab === "preview" && (
-                <PreviewPane url={deployedUrl} files={fileTree} />
+                <PreviewPane
+                  url={deployedUrl}
+                  files={fileTree}
+                  onError={(errorMsg) => {
+                    // Auto-suggest fix if not already generating
+                    if (!generator.isGenerating && errorMsg) {
+                      const fixMsg: ChatMessage = {
+                        id: crypto.randomUUID(),
+                        role: "system",
+                        content: `Preview error detected: "${errorMsg}". Click "Fix Error" below or send a new prompt to fix it.`,
+                        timestamp: Date.now(),
+                      };
+                      setMessages((prev) => {
+                        // Avoid duplicate error messages
+                        if (prev.some((m) => m.content === fixMsg.content)) return prev;
+                        return [...prev, fixMsg];
+                      });
+                    }
+                  }}
+                />
               )}
 
               {rightTab === "console" && (
@@ -532,6 +562,24 @@ export function Workspace({ projectId }: { projectId: string }) {
                   events={generationEvents}
                   isStreaming={generator.isGenerating}
                   status={generator.isGenerating ? "coding" : generator.files.length > 0 ? "succeeded" : null}
+                />
+              )}
+
+              {rightTab === "infra" && (
+                <InfrastructurePanel
+                  projectId={projectId}
+                  tenantId={resolvedTenantId}
+                />
+              )}
+
+              {rightTab === "history" && (
+                <VersionHistory
+                  projectId={projectId}
+                  onRestore={(codeFiles) => {
+                    const tree = codeMapToTree(codeFiles);
+                    setFileTree(tree);
+                    setRightTab("code");
+                  }}
                 />
               )}
             </div>

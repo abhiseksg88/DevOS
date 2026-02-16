@@ -26,6 +26,23 @@ interface GenerateState {
  * 2. ```tsx // path/to/file.tsx ... ```
  * 3. // File: path/to/file.tsx ... (next file or end)
  */
+/** Sanitize file path to prevent directory traversal */
+function sanitizePath(path: string): string | null {
+  // Remove null bytes
+  let clean = path.replace(/\0/g, "");
+  // Normalize separators
+  clean = clean.replace(/\\/g, "/");
+  // Remove leading slashes (absolute paths)
+  clean = clean.replace(/^\/+/, "");
+  // Reject paths with .. traversal
+  if (clean.includes("..")) return null;
+  // Reject paths that try to escape (e.g., starting with ~)
+  if (clean.startsWith("~")) return null;
+  // Must be a reasonable file path
+  if (clean.length === 0 || clean.length > 500) return null;
+  return clean;
+}
+
 function parseFiles(text: string): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
@@ -33,7 +50,8 @@ function parseFiles(text: string): GeneratedFile[] {
   const delimiterRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
-    files.push({ path: match[1].trim(), content: match[2].trimEnd() });
+    const safePath = sanitizePath(match[1].trim());
+    if (safePath) files.push({ path: safePath, content: match[2].trimEnd() });
   }
   if (files.length > 0) return files;
 
@@ -42,8 +60,9 @@ function parseFiles(text: string): GeneratedFile[] {
   while ((match = codeBlockRegex.exec(text)) !== null) {
     const path = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
     // Only accept paths that look like file paths
-    if (path.includes("/") || path.includes(".")) {
-      files.push({ path, content: match[2].trimEnd() });
+    const safePath = sanitizePath(path);
+    if (safePath && (safePath.includes("/") || safePath.includes("."))) {
+      files.push({ path: safePath, content: match[2].trimEnd() });
     }
   }
   if (files.length > 0) return files;
@@ -61,7 +80,8 @@ function parseFiles(text: string): GeneratedFile[] {
     const codeMatch = section.match(/```\w*\n([\s\S]*?)```/);
     if (!codeMatch) continue;
 
-    files.push({ path: pathMatch[2].trim(), content: codeMatch[1].trimEnd() });
+    const safePath = sanitizePath(pathMatch[2].trim());
+    if (safePath) files.push({ path: safePath, content: codeMatch[1].trimEnd() });
   }
 
   return files;
@@ -94,7 +114,8 @@ export function useGenerate() {
     async (
       prompt: string,
       existingFiles: FileNode[],
-      onFileGenerated: (path: string, content: string) => void
+      onFileGenerated: (path: string, content: string) => void,
+      chatHistory?: Array<{ role: string; content: string }>
     ): Promise<GenerateResult> => {
       // Cancel any ongoing generation
       abortRef.current?.abort();
@@ -110,6 +131,7 @@ export function useGenerate() {
           body: JSON.stringify({
             prompt,
             existingFiles: flattenForContext(existingFiles),
+            messages: chatHistory,
           }),
           signal: controller.signal,
         });

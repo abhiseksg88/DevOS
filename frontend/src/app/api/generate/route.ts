@@ -44,11 +44,37 @@ Interactivity:
 
 Do NOT include any explanation text outside of ===FILE: ... === blocks`;
 
-export async function POST(req: NextRequest) {
-  const { prompt, existingFiles } = await req.json();
+// Simple in-memory rate limiter: 10 requests per minute per IP
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = 10;
+const RATE_WINDOW = 60_000; // 1 minute
 
-  if (!prompt || typeof prompt !== "string") {
-    return new Response(JSON.stringify({ error: "prompt is required" }), {
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT) return false;
+  entry.count++;
+  return true;
+}
+
+export async function POST(req: NextRequest) {
+  // Rate limiting
+  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  if (!checkRateLimit(clientIp)) {
+    return new Response(
+      JSON.stringify({ error: "Rate limit exceeded. Please wait a moment before trying again." }),
+      { status: 429, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  const { prompt, existingFiles, messages: chatHistory } = await req.json();
+
+  if ((!prompt || typeof prompt !== "string") && (!chatHistory || !Array.isArray(chatHistory))) {
+    return new Response(JSON.stringify({ error: "prompt or messages is required" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -96,12 +122,25 @@ export async function POST(req: NextRequest) {
           model: "claude-sonnet-4-20250514",
           max_tokens: 8192,
           system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: prompt + context,
-            },
-          ],
+          messages: chatHistory && chatHistory.length > 0
+            ? [
+                // Use conversation history for iterative chat
+                ...chatHistory.map((m: { role: string; content: string }) => ({
+                  role: m.role as "user" | "assistant",
+                  content: m.content,
+                })),
+                // Append current prompt with file context
+                ...(prompt ? [{
+                  role: "user" as const,
+                  content: prompt + context,
+                }] : []),
+              ]
+            : [
+                {
+                  role: "user" as const,
+                  content: prompt + context,
+                },
+              ],
           stream: true,
         }),
       }

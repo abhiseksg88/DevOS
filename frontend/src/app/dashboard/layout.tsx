@@ -37,7 +37,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
             <Zap className="w-4 h-4 text-white" />
           </div>
-          <span className="text-lg font-semibold gradient-text">NimbusForge</span>
+          <span className="text-lg font-semibold gradient-text">Vedaa.io</span>
         </div>
 
         <div className="flex items-center gap-2">

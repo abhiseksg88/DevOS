@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildDeployDocument } from "@/components/preview/PreviewPane";
-import * as api from "@/lib/api";
 import type { FileNode, Project } from "@/types";
 
 type PublishState =
@@ -36,16 +35,6 @@ interface PublishButtonProps {
   onPublished?: (url: string) => void;
 }
 
-const STEP_LABELS: Record<PublishState, string> = {
-  idle: "",
-  generating: "Generating deployment...",
-  uploading: "Uploading to Netlify...",
-  deploying: "Deploying...",
-  polling: "Almost ready...",
-  success: "Published!",
-  error: "Failed",
-};
-
 export function PublishButton({
   project,
   tenantId,
@@ -61,7 +50,6 @@ export function PublishButton({
   const [showPanel, setShowPanel] = useState(false);
   const [copied, setCopied] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const retryCountRef = useRef(0);
 
   // Sync deployed URL from project
   useEffect(() => {
@@ -86,17 +74,15 @@ export function PublishButton({
 
   const pollStatus = useCallback(
     (deployId: string) => {
-      if (!project) return;
       setState("polling");
 
       pollRef.current = setInterval(async () => {
         try {
-          const status = await api.publish.status(
-            token,
-            tenantId,
-            project.id,
-            deployId,
+          const res = await fetch(
+            `/api/publish-status?deploy_id=${encodeURIComponent(deployId)}`
           );
+          if (!res.ok) throw new Error("Status check failed");
+          const status = await res.json();
 
           if (status.state === "ready") {
             stopPolling();
@@ -116,7 +102,7 @@ export function PublishButton({
         }
       }, 2000);
     },
-    [project, token, tenantId, stopPolling, onPublished],
+    [stopPolling, onPublished],
   );
 
   const handlePublish = useCallback(async () => {
@@ -124,75 +110,76 @@ export function PublishButton({
 
     setError(null);
     setShowPanel(true);
-    retryCountRef.current = 0;
 
-    const doPublish = async (): Promise<void> => {
+    try {
+      // Step 1: Generate deployment HTML
+      setState("generating");
+      await new Promise((r) => setTimeout(r, 300)); // Brief visual feedback
+
+      // Fetch Supabase credentials for embedding
+      let supabaseUrl = "";
+      let supabaseAnonKey = "";
       try {
-        // Step 1: Generate deployment HTML
-        setState("generating");
-        await new Promise((r) => setTimeout(r, 300)); // Brief visual feedback
-
-        // Fetch Supabase credentials for embedding
-        let supabaseUrl = "";
-        let supabaseAnonKey = "";
-        try {
-          const response = await fetch("/api/preview-credentials");
-          if (response.ok) {
-            const creds = await response.json();
-            supabaseUrl = creds.url || "";
-            supabaseAnonKey = creds.anonKey || "";
-          }
-        } catch {
-          // Continue without Supabase credentials
+        const response = await fetch("/api/preview-credentials");
+        if (response.ok) {
+          const creds = await response.json();
+          supabaseUrl = creds.url || "";
+          supabaseAnonKey = creds.anonKey || "";
         }
-
-        const html = buildDeployDocument(
-          fileTree,
-          supabaseUrl,
-          supabaseAnonKey,
-          project.name,
-        );
-
-        // Step 2: Upload to backend
-        setState("uploading");
-        const result = await api.publish.deploy(
-          token,
-          tenantId,
-          project.id,
-          html,
-        );
-
-        // Step 3: Check result
-        if (result.status === "ready") {
-          setState("success");
-          setDeployedUrl(result.url);
-          onPublished?.(result.url);
-        } else {
-          // Still deploying — start polling
-          setState("deploying");
-          pollStatus(result.deploy_id);
-        }
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Publish failed";
-
-        // Auto-retry up to 3 times
-        if (retryCountRef.current < 3) {
-          retryCountRef.current += 1;
-          setState("uploading");
-          setError(`Retrying (${retryCountRef.current}/3)...`);
-          await new Promise((r) =>
-            setTimeout(r, 2000 * retryCountRef.current),
-          );
-          return doPublish();
-        }
-
-        setState("error");
-        setError(message);
+      } catch {
+        // Continue without Supabase credentials
       }
-    };
 
-    await doPublish();
+      const html = buildDeployDocument(
+        fileTree,
+        supabaseUrl,
+        supabaseAnonKey,
+        project.name,
+      );
+
+      // Step 2: Upload to Netlify via our API route
+      setState("uploading");
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          html,
+          projectId: project.id,
+          projectSlug: project.slug,
+          projectName: project.name,
+          tenantId,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || err.detail || `Publish failed (${res.status})`);
+      }
+
+      const result = await res.json();
+
+      // Step 3: Check result
+      if (result.status === "ready") {
+        setState("success");
+        const url = result.custom_domain
+          ? `https://${result.custom_domain}`
+          : result.url;
+        setDeployedUrl(url);
+        onPublished?.(url);
+      } else {
+        // Still deploying — start polling
+        setState("deploying");
+        pollStatus(result.deploy_id);
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Publish failed";
+      setState("error");
+      setError(message);
+    }
   }, [project, token, tenantId, fileTree, onPublished, pollStatus]);
 
   const handleCopy = useCallback(() => {
@@ -271,7 +258,7 @@ export function PublishButton({
             <div className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-brand-400" />
               <span className="text-sm font-medium text-white">
-                Netlify Deploy
+                Deploy
               </span>
             </div>
             <button
@@ -341,7 +328,7 @@ export function PublishButton({
                 {/* Show custom domain if available */}
                 {project?.custom_domain && (
                   <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5 border border-emerald-500/20">
-                    🌐 Live at:{" "}
+                    Live at:{" "}
                     <span className="font-mono font-semibold">
                       {project.custom_domain}
                     </span>

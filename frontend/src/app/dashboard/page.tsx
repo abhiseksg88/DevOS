@@ -98,7 +98,7 @@ export default function DashboardPage() {
         <div className="w-20 h-20 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-6 glow-brand">
           <Zap className="w-10 h-10 text-brand-400" />
         </div>
-        <h1 className="text-3xl font-bold text-white mb-3">Welcome to NimbusForge</h1>
+        <h1 className="text-3xl font-bold text-white mb-3">Welcome to Vedaa.io</h1>
         <p className="text-slate-400 text-center max-w-md mb-8">
           Create your first organization to start building AI-powered applications.
         </p>

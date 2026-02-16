@@ -28,6 +28,7 @@ const VIEWPORTS: Record<
 interface PreviewPaneProps {
   url: string | null;
   files?: FileNode[];
+  onError?: (errorMessage: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,10 +426,10 @@ export function buildDeployDocument(
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>${safeTitle} \u2014 Built with DevOS</title>
-<meta name="description" content="${safeTitle} \u2014 Built and deployed with DevOS, the AI-powered no-code platform."/>
+<title>${safeTitle} \u2014 Built with Vedaa.io</title>
+<meta name="description" content="${safeTitle} \u2014 Built and deployed with Vedaa.io, the autonomous agentic development platform."/>
 <meta property="og:title" content="${safeTitle}"/>
-<meta property="og:description" content="Built and deployed with DevOS"/>
+<meta property="og:description" content="Built and deployed with Vedaa.io"/>
 
 <script>
 window.__errs=[];
@@ -568,7 +569,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -585,10 +586,9 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (e.data?.type === "PREVIEW_ERROR") {
-        setPreviewErrors((prev) => [
-          ...prev.slice(-19),
-          e.data.payload?.message || "Unknown error",
-        ]);
+        const errorMsg = e.data.payload?.message || "Unknown error";
+        setPreviewErrors((prev) => [...prev.slice(-19), errorMsg]);
+        onError?.(errorMsg);
       }
     }
     window.addEventListener("message", onMsg);
@@ -598,13 +598,13 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
   // Handle Supabase credential requests from preview iframe
   useEffect(() => {
     async function handleCredentialRequest(e: MessageEvent) {
+      // Security: only respond to messages from same origin or blob/srcdoc iframes
+      if (e.origin !== window.location.origin && e.origin !== "null" && e.origin !== "") {
+        return;
+      }
+
       if (e.data?.type === "REQUEST_SUPABASE_CREDENTIALS") {
         try {
-          // Fetch credentials from backend
-          const { preview } = await import("@/lib/api");
-          const token = ""; // TODO: Get auth token from session/context
-
-          // For now, fetch without auth (endpoint should be public or we need to integrate auth)
           const response = await fetch("/api/preview-credentials");
           if (!response.ok) {
             console.error("[PreviewPane] Failed to fetch credentials:", response.statusText);
@@ -613,8 +613,9 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
 
           const credentials = await response.json();
 
-          // Send credentials to iframe
+          // Send credentials only to our own iframes, using specific origin
           const iframes = document.getElementsByTagName("iframe");
+          const targetOrigin = window.location.origin;
           for (let i = 0; i < iframes.length; i++) {
             try {
               iframes[i].contentWindow?.postMessage(
@@ -623,10 +624,22 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
                   url: credentials.url,
                   anonKey: credentials.anonKey,
                 },
-                "*"
+                targetOrigin
               );
-            } catch (err) {
-              console.error("[PreviewPane] Failed to send credentials to iframe:", err);
+            } catch {
+              // srcdoc iframes have null origin, retry with *
+              try {
+                iframes[i].contentWindow?.postMessage(
+                  {
+                    type: "SUPABASE_INIT",
+                    url: credentials.url,
+                    anonKey: credentials.anonKey,
+                  },
+                  "*"
+                );
+              } catch {
+                // silently ignore
+              }
             }
           }
         } catch (error) {
