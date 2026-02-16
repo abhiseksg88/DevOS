@@ -10,6 +10,7 @@ import {
   Globe,
   Play,
   AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FileNode } from "@/types";
@@ -30,6 +31,8 @@ interface PreviewPaneProps {
   files?: FileNode[];
   /** Called when the preview iframe reports a runtime error */
   onError?: (message: string) => void;
+  /** Whether a new generation is in progress — shows overlay on preview */
+  isGenerating?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -574,7 +577,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError, isGenerating }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -747,7 +750,7 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
       </div>
 
       {/* iframe */}
-      <div className="flex-1 flex items-start justify-center p-4 bg-surface-2/30 overflow-auto">
+      <div className="flex-1 relative flex items-start justify-center p-4 bg-surface-2/30 overflow-auto">
         <div
           className="bg-white rounded-lg shadow-2xl overflow-hidden transition-all duration-300 h-full"
           style={{ width: VIEWPORTS[viewport].width, maxWidth: "100%" }}
@@ -770,6 +773,21 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
             />
           )}
         </div>
+
+        {/* Generating overlay — dims old preview while new code is being generated */}
+        {isGenerating && (
+          <div className="absolute inset-0 bg-surface-0/80 backdrop-blur-sm flex flex-col items-center justify-center z-10 animate-fade-in">
+            <div className="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-4">
+              <Loader2 className="w-6 h-6 text-brand-400 animate-spin" />
+            </div>
+            <p className="text-sm text-slate-400 font-medium">Generating new preview...</p>
+            <div className="mt-3 flex gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot" />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.2s]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.4s]" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

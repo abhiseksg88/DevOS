@@ -660,7 +660,7 @@ export function Workspace({ projectId }: { projectId: string }) {
               )}
 
               {rightTab === "preview" && (
-                <PreviewPane url={deployedUrl} files={fileTree} onError={handlePreviewError} />
+                <PreviewPane url={deployedUrl} files={fileTree} onError={handlePreviewError} isGenerating={generator.isGenerating} />
               )}
 
               {rightTab === "console" && (
