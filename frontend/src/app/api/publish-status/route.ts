@@ -12,9 +12,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "deploy_id is required" }, { status: 400 });
   }
 
-  const netlifyToken = process.env.NETLIFY_TOKEN;
+  const netlifyToken = process.env.NF_TOKEN;
   if (!netlifyToken) {
-    return NextResponse.json({ error: "NETLIFY_TOKEN not configured" }, { status: 503 });
+    return NextResponse.json({ error: "NF_TOKEN not configured" }, { status: 503 });
   }
 
   try {

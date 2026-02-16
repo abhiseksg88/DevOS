@@ -43,17 +43,17 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Env vars ---
-  const netlifyToken = process.env.NETLIFY_TOKEN;
+  const netlifyToken = process.env.NF_TOKEN;
   if (!netlifyToken) {
     return NextResponse.json(
-      { error: "NETLIFY_TOKEN is not configured. Add it to your Netlify environment variables." },
+      { error: "NF_TOKEN is not configured. Add it to your Netlify environment variables." },
       { status: 503 }
     );
   }
 
-  const teamSlug = process.env.NETLIFY_TEAM_SLUG || "devos";
-  const sitePrefix = process.env.NETLIFY_SITE_PREFIX || "devos";
-  const customDomainBase = process.env.NETLIFY_CUSTOM_DOMAIN || "";
+  const teamSlug = process.env.NF_TEAM_SLUG || "devos";
+  const sitePrefix = process.env.NF_SITE_PREFIX || "devos";
+  const customDomainBase = process.env.NF_CUSTOM_DOMAIN || "";
 
   // --- Supabase client (using user's token for RLS) ---
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
