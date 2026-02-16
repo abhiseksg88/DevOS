@@ -234,6 +234,7 @@ export function useGenerate() {
         let fullText = "";
         let lastParsedCount = 0;
         let buffer = "";
+        let wasTruncated = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -283,6 +284,8 @@ export function useGenerate() {
                   lastParsedCount = parsed.length;
                   setState((prev) => ({ ...prev, files: parsed }));
                 }
+              } else if (event.type === "warning" && event.warning === "truncated") {
+                wasTruncated = true;
               } else if (event.type === "error") {
                 const errMsg = event.error || "Generation error";
                 setState((prev) => ({ ...prev, error: errMsg }));
@@ -344,11 +347,17 @@ export function useGenerate() {
               error: "No response received from the AI. Please check that your ANTHROPIC_API_KEY is set correctly in Netlify environment variables (Site settings → Environment variables).",
             };
           }
+          if (wasTruncated) {
+            return {
+              files: [],
+              error: "The AI's response was truncated (hit the output token limit). It tried to rewrite an entire file instead of using targeted edits. Try a more specific prompt like \"change the header color to blue\" instead of \"redesign the header\".",
+            };
+          }
           // Claude responded with text but no parseable file blocks
           const snippet = fullText.slice(0, 300).replace(/\n/g, " ");
           return {
             files: [],
-            error: `Code generation returned text but no files could be parsed. The response may have been truncated. Raw output: "${snippet}..."`,
+            error: `Code generation returned text but no files could be parsed. Raw output: "${snippet}..."`,
           };
         }
 
