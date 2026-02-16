@@ -82,8 +82,8 @@ function applyEdits(original: string, edits: { search: string; replace: string }
 function parseFiles(text: string): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
-  // Format 1: ===FILE: path=== ... ===END_FILE===
-  const delimiterRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
+  // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
+  const delimiterRegex = /===FILE:\s*(.+?)===\r?\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1]);
@@ -93,7 +93,7 @@ function parseFiles(text: string): GeneratedFile[] {
   // Format 2: ===EDIT: path=== with SEARCH/REPLACE blocks
   // These are parsed but converted to full files by applying edits
   // (the actual application happens in the caller since we need existing content)
-  const editRegex = /===EDIT:\s*(.+?)===\n([\s\S]*?)===END_EDIT===/g;
+  const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
   while ((match = editRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1]);
     if (!safePath) continue;
@@ -323,6 +323,22 @@ export function useGenerate() {
           files: finalFiles,
           streamedText: fullText,
         }));
+
+        // Detect empty or truncated responses
+        if (finalFiles.length === 0) {
+          if (!fullText || fullText.trim().length === 0) {
+            return {
+              files: [],
+              error: "No response received from the AI. Please check that your ANTHROPIC_API_KEY is set correctly in Netlify environment variables (Site settings → Environment variables).",
+            };
+          }
+          // Claude responded with text but no parseable file blocks
+          const snippet = fullText.slice(0, 300).replace(/\n/g, " ");
+          return {
+            files: [],
+            error: `Code generation returned text but no files could be parsed. The response may have been truncated. Raw output: "${snippet}..."`,
+          };
+        }
 
         return { files: finalFiles, error: null };
       } catch (err) {
