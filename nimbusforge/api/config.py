@@ -53,8 +53,8 @@ class Settings(BaseSettings):
 
     # --- Netlify (One-Click Publish) ---
     netlify_token: str = ""              # Personal access token
-    netlify_team_slug: str = "devos"     # Team slug on Netlify
-    netlify_site_prefix: str = "devos"   # Prefix for site names (devos-{slug})
+    netlify_team_slug: str = "vedaa"     # Team slug on Netlify
+    netlify_site_prefix: str = "vedaa"   # Prefix for site names (vedaa-{slug})
     netlify_custom_domain: str = ""      # Base domain for user apps (e.g., "vedaa.io")
 
     # --- Plan Cache ---

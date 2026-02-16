@@ -47,6 +47,11 @@ from .models import (
     BuildStatus,
     DeploymentCreate,
     DeploymentResponse,
+    IntegrationCreate,
+    IntegrationResponse,
+    IntegrationStatus,
+    IntegrationTestResult,
+    IntegrationUpdate,
     MemberInvite,
     MemberResponse,
     ProjectCreate,
@@ -153,6 +158,43 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "vedaa-api"}
+
+
+@app.get("/health/publish")
+async def health_publish(settings: Settings = Depends(get_settings)):
+    """
+    Pre-flight check for publish readiness.
+    Returns which services are configured and reachable.
+    Called by frontend before attempting to publish.
+    """
+    checks: dict = {
+        "netlify_configured": bool(settings.netlify_token),
+        "netlify_team": settings.netlify_team_slug or None,
+        "custom_domain": settings.netlify_custom_domain or None,
+        "supabase_configured": bool(settings.supabase_url and settings.supabase_anon_key),
+    }
+
+    # If Netlify token exists, validate it with a lightweight API call
+    if settings.netlify_token:
+        try:
+            import httpx
+            resp = httpx.get(
+                "https://api.netlify.com/api/v1/user",
+                headers={"Authorization": f"Bearer {settings.netlify_token}"},
+                timeout=5,
+            )
+            checks["netlify_reachable"] = resp.status_code == 200
+            if resp.status_code == 401:
+                checks["netlify_error"] = "Invalid token"
+        except Exception:
+            checks["netlify_reachable"] = False
+            checks["netlify_error"] = "Network error"
+    else:
+        checks["netlify_reachable"] = False
+        checks["netlify_error"] = "NETLIFY_TOKEN not set"
+
+    checks["ready"] = checks["netlify_configured"] and checks["netlify_reachable"]
+    return checks
 
 
 @app.get("/debug/db")
@@ -1084,3 +1126,562 @@ async def get_usage(
         total_cost_usd=total_cost,
         by_model=by_model,
     )
+
+
+# ===========================================================================
+# PROJECT INTEGRATIONS — Connectors & Secrets Vault
+# ===========================================================================
+
+def _mask_credentials(creds: dict) -> dict:
+    """
+    Strip raw secrets from credentials — return only hints for display.
+    Input: {"api_key": "sk-abc123xyz789"}
+    Output: {"api_key": {"hint": "sk-...x789", "name": "api_key", "is_set": true}}
+    """
+    masked: dict = {}
+    for key, value in creds.items():
+        if isinstance(value, dict) and "hint" in value:
+            # Already masked (from DB)
+            masked[key] = value
+        elif isinstance(value, str) and len(value) > 4:
+            prefix = value[:3] if len(value) > 8 else value[:2]
+            suffix = value[-4:]
+            masked[key] = {
+                "hint": f"{prefix}...{suffix}",
+                "name": key,
+                "is_set": True,
+            }
+        elif isinstance(value, str):
+            masked[key] = {"hint": "****", "name": key, "is_set": bool(value)}
+        else:
+            masked[key] = {"hint": str(value), "name": key, "is_set": bool(value)}
+    return masked
+
+
+def _store_credentials(existing_creds: dict, new_creds: dict) -> dict:
+    """
+    Merge new credentials with existing ones.
+    Stores the raw value (backend only — Supabase RLS keeps it safe)
+    plus a hint for display.
+    """
+    merged = dict(existing_creds)
+    for key, value in new_creds.items():
+        if isinstance(value, str) and value.strip():
+            prefix = value[:3] if len(value) > 8 else value[:2]
+            suffix = value[-4:]
+            merged[key] = {
+                "value": value,
+                "hint": f"{prefix}...{suffix}",
+                "name": key,
+                "is_set": True,
+            }
+        elif isinstance(value, str) and not value.strip():
+            # Empty string = user wants to clear this key
+            merged.pop(key, None)
+    return merged
+
+
+def _get_raw_credentials(creds: dict) -> dict[str, str]:
+    """Extract raw credential values for use (e.g., API calls, code injection)."""
+    raw: dict[str, str] = {}
+    for key, value in creds.items():
+        if isinstance(value, dict) and "value" in value:
+            raw[key] = value["value"]
+        elif isinstance(value, str):
+            raw[key] = value
+    return raw
+
+
+@app.get(
+    "/tenants/{tenant_id}/projects/{project_id}/integrations",
+    response_model=list[IntegrationResponse],
+)
+async def list_integrations(
+    tenant_id: UUID,
+    project_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+):
+    """List all integrations for a project (credentials are masked)."""
+    user.assert_tenant_access(tenant_id)
+    result = (
+        db.table("project_integrations")
+        .select("*")
+        .eq("project_id", str(project_id))
+        .eq("tenant_id", str(tenant_id))
+        .order("created_at")
+        .execute()
+    )
+    # Mask credentials before returning
+    for row in result.data:
+        row["credentials"] = _mask_credentials(row.get("credentials", {}))
+    return result.data
+
+
+@app.post(
+    "/tenants/{tenant_id}/projects/{project_id}/integrations",
+    response_model=IntegrationResponse,
+    status_code=201,
+)
+async def create_integration(
+    tenant_id: UUID,
+    project_id: UUID,
+    body: IntegrationCreate,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+):
+    """Add a new integration connector to a project."""
+    user.assert_tenant_access(tenant_id)
+
+    # Store credentials with hints
+    stored_creds = _store_credentials({}, body.credentials)
+
+    integration_id = str(uuid4())
+    try:
+        db.table("project_integrations").insert({
+            "id": integration_id,
+            "tenant_id": str(tenant_id),
+            "project_id": str(project_id),
+            "provider": body.provider,
+            "category": body.category.value,
+            "display_name": body.display_name,
+            "status": "active" if stored_creds else "inactive",
+            "credentials": stored_creds,
+            "config": body.config,
+        }).execute()
+    except Exception as e:
+        if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Integration '{body.provider}' already exists for this project",
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to create integration: {e}")
+
+    result = (
+        db.table("project_integrations")
+        .select("*")
+        .eq("id", integration_id)
+        .single()
+        .execute()
+    )
+    result.data["credentials"] = _mask_credentials(result.data.get("credentials", {}))
+    return result.data
+
+
+@app.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/integrations/{integration_id}",
+    response_model=IntegrationResponse,
+)
+async def update_integration(
+    tenant_id: UUID,
+    project_id: UUID,
+    integration_id: UUID,
+    body: IntegrationUpdate,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+):
+    """Update an integration's credentials, config, or status."""
+    user.assert_tenant_access(tenant_id)
+
+    # Fetch existing
+    existing = (
+        db.table("project_integrations")
+        .select("*")
+        .eq("id", str(integration_id))
+        .eq("tenant_id", str(tenant_id))
+        .single()
+        .execute()
+    )
+
+    updates: dict = {}
+    if body.display_name is not None:
+        updates["display_name"] = body.display_name
+    if body.status is not None:
+        updates["status"] = body.status.value
+    if body.config is not None:
+        updates["config"] = body.config
+    if body.credentials is not None:
+        updates["credentials"] = _store_credentials(
+            existing.data.get("credentials", {}),
+            body.credentials,
+        )
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    db.table("project_integrations").update(updates).eq(
+        "id", str(integration_id)
+    ).eq("tenant_id", str(tenant_id)).execute()
+
+    result = (
+        db.table("project_integrations")
+        .select("*")
+        .eq("id", str(integration_id))
+        .single()
+        .execute()
+    )
+    result.data["credentials"] = _mask_credentials(result.data.get("credentials", {}))
+    return result.data
+
+
+@app.delete(
+    "/tenants/{tenant_id}/projects/{project_id}/integrations/{integration_id}",
+    status_code=204,
+)
+async def delete_integration(
+    tenant_id: UUID,
+    project_id: UUID,
+    integration_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+):
+    """Remove an integration from a project."""
+    user.assert_tenant_access(tenant_id)
+    db.table("project_integrations").delete().eq(
+        "id", str(integration_id)
+    ).eq("tenant_id", str(tenant_id)).execute()
+    return None
+
+
+@app.post(
+    "/tenants/{tenant_id}/projects/{project_id}/integrations/{integration_id}/test",
+    response_model=IntegrationTestResult,
+)
+async def test_integration(
+    tenant_id: UUID,
+    project_id: UUID,
+    integration_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+):
+    """
+    Test an integration's connectivity.
+    Makes a lightweight API call to verify the credentials are valid.
+    """
+    user.assert_tenant_access(tenant_id)
+
+    row = (
+        db.table("project_integrations")
+        .select("*")
+        .eq("id", str(integration_id))
+        .eq("tenant_id", str(tenant_id))
+        .single()
+        .execute()
+    )
+
+    provider = row.data["provider"]
+    creds = _get_raw_credentials(row.data.get("credentials", {}))
+    start_time = time.time()
+    ok = False
+    message = ""
+
+    try:
+        import httpx
+
+        if provider == "openai":
+            api_key = creds.get("api_key", "")
+            if not api_key:
+                message = "API key not set"
+            else:
+                resp = httpx.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10,
+                )
+                ok = resp.status_code == 200
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        elif provider == "anthropic":
+            api_key = creds.get("api_key", "")
+            if not api_key:
+                message = "API key not set"
+            else:
+                resp = httpx.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    timeout=10,
+                )
+                ok = resp.status_code == 200
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        elif provider == "google_ai":
+            api_key = creds.get("api_key", "")
+            if not api_key:
+                message = "API key not set"
+            else:
+                resp = httpx.get(
+                    f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+                    timeout=10,
+                )
+                ok = resp.status_code == 200
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        elif provider == "stripe":
+            secret_key = creds.get("secret_key", "")
+            if not secret_key:
+                message = "Secret key not set"
+            else:
+                resp = httpx.get(
+                    "https://api.stripe.com/v1/balance",
+                    auth=("", secret_key),
+                    timeout=10,
+                )
+                ok = resp.status_code == 200
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        elif provider == "resend":
+            api_key = creds.get("api_key", "")
+            if not api_key:
+                message = "API key not set"
+            else:
+                resp = httpx.get(
+                    "https://api.resend.com/domains",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10,
+                )
+                ok = resp.status_code == 200
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        elif provider == "supabase":
+            url = creds.get("url", "")
+            anon_key = creds.get("anon_key", "")
+            if not url or not anon_key:
+                message = "URL or anon key not set"
+            else:
+                resp = httpx.get(
+                    f"{url}/rest/v1/",
+                    headers={"apikey": anon_key},
+                    timeout=10,
+                )
+                ok = resp.status_code in (200, 404)  # 404 = no tables, but connected
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        elif provider == "clerk":
+            secret_key = creds.get("secret_key", "")
+            if not secret_key:
+                message = "Secret key not set"
+            else:
+                resp = httpx.get(
+                    "https://api.clerk.com/v1/users?limit=1",
+                    headers={"Authorization": f"Bearer {secret_key}"},
+                    timeout=10,
+                )
+                ok = resp.status_code == 200
+                message = "Connected" if ok else f"HTTP {resp.status_code}"
+
+        else:
+            # Generic — just check if any credential is set
+            ok = len(creds) > 0
+            message = "Credentials configured" if ok else "No credentials set"
+
+    except Exception as e:
+        message = f"Connection failed: {str(e)[:100]}"
+
+    latency = round((time.time() - start_time) * 1000)
+
+    # Update the integration record
+    db.table("project_integrations").update({
+        "last_tested_at": datetime.now(timezone.utc).isoformat(),
+        "last_test_ok": ok,
+        "last_error": None if ok else message,
+        "status": "active" if ok else "error",
+    }).eq("id", str(integration_id)).execute()
+
+    return IntegrationTestResult(ok=ok, message=message, latency_ms=latency)
+
+
+@app.get(
+    "/tenants/{tenant_id}/projects/{project_id}/integrations/context",
+)
+async def get_integration_context(
+    tenant_id: UUID,
+    project_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+):
+    """
+    Return a prompt-ready context string describing available integrations.
+    Used by the code generation pipeline to know what APIs/SDKs the user has access to.
+    """
+    user.assert_tenant_access(tenant_id)
+    result = (
+        db.table("project_integrations")
+        .select("*")
+        .eq("project_id", str(project_id))
+        .eq("tenant_id", str(tenant_id))
+        .eq("status", "active")
+        .execute()
+    )
+
+    if not result.data:
+        return {"context": "", "integrations": []}
+
+    lines = ["## Available Integrations\nThe user has configured these services. Generate code that USES them:\n"]
+
+    summaries = []
+    for row in result.data:
+        provider = row["provider"]
+        category = row["category"]
+        config = row.get("config", {})
+        creds = row.get("credentials", {})
+        has_key = any(
+            (isinstance(v, dict) and v.get("is_set")) or (isinstance(v, str) and v)
+            for v in creds.values()
+        )
+
+        summary = {"provider": provider, "category": category, "has_credentials": has_key}
+
+        if provider == "openai":
+            model = config.get("model", "gpt-4o")
+            lines.append(f"- **OpenAI** ({model}): API key is configured. Use `fetch('https://api.openai.com/v1/chat/completions', ...)` with the key from `window.__integrations?.openai?.api_key`. Import is NOT needed — use fetch directly.")
+            summary["model"] = model
+
+        elif provider == "anthropic":
+            lines.append("- **Anthropic Claude**: API key is configured. Use `fetch('https://api.anthropic.com/v1/messages', ...)` with `x-api-key` header from `window.__integrations?.anthropic?.api_key`.")
+
+        elif provider == "google_ai":
+            lines.append("- **Google AI (Gemini)**: API key is configured. Use `fetch('https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=...')` with key from `window.__integrations?.google_ai?.api_key`.")
+
+        elif provider == "stripe":
+            pub_key = config.get("publishable_key", "")
+            lines.append(f"- **Stripe Payments**: Keys configured. Load Stripe.js via `<script src='https://js.stripe.com/v3/'></script>` and init with publishable key from `window.__integrations?.stripe?.publishable_key`. NEVER expose the secret key in frontend code.")
+            summary["has_publishable_key"] = bool(pub_key)
+
+        elif provider == "resend":
+            lines.append("- **Resend Email**: API key configured. Email sending requires a backend proxy — generate a `sendEmail()` function that calls the Vedaa backend (or shows a mock for preview).")
+
+        elif provider == "supabase":
+            lines.append("- **Supabase (Custom)**: User's own Supabase instance. URL and anon key available at `window.__integrations?.supabase`. Use `supabase.createClient(url, key)` for auth and database.")
+
+        elif provider == "clerk":
+            lines.append("- **Clerk Auth**: Publishable key configured. Add `<script src='https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js'></script>` and init with `window.__integrations?.clerk?.publishable_key`.")
+
+        elif provider == "firebase":
+            lines.append("- **Firebase**: Config object available at `window.__integrations?.firebase`. Load Firebase SDK from CDN and init with the config.")
+
+        else:
+            lines.append(f"- **{row['display_name']}** ({category}): Configured. Access credentials via `window.__integrations?.{provider}`.")
+
+        summaries.append(summary)
+
+    context = "\n".join(lines)
+    return {"context": context, "integrations": summaries}
+
+
+# ===========================================================================
+# Neural Nexus — Brain State API
+# ===========================================================================
+
+@app.get("/tenants/{tenant_id}/projects/{project_id}/nexus")
+async def get_nexus_state(
+    tenant_id: str,
+    project_id: str,
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Get the full Neural Nexus state for the dashboard."""
+    from ..nexus.engine import NexusEngine
+    nexus = NexusEngine(settings)
+    return nexus.get_full_state(tenant_id, project_id, user.id)
+
+
+@app.get("/tenants/{tenant_id}/projects/{project_id}/nexus/persona")
+async def get_persona(
+    tenant_id: str,
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Get user persona."""
+    from ..nexus.engine import NexusEngine
+    nexus = NexusEngine(settings)
+    persona = nexus._get_or_create_persona(tenant_id, user.id)
+    return {
+        "preferences": persona.get("preferences", {}),
+        "expertise": persona.get("expertise", {}),
+        "history": persona.get("history", [])[-10:],
+        "stats": {
+            "total_prompts": persona.get("total_prompts", 0),
+            "total_accepted": persona.get("total_accepted", 0),
+            "total_rejected": persona.get("total_rejected", 0),
+            "acceptance_rate": float(persona.get("acceptance_rate", 0)),
+        },
+    }
+
+
+@app.patch("/tenants/{tenant_id}/projects/{project_id}/nexus/persona")
+async def update_persona(
+    tenant_id: str,
+    data: dict,
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Update user persona preferences or expertise."""
+    from ..nexus.engine import NexusEngine
+    nexus = NexusEngine(settings)
+
+    if "preferences" in data:
+        for key, value in data["preferences"].items():
+            nexus.update_persona_preference(tenant_id, user.id, key, value)
+
+    if "expertise" in data:
+        for domain, level in data["expertise"].items():
+            nexus.update_persona_expertise(tenant_id, user.id, domain, level)
+
+    return {"status": "updated"}
+
+
+@app.post("/tenants/{tenant_id}/projects/{project_id}/nexus/feedback")
+async def record_feedback(
+    tenant_id: str,
+    project_id: str,
+    data: dict,
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Record feedback into the Neural Nexus flywheel."""
+    from ..nexus.engine import NexusEngine
+    nexus = NexusEngine(settings)
+
+    nexus.record_feedback(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        user_id=user.id,
+        event_type=data.get("event_type", "code_accepted"),
+        feedback=data.get("feedback", {}),
+        agent=data.get("agent"),
+        prompt=data.get("prompt"),
+        response_summary=data.get("response_summary"),
+    )
+
+    return {"status": "recorded"}
+
+
+@app.get("/tenants/{tenant_id}/projects/{project_id}/nexus/activity")
+async def get_agent_activity(
+    tenant_id: str,
+    project_id: str,
+    limit: int = Query(default=20, le=50),
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Get recent agent execution activity."""
+    from ..nexus.engine import NexusEngine
+    nexus = NexusEngine(settings)
+    return nexus.get_agent_activity(project_id, limit=limit)
+
+
+@app.get("/tenants/{tenant_id}/projects/{project_id}/nexus/context")
+async def get_nexus_context(
+    tenant_id: str,
+    project_id: str,
+    user: AuthUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    """Get the Neural Nexus context string for code generation."""
+    from ..nexus.engine import NexusEngine
+    nexus = NexusEngine(settings)
+    ctx = nexus.get_context(tenant_id, project_id, user.id, "principal_builder")
+    return {"context": ctx.to_prompt_section()}

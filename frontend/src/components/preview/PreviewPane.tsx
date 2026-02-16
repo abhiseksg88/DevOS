@@ -10,6 +10,7 @@ import {
   Globe,
   Play,
   AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FileNode } from "@/types";
@@ -28,6 +29,10 @@ const VIEWPORTS: Record<
 interface PreviewPaneProps {
   url: string | null;
   files?: FileNode[];
+  /** Called when the preview iframe reports a runtime error */
+  onError?: (message: string) => void;
+  /** Whether a new generation is in progress — shows overlay on preview */
+  isGenerating?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -429,10 +434,10 @@ export function buildDeployDocument(
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>${safeTitle} \u2014 Built with DevOS</title>
-<meta name="description" content="${safeTitle} \u2014 Built and deployed with DevOS, the AI-powered no-code platform."/>
+<title>${safeTitle} \u2014 Built with Vedaa</title>
+<meta name="description" content="${safeTitle} \u2014 Built and deployed with Vedaa, the Agentic Development OS."/>
 <meta property="og:title" content="${safeTitle}"/>
-<meta property="og:description" content="Built and deployed with DevOS"/>
+<meta property="og:description" content="Built and deployed with Vedaa"/>
 
 <script>
 window.__errs=[];
@@ -572,7 +577,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError, isGenerating }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -589,15 +594,15 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (e.data?.type === "PREVIEW_ERROR") {
-        setPreviewErrors((prev) => [
-          ...prev.slice(-19),
-          e.data.payload?.message || "Unknown error",
-        ]);
+        const msg = e.data.payload?.message || "Unknown error";
+        setPreviewErrors((prev) => [...prev.slice(-19), msg]);
+        // Forward to auto-fix pipeline
+        onError?.(msg);
       }
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, []);
+  }, [onError]);
 
   // Handle Supabase credential requests from preview iframe
   useEffect(() => {
@@ -745,7 +750,7 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
       </div>
 
       {/* iframe */}
-      <div className="flex-1 flex items-start justify-center p-4 bg-surface-2/30 overflow-auto">
+      <div className="flex-1 relative flex items-start justify-center p-4 bg-surface-2/30 overflow-auto">
         <div
           className="bg-white rounded-lg shadow-2xl overflow-hidden transition-all duration-300 h-full"
           style={{ width: VIEWPORTS[viewport].width, maxWidth: "100%" }}
@@ -768,6 +773,21 @@ export function PreviewPane({ url, files }: PreviewPaneProps) {
             />
           )}
         </div>
+
+        {/* Generating overlay — dims old preview while new code is being generated */}
+        {isGenerating && (
+          <div className="absolute inset-0 bg-surface-0/80 backdrop-blur-sm flex flex-col items-center justify-center z-10 animate-fade-in">
+            <div className="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-4">
+              <Loader2 className="w-6 h-6 text-brand-400 animate-spin" />
+            </div>
+            <p className="text-sm text-slate-400 font-medium">Generating new preview...</p>
+            <div className="mt-3 flex gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot" />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.2s]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.4s]" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

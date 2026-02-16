@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
 import { useGenerate } from "@/hooks/useGenerate";
+import { useAutoFix } from "@/hooks/useAutoFix";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
@@ -19,9 +20,13 @@ import {
   Eye,
   Terminal,
   Loader2,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PublishButton } from "@/components/workspace/PublishButton";
+import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
+import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
+import * as api from "@/lib/api";
 
 type RightTab = "code" | "preview" | "console";
 
@@ -112,6 +117,31 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [openFiles, setOpenFiles] = useState<FileNode[]>([]);
   const [deployedUrl, setDeployedUrl] = useState<string | null>(null);
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
+  const [showIntegrations, setShowIntegrations] = useState(false);
+  const [showNexus, setShowNexus] = useState(false);
+  const [integrationContext, setIntegrationContext] = useState<string>("");
+  const [nexusContext, setNexusContext] = useState<string>("");
+
+  // Load integration context (what APIs are available) for code generation
+  useEffect(() => {
+    if (!token || !resolvedTenantId || !projectId) return;
+    api.integrations
+      .context(token, resolvedTenantId, projectId)
+      .then((ctx) => setIntegrationContext(ctx.context))
+      .catch(() => setIntegrationContext(""));
+  }, [token, resolvedTenantId, projectId]);
+
+  // Load Neural Nexus context (persona + project state + business logic) for code generation
+  useEffect(() => {
+    if (!token || !resolvedTenantId || !projectId) return;
+    api.nexus
+      .getContext(token, resolvedTenantId, projectId)
+      .then((ctx) => setNexusContext(ctx.context))
+      .catch(() => setNexusContext(""));
+  }, [token, resolvedTenantId, projectId]);
+
+  // File tree — updated from Claude output or editor changes
+  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
 
   // Sync deployed URL from project when loaded
   useEffect(() => {
@@ -123,6 +153,107 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
+
+  // -------------------------------------------------------------------------
+  // Auto-fix loop: preview errors → fix agent → apply → re-render
+  // -------------------------------------------------------------------------
+  const autoFix = useAutoFix(
+    fileTree,
+    // onFileFix — apply the fixed file
+    useCallback((path: string, content: string) => {
+      setFileTree((prev) => updateInTree(prev, path, content));
+      seqRef.current += 1;
+      setGenerationEvents((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          build_id: "",
+          kind: "patch",
+          agent: "fix-agent",
+          payload: { message: `Auto-fixed ${path}` },
+          seq: seqRef.current,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    }, []),
+    // onFixStart
+    useCallback(() => {
+      seqRef.current += 1;
+      setGenerationEvents((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          build_id: "",
+          kind: "agent_start",
+          agent: "fix-agent",
+          payload: { message: "Auto-fixing preview errors..." },
+          seq: seqRef.current,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "Detected preview errors — auto-fixing...",
+          timestamp: Date.now(),
+          status: "coding",
+        },
+      ]);
+    }, []),
+    // onFixEnd
+    useCallback((success: boolean, iteration: number) => {
+      seqRef.current += 1;
+      if (success) {
+        setGenerationEvents((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            build_id: "",
+            kind: "build_progress",
+            agent: "fix-agent",
+            payload: {
+              message: `Auto-fix succeeded (iteration ${iteration})`,
+              status: "succeeded",
+            },
+            seq: seqRef.current,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Auto-fix applied successfully. Check the preview.`,
+            timestamp: Date.now(),
+            status: "succeeded",
+          },
+        ]);
+      } else if (iteration >= 3) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Auto-fix couldn't resolve all errors after ${iteration} attempts. You can describe the issue and I'll try a different approach.`,
+            timestamp: Date.now(),
+          },
+        ]);
+      }
+    }, []),
+  );
+
+  // Callback for PreviewPane error reporting
+  const handlePreviewError = useCallback(
+    (msg: string) => {
+      if (!generator.isGenerating && !autoFix.isFixing) {
+        autoFix.reportError(msg);
+      }
+    },
+    [generator.isGenerating, autoFix],
+  );
 
   // Helper: Convert file tree to code map for persistence
   function treeToCodeMap(tree: FileNode[]): Record<string, string> {
@@ -193,9 +324,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       node.content = content;
     }
   }
-
-  // File tree — updated from Claude output or editor changes
-  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
 
   // Hydrate state from persistence on load
   useEffect(() => {
@@ -325,6 +453,9 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const handleSendMessage = useCallback(
     async (content: string) => {
+      // Reset auto-fix counter on new user prompt
+      autoFix.reset();
+
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
@@ -368,8 +499,12 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Switch to console to show progress
       setRightTab("console");
 
-      // Call Claude directly — generate() now returns a result
-      const result = await generator.generate(content, fileTree, (path, fileContent) => {
+      // Call Claude directly — inject Neural Nexus context + integration context
+      const contextParts = [content];
+      if (nexusContext) contextParts.push(nexusContext);
+      if (integrationContext) contextParts.push(integrationContext);
+      const promptWithContext = contextParts.join("\n\n");
+      const result = await generator.generate(promptWithContext, fileTree, (path, fileContent) => {
         addFileToTree(path, fileContent);
       });
 
@@ -400,7 +535,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
     },
-    [generator, fileTree, addFileToTree, persistence]
+    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext, nexusContext]
   );
 
   if (loading) {
@@ -439,9 +574,31 @@ export function Workspace({ projectId }: { projectId: string }) {
               </span>
             </div>
           )}
+          {autoFix.isFixing && (
+            <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/20">
+              <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse-dot" />
+              <span className="text-2xs text-teal-400 font-medium uppercase tracking-wider">
+                Auto-fixing ({autoFix.iteration}/{autoFix.maxIterations})
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowNexus(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-purple-500/30 transition-all"
+          >
+            <Brain className="w-3 h-3" />
+            Neural Nexus
+          </button>
+          <button
+            onClick={() => setShowIntegrations(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-brand-500/30 transition-all"
+          >
+            <Zap className="w-3 h-3" />
+            Integrations
+          </button>
           <PublishButton
             project={project}
             tenantId={resolvedTenantId}
@@ -524,7 +681,7 @@ export function Workspace({ projectId }: { projectId: string }) {
               )}
 
               {rightTab === "preview" && (
-                <PreviewPane url={deployedUrl} files={fileTree} />
+                <PreviewPane url={deployedUrl} files={fileTree} onError={handlePreviewError} isGenerating={generator.isGenerating} />
               )}
 
               {rightTab === "console" && (
@@ -538,6 +695,42 @@ export function Workspace({ projectId }: { projectId: string }) {
           </div>
         </Panel>
       </PanelGroup>
+
+      {/* Integrations drawer */}
+      <IntegrationsPanel
+        projectId={projectId}
+        tenantId={resolvedTenantId}
+        token={token}
+        open={showIntegrations}
+        onClose={() => {
+          setShowIntegrations(false);
+          // Refresh integration context after panel closes (user may have added/updated)
+          if (token && resolvedTenantId && projectId) {
+            api.integrations
+              .context(token, resolvedTenantId, projectId)
+              .then((ctx) => setIntegrationContext(ctx.context))
+              .catch(() => {});
+          }
+        }}
+      />
+
+      {/* Neural Nexus drawer */}
+      <NeuralNexusPanel
+        projectId={projectId}
+        tenantId={resolvedTenantId}
+        token={token}
+        open={showNexus}
+        onClose={() => {
+          setShowNexus(false);
+          // Refresh Nexus context after panel closes (state may have updated)
+          if (token && resolvedTenantId && projectId) {
+            api.nexus
+              .getContext(token, resolvedTenantId, projectId)
+              .then((ctx) => setNexusContext(ctx.context))
+              .catch(() => {});
+          }
+        }}
+      />
     </div>
   );
 }

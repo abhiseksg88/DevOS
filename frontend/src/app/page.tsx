@@ -10,19 +10,23 @@ export default function LandingPage() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const supabase = createClient();
-    const timeout = setTimeout(() => setIsLoggedIn(false), 5000);
-    supabase.auth
-      .getSession()
-      .then(({ data }) => {
-        clearTimeout(timeout);
-        setIsLoggedIn(!!data.session);
-      })
-      .catch(() => {
-        clearTimeout(timeout);
-        setIsLoggedIn(false);
-      });
-    return () => clearTimeout(timeout);
+    try {
+      const supabase = createClient();
+      const timeout = setTimeout(() => setIsLoggedIn(false), 5000);
+      supabase.auth
+        .getSession()
+        .then(({ data }) => {
+          clearTimeout(timeout);
+          setIsLoggedIn(!!data.session);
+        })
+        .catch(() => {
+          clearTimeout(timeout);
+          setIsLoggedIn(false);
+        });
+      return () => clearTimeout(timeout);
+    } catch {
+      setIsLoggedIn(false);
+    }
   }, []);
 
   const ctaText = isLoggedIn ? "Go to Dashboard" : "Get Started";
