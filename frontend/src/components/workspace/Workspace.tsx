@@ -131,17 +131,6 @@ export function Workspace({ projectId }: { projectId: string }) {
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
 
-  // Ref to track current file tree state (avoid stale closures)
-  const fileTreeRef = useRef<FileNode[]>(fileTree);
-
-  // Track last saved file count to prevent duplicate saves
-  const lastSavedCountRef = useRef<number>(0);
-
-  // Sync ref with state
-  useEffect(() => {
-    fileTreeRef.current = fileTree;
-  }, [fileTree]);
-
   // Helper: Convert file tree to code map for persistence
   function treeToCodeMap(tree: FileNode[]): Record<string, string> {
     const map: Record<string, string> = {};
@@ -214,6 +203,17 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   // File tree — updated from Claude output or editor changes
   const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
+
+  // Ref to track current file tree state (avoid stale closures in save operations)
+  const fileTreeRef = useRef<FileNode[]>(fileTree);
+
+  // Track last saved file count to prevent duplicate saves
+  const lastSavedCountRef = useRef<number>(0);
+
+  // Sync ref with state
+  useEffect(() => {
+    fileTreeRef.current = fileTree;
+  }, [fileTree]);
 
   // Hydrate state from persistence on load
   useEffect(() => {
