@@ -389,13 +389,27 @@ async function streamGenerate(
     console.warn('[useGenerate] Response was TRUNCATED (hit max_tokens). Attempting to recover partial files...');
   }
 
-  // Try standard parse first
-  let finalFiles = parseFiles(fullText, false, existingFiles);
+  // =====================================================================
+  // AUTO-CLOSE: If the last ===FILE: block has no ===END_FILE===, close it.
+  // This is the DEFINITIVE fix for "could not be parsed into files" errors.
+  // It works regardless of prefill, truncation, or Claude forgetting to
+  // output the closing delimiter. Simple text surgery before parsing.
+  // =====================================================================
+  let textForParsing = fullText;
+  const lastFileStart = fullText.lastIndexOf("===FILE:");
+  if (lastFileStart !== -1) {
+    const textAfterLastFile = fullText.substring(lastFileStart);
+    if (!textAfterLastFile.includes("===END_FILE===")) {
+      console.warn('[useGenerate] AUTO-CLOSE: Last ===FILE: block has no ===END_FILE===. Appending closing delimiter.');
+      textForParsing = fullText.trimEnd() + "\n===END_FILE===";
+    }
+  }
 
-  // ALWAYS attempt recovery when standard parse is incomplete.
-  // Claude often outputs ===FILE: path===\n{code} but forgets ===END_FILE===
-  // even on end_turn (not just max_tokens). The recovery parser handles this.
-  {
+  // Parse with auto-closed text — standard parser now handles ALL files
+  let finalFiles = parseFiles(textForParsing, false, existingFiles);
+
+  // Fallback: also try recovery parser on original text (belt + suspenders)
+  if (finalFiles.length === 0) {
     const withRecovery = parseFiles(fullText, true, existingFiles);
     for (const rf of withRecovery) {
       if (!finalFiles.some(f => f.path === rf.path)) {
@@ -468,15 +482,17 @@ ${renders.join("\n")}
     } else if (wasTruncated) {
       errMsg = `Response was truncated (hit token limit). The app may be too complex for a single generation. Try a simpler prompt or break it into steps.`;
     } else {
-      // Log diagnostic info to help debug parsing failures
+      // Log extensive diagnostic info
       const hasFileDelimiter = fullText.includes("===FILE:");
       const hasEndFile = fullText.includes("===END_FILE===");
-      const hasCodeBlock = fullText.includes("```");
+      const autoCloseUsed = textForParsing !== fullText;
       const first500 = fullText.substring(0, 500);
-      console.error('[useGenerate] PARSE FAILURE — Could not extract files from LLM response.');
-      console.error('[useGenerate] Diagnostic:', { length: fullText.length, hasFileDelimiter, hasEndFile, hasCodeBlock });
+      const last500 = fullText.substring(Math.max(0, fullText.length - 500));
+      console.error('[useGenerate] PARSE FAILURE — Could not extract files.');
+      console.error('[useGenerate] Diagnostic:', { length: fullText.length, hasFileDelimiter, hasEndFile, autoCloseUsed, stopReason });
       console.error('[useGenerate] First 500 chars:', first500);
-      errMsg = `Claude responded but output could not be parsed into files. Raw: ${fullText.length} chars.${hasFileDelimiter && !hasEndFile ? ' Found ===FILE: but no ===END_FILE=== — response may have been cut off.' : ''}`;
+      console.error('[useGenerate] Last 500 chars:', last500);
+      errMsg = `Could not parse files (${fullText.length} chars). ${hasFileDelimiter ? 'Has ===FILE: delimiter.' : 'No ===FILE: found.'} ${hasEndFile ? '' : 'No ===END_FILE=== found.'} ${autoCloseUsed ? 'Auto-close was attempted.' : ''}`.trim();
     }
     return { files: [], error: errMsg };
   }
