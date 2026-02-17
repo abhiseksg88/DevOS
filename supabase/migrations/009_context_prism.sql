@@ -29,7 +29,7 @@ ALTER TABLE build_graphs ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "build_graphs_tenant_read"
     ON build_graphs FOR SELECT
-    USING (tenant_id IN (SELECT get_tenant_ids()));
+    USING (tenant_id = ANY(get_tenant_ids()));
 
 CREATE POLICY "build_graphs_service_all"
     ON build_graphs FOR ALL
@@ -59,7 +59,7 @@ ALTER TABLE app_blueprints ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "blueprints_tenant_read"
     ON app_blueprints FOR SELECT
-    USING (tenant_id IN (SELECT get_tenant_ids()));
+    USING (tenant_id = ANY(get_tenant_ids()));
 
 CREATE POLICY "blueprints_service_all"
     ON app_blueprints FOR ALL
@@ -95,7 +95,7 @@ ALTER TABLE file_summaries ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "summaries_tenant_read"
     ON file_summaries FOR SELECT
-    USING (tenant_id IN (SELECT get_tenant_ids()));
+    USING (tenant_id = ANY(get_tenant_ids()));
 
 CREATE POLICY "summaries_service_all"
     ON file_summaries FOR ALL
@@ -119,7 +119,7 @@ ALTER TABLE design_contracts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "contracts_tenant_read"
     ON design_contracts FOR SELECT
-    USING (tenant_id IN (SELECT get_tenant_ids()));
+    USING (tenant_id = ANY(get_tenant_ids()));
 
 CREATE POLICY "contracts_service_all"
     ON design_contracts FOR ALL
@@ -144,7 +144,7 @@ ALTER TABLE api_contracts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "api_contracts_tenant_read"
     ON api_contracts FOR SELECT
-    USING (tenant_id IN (SELECT get_tenant_ids()));
+    USING (tenant_id = ANY(get_tenant_ids()));
 
 CREATE POLICY "api_contracts_service_all"
     ON api_contracts FOR ALL
@@ -175,7 +175,7 @@ ALTER TABLE patches ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "patches_tenant_read"
     ON patches FOR SELECT
-    USING (tenant_id IN (SELECT get_tenant_ids()));
+    USING (tenant_id = ANY(get_tenant_ids()));
 
 CREATE POLICY "patches_service_all"
     ON patches FOR ALL
