@@ -83,17 +83,39 @@ function parseFiles(text: string): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
   // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
-  const delimiterRegex = /===FILE:\s*(.+?)===\r?\n([\s\S]*?)===END_FILE===/g;
+  const delimiterRegex = /===FILE:\s*(.+?)===\s*\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1]);
     if (safePath) files.push({ path: safePath, content: match[2].trimEnd() });
   }
 
+  // Format 1b: Handle truncated responses where ===END_FILE=== was cut off
+  // (e.g., when AI hits max_tokens limit mid-output)
+  // This runs even if some complete files were found — recovers the truncated last file
+  // Uses permissive whitespace matching: ===FILE: path===<any whitespace>\n
+  {
+    const allFileStarts = [...text.matchAll(/===FILE:\s*(.+?)===\s*\n/g)];
+    const parsedPaths = new Set(files.map((f) => f.path));
+    for (const fileStart of allFileStarts) {
+      const safePath = sanitizePath(fileStart[1]);
+      if (!safePath || parsedPaths.has(safePath)) continue; // already parsed as complete
+      // Extract content from this ===FILE: start to the next ===FILE: or end of string
+      const startIdx = (fileStart.index ?? 0) + fileStart[0].length;
+      const remainingText = text.slice(startIdx);
+      // Stop at next ===FILE: or ===EDIT: or ===END_FILE=== (whichever comes first)
+      const nextDelim = remainingText.search(/===(?:FILE:|EDIT:|END_FILE===)/);
+      const content = (nextDelim >= 0 ? remainingText.slice(0, nextDelim) : remainingText).trimEnd();
+      if (content && content.length > 50) { // Minimum viable content
+        files.push({ path: safePath, content });
+      }
+    }
+  }
+
   // Format 2: ===EDIT: path=== with SEARCH/REPLACE blocks
   // These are parsed but converted to full files by applying edits
   // (the actual application happens in the caller since we need existing content)
-  const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
+  const editRegex = /===EDIT:\s*(.+?)===\s*\n([\s\S]*?)===END_EDIT===/g;
   while ((match = editRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1]);
     if (!safePath) continue;
@@ -147,6 +169,33 @@ function parseFiles(text: string): GeneratedFile[] {
 
     const safePath = sanitizePath(pathMatch[2]);
     if (safePath) files.push({ path: safePath, content: codeMatch[1].trimEnd() });
+  }
+  if (files.length > 0) return files;
+
+  // Format 5 (LAST RESORT): If the raw output looks like React/TS code but no
+  // delimiters were found (or all regex failed), wrap it in page.tsx.
+  // This handles: truncated single-file output, or AI that forgot delimiters entirely.
+  {
+    // Strip the ===FILE: path=== header if present (even without proper newline)
+    let codeText = text;
+    const headerMatch = codeText.match(/^===FILE:\s*.+?===\s*/);
+    if (headerMatch) {
+      codeText = codeText.slice(headerMatch[0].length);
+    }
+    // Check if it looks like React/TypeScript code
+    const trimmed = codeText.trimStart();
+    const looksLikeCode =
+      trimmed.startsWith("'use client'") ||
+      trimmed.startsWith('"use client"') ||
+      trimmed.startsWith("import ") ||
+      trimmed.startsWith("export ") ||
+      trimmed.startsWith("const ") ||
+      trimmed.startsWith("function ") ||
+      trimmed.startsWith("interface ") ||
+      trimmed.startsWith("type ");
+    if (looksLikeCode && trimmed.length > 100) {
+      files.push({ path: "src/app/page.tsx", content: trimmed });
+    }
   }
 
   return files;
@@ -222,6 +271,7 @@ export function useGenerate() {
         let fullText = "";
         let lastParsedCount = 0;
         let buffer = "";
+        let wasTruncated = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -271,6 +321,8 @@ export function useGenerate() {
                   lastParsedCount = parsed.length;
                   setState((prev) => ({ ...prev, files: parsed }));
                 }
+              } else if (event.type === "warning" && event.warning === "truncated") {
+                wasTruncated = true;
               } else if (event.type === "error") {
                 const errMsg = event.error || "Generation error";
                 setState((prev) => ({ ...prev, error: errMsg }));
@@ -332,11 +384,17 @@ export function useGenerate() {
               error: "No response received from the AI. Please check that your ANTHROPIC_API_KEY is set correctly in Netlify environment variables (Site settings → Environment variables).",
             };
           }
+          if (wasTruncated) {
+            return {
+              files: [],
+              error: "The AI's response was truncated (hit the output token limit). It tried to rewrite an entire file instead of using targeted edits. Try a more specific prompt like \"change the header color to blue\" instead of \"redesign the header\".",
+            };
+          }
           // Claude responded with text but no parseable file blocks
           const snippet = fullText.slice(0, 300).replace(/\n/g, " ");
           return {
             files: [],
-            error: `Code generation returned text but no files could be parsed. The response may have been truncated. Raw output: "${snippet}..."`,
+            error: `Code generation returned text but no files could be parsed. Raw output: "${snippet}..."`,
           };
         }
 

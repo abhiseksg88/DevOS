@@ -83,6 +83,7 @@ setup_logging(debug=_startup_settings.debug_mode)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_startup_settings.cors_allowed_origins,
+    allow_origin_regex=r"https://.*--vedaaio\.netlify\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

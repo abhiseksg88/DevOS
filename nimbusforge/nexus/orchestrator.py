@@ -116,6 +116,22 @@ def parse_builder_output(raw_output: str) -> list[dict]:
                 "content": content,
             })
 
+    # Format 1b: Handle truncated responses where ===END_FILE=== was cut off
+    # (e.g., when LLM hits max_tokens limit mid-output)
+    if not operations and '===FILE:' in raw_output:
+        truncated_regex = r'===FILE:\s*(.+?)===\n([\s\S]*?)(?====FILE:\s|$)'
+        for match in re.finditer(truncated_regex, raw_output):
+            path = match.group(1).strip()
+            content = match.group(2).strip()
+            if path and content:
+                safe = _sanitize_path(path)
+                if safe:
+                    operations.append({
+                        "type": "create",
+                        "path": safe,
+                        "content": content,
+                    })
+
     # Format 2: Edit blocks with search/replace
     edit_regex = r'===EDIT:\s*(.+?)===\n([\s\S]*?)===END_EDIT==='
     for match in re.finditer(edit_regex, raw_output):

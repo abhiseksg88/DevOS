@@ -17,16 +17,33 @@ Respond with ONLY code files. No explanations, no markdown outside files. Use th
 (file content)
 ===END_FILE===
 
-## Architecture
+## Architecture — MULTI-FILE IS THE DEFAULT
 - Main entry: \`src/app/page.tsx\` with a default export React function component
-- Define ALL components directly in page.tsx — it MUST be fully self-contained
+- ALWAYS split your code into multiple files. The system CRASHES if any single file exceeds 250 lines.
+  - \`src/app/page.tsx\` — main page: imports components, manages top-level state, renders layout (under 150 lines)
+  - \`src/components/[Name].tsx\` — one file per major UI section (table, form, modal, sidebar, chart, card grid)
+  - \`src/types.ts\` — shared TypeScript interfaces and types (if more than 2 interfaces)
+  - \`src/data.ts\` — mock data arrays and constants (if more than 10 items)
+  - \`src/app/globals.css\` — custom CSS animations or base styles
+- Import components with: \`import ComponentName from "@/components/ComponentName"\` or \`import { Thing } from "@/types"\`
+- The ONLY exception: if the ENTIRE app is truly a single tiny widget under 150 lines total (e.g., "a counter", "a color picker")
 - Use React + TypeScript + Tailwind CSS
 - Use \`className\` (not \`class\`)
 - You MAY import from "react" (useState, useEffect, useRef, useMemo, useCallback, useContext, useReducer)
 - Do NOT import from next/image, next/link, next/router, or any Next.js modules
 - Do NOT import from external packages (no lucide-react, no framer-motion, no date-fns, etc.)
-- Do NOT import from local files — everything must be inline in page.tsx
-- You MAY create a globals.css at \`src/app/globals.css\` for custom CSS animations or base styles
+- Each component file MUST have a default export: \`export default function ComponentName() { ... }\`
+
+### Example file structure for a meal tracker app:
+\`\`\`
+src/types.ts              — Meal, NutritionGoal interfaces
+src/data.ts               — MOCK_MEALS array, NUTRITION_GOALS
+src/components/MealForm.tsx      — add/edit meal form with validation
+src/components/MealTable.tsx     — meal list/table with search & filter
+src/components/NutritionStats.tsx — calorie/macro summary cards
+src/app/page.tsx          — imports above, manages state, renders layout
+src/app/globals.css       — animations
+\`\`\`
 
 ## Design System — THIS IS CRITICAL
 
@@ -185,34 +202,39 @@ Use INLINE SVGs or emoji. Common patterns:
 Do NOT include any explanation text outside of file/edit blocks.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-## TOKEN-OPTIMIZED OUTPUT — SEARCH & REPLACE
+## OUTPUT FORMAT — MANDATORY RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-When EDITING an existing file (provided in the context), DO NOT rewrite the entire file.
-Use SEARCH & REPLACE blocks instead — this saves 95% of output tokens:
+### CRITICAL INSTRUCTION — READ THIS FIRST
+When existing project files are provided in context below, you MUST use ===EDIT===
+with SEARCH/REPLACE blocks to modify them. Do NOT output ===FILE: path=== for any
+file that already exists in the context. Full-file rewrites of existing files WILL
+CRASH THE SYSTEM by exceeding the output token limit and truncating your response.
+The parser will fail and the user will see an error.
 
-===EDIT: path/to/existing_file.tsx===
-<<<SEARCH
-const oldCode = "before";
->>>REPLACE
-const newCode = "after";
-===END_EDIT===
-
-Multiple edits in the same file use multiple EDIT blocks.
-
-When CREATING a brand new file, use the full file format:
-
+### For NEW files (not in context):
 ===FILE: path/to/new_file.tsx===
 (complete file content)
 ===END_FILE===
 
-### Decision rules:
-- File exists in context + changing < 50% of it → use ===EDIT=== with SEARCH/REPLACE
-- File exists but rewriting > 50% → use ===FILE=== (full replacement)
-- File is brand new → use ===FILE===
+### For EXISTING files (provided in context):
+===EDIT: path/to/existing_file.tsx===
+<<<SEARCH
+(exact existing code to find — include 2-3 lines of surrounding context)
+>>>REPLACE
+(new code to replace it with)
+===END_EDIT===
 
-CRITICAL: The SEARCH text must match the existing code EXACTLY including whitespace.
-Include 2-3 lines of surrounding context to ensure unique matching.`;
+Multiple changes to the same file = multiple ===EDIT=== blocks.
+
+### Rules:
+1. SEARCH text must match the existing code EXACTLY including whitespace and indentation.
+2. Include 2-3 surrounding context lines so the match is unique.
+3. NEVER put the entire file content in a SEARCH block — only the changing section.
+4. Keep each SEARCH block under 20 lines. Split larger changes into multiple SEARCH/REPLACE pairs.
+5. The ONLY exception for using ===FILE=== on an existing path: the file is very short
+   (under 30 lines) AND you are rewriting it entirely.
+6. For brand new files that don't exist yet, use ===FILE: path===.`;
 
 // ---------------------------------------------------------------------------
 // Fix agent system prompt — targeted error resolution
@@ -234,7 +256,8 @@ For each file, use ===EDIT=== with <<<SEARCH and >>>REPLACE blocks.
 The SEARCH text must match the existing code EXACTLY.
 Include 2-3 context lines around the bug for unique matching.
 
-Only use ===FILE: path=== (full file) if the fix requires rewriting > 50% of the file.
+Do NOT use ===FILE: path=== for existing files — always use ===EDIT=== with SEARCH/REPLACE.
+Only use ===FILE=== if creating a brand new file that doesn't exist yet.
 
 Common fixes:
 - Null/undefined: add optional chaining (?.) or default values (?? [])
@@ -273,8 +296,11 @@ function selectModel(prompt: string, hasExistingFiles: boolean): { model: string
     return { model: "claude-haiku-4-5-20251001", maxTokens: 4096 };
   }
 
-  // Everything else → Sonnet (best quality/speed balance)
-  return { model: "claude-sonnet-4-5-20250929", maxTokens: 16384 };
+  // New app generation needs more output room (multiple files, full content)
+  // Editing existing files needs less (SEARCH/REPLACE blocks are compact)
+  const maxTokens = hasExistingFiles ? 16384 : 32768;
+
+  return { model: "claude-sonnet-4-5-20250929", maxTokens };
 }
 
 // ---------------------------------------------------------------------------
@@ -354,19 +380,75 @@ export async function POST(req: NextRequest) {
     ? { model: "claude-sonnet-4-5-20250929", maxTokens: 8192 }
     : selectModel(prompt, !!hasExisting);
 
-  // Build context from existing files
+  // Build context from existing files with token budgeting and relevance scoring
   let context = "";
   if (existingFiles && Array.isArray(existingFiles)) {
-    const fileDescriptions = existingFiles
+    const validFiles = existingFiles
       .slice(0, 20)
-      .filter((f: { content?: string }) => f.content)
-      .map((f: { path: string; content: string }) => `--- ${f.path} ---\n${f.content}`)
-      .join("\n\n");
-    if (fileDescriptions) {
-      if (isFix) {
-        context = `\n\nHere are the current source files:\n${fileDescriptions}`;
+      .filter((f: { content?: string }) => f.content) as { path: string; content: string }[];
+
+    // Score files by relevance to the prompt
+    const promptLower = prompt.toLowerCase();
+    const promptWords = new Set(promptLower.split(/\s+/).filter((w: string) => w.length > 3));
+    const scored = validFiles.map((f) => {
+      let score = 0;
+      const pathLower = f.path.toLowerCase();
+      const fileName = f.path.split("/").pop() ?? "";
+      // File explicitly mentioned in prompt
+      if (promptLower.includes(pathLower) || promptLower.includes(fileName.replace(/\.\w+$/, ""))) score += 10;
+      // page.tsx is almost always relevant
+      if (pathLower.endsWith("page.tsx")) score += 5;
+      // globals.css relevant for style changes
+      if (pathLower.endsWith("globals.css") && /\b(style|color|font|theme|dark|light|css|design|look)\b/.test(promptLower)) score += 5;
+      // Keyword overlap with first 2000 chars of content
+      const contentSnippet = f.content.toLowerCase().slice(0, 2000);
+      for (const word of promptWords) {
+        if (contentSnippet.includes(word)) score += 1;
+      }
+      return { ...f, score };
+    }).sort((a, b) => b.score - a.score);
+
+    // Token budget: ~6000 tokens ≈ 24000 chars for file context
+    const MAX_CONTEXT_CHARS = 24000;
+    let usedChars = 0;
+    const includedFiles: { path: string; content: string }[] = [];
+    const stubFiles: string[] = [];
+
+    for (const f of scored) {
+      if (usedChars + f.content.length <= MAX_CONTEXT_CHARS) {
+        includedFiles.push({ path: f.path, content: f.content });
+        usedChars += f.content.length;
       } else {
-        context = `\n\nHere are the existing project files. Modify or add files as needed — only output files that changed or are new:\n${fileDescriptions}`;
+        // Try to fit a truncated version if budget allows
+        const remaining = MAX_CONTEXT_CHARS - usedChars;
+        if (remaining > 800) {
+          includedFiles.push({
+            path: f.path,
+            content: f.content.slice(0, remaining) + "\n// ... (file truncated for context limit) ...",
+          });
+          usedChars = MAX_CONTEXT_CHARS;
+        } else {
+          stubFiles.push(f.path);
+        }
+      }
+    }
+
+    if (includedFiles.length > 0) {
+      const existingPaths = includedFiles.map((f) => f.path);
+      const pathList = existingPaths.map((p) => `  - ${p}`).join("\n");
+      const fileContents = includedFiles
+        .map((f) => `--- ${f.path} ---\n${f.content}`)
+        .join("\n\n");
+
+      let stubSection = "";
+      if (stubFiles.length > 0) {
+        stubSection = `\n\n## Other project files (not shown — do NOT modify unless asked):\n${stubFiles.map((p) => `  - ${p}`).join("\n")}`;
+      }
+
+      if (isFix) {
+        context = `\n\n## EXISTING FILES — Use ===EDIT=== with SEARCH/REPLACE for fixes\n${pathList}\n\n## File Contents\n${fileContents}${stubSection}`;
+      } else {
+        context = `\n\n## EXISTING FILES — Use ===EDIT=== for these (NOT ===FILE===)\n${pathList}\n\n## File Contents\n${fileContents}${stubSection}`;
       }
     }
   }
@@ -385,20 +467,26 @@ export async function POST(req: NextRequest) {
 
         console.log(`[generate] Calling Anthropic API with model=${model}, maxTokens=${maxTokens}`);
 
-        const response = await client.messages.create({
+        // Extended output: if maxTokens > 16384, we need the output-128k beta header
+        const createParams = {
           model,
           max_tokens: maxTokens,
           system: systemPrompt,
           messages: [
             {
-              role: "user",
+              role: "user" as const,
               content: prompt + context,
             },
           ],
-          stream: true,
-        });
+          stream: true as const,
+        };
+        const requestOptions = maxTokens > 16384
+          ? { headers: { "anthropic-beta": "output-128k-2025-02-19" } }
+          : undefined;
+        const response = await client.messages.create(createParams, requestOptions);
 
         let charCount = 0;
+        let stopReason = "end_turn";
         for await (const event of response) {
           if (
             event.type === "content_block_delta" &&
@@ -407,9 +495,23 @@ export async function POST(req: NextRequest) {
             charCount += event.delta.text.length;
             send({ type: "text", content: event.delta.text });
           }
+          // Capture stop reason to detect output truncation
+          if (event.type === "message_delta") {
+            const delta = event.delta as unknown as { stop_reason?: string };
+            if (delta.stop_reason) {
+              stopReason = delta.stop_reason;
+            }
+          }
         }
 
-        console.log(`[generate] Stream complete — ${charCount} chars generated`);
+        console.log(`[generate] Stream complete — ${charCount} chars, stop_reason=${stopReason}`);
+
+        // Alert the frontend if the response was truncated
+        if (stopReason === "max_tokens") {
+          console.warn(`[generate] Response TRUNCATED at ${charCount} chars — model hit max_tokens limit`);
+          send({ type: "warning", warning: "truncated", charCount });
+        }
+
         send({ type: "done" });
         controller.close();
       } catch (err) {

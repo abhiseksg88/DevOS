@@ -70,6 +70,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "https://vedaa.io",
         "https://www.vedaa.io",
+        "https://vedaaio.netlify.app",
     ]
 
     # --- Debug ---

@@ -31,18 +31,64 @@ function flattenForContext(nodes: FileNode[]): { path: string; content: string }
 
 /**
  * Parse files from the LLM fix response.
- * Supports ===FILE: path=== ... ===END_FILE=== format.
+ * Supports both ===FILE=== (full file) and ===EDIT=== (search/replace) formats.
  */
-function parseFixFiles(text: string): GeneratedFile[] {
+function parseFixFiles(text: string, existingFiles: FileNode[]): GeneratedFile[] {
   const files: GeneratedFile[] = [];
-  const regex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
+
+  // Format 1: ===FILE: path=== ... ===END_FILE=== (full file replacement)
+  const fileRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
   let match;
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = fileRegex.exec(text)) !== null) {
     const path = match[1].trim();
     if (path && !path.startsWith("/") && !path.includes("..")) {
       files.push({ path, content: match[2].trimEnd() });
     }
   }
+
+  // Format 2: ===EDIT: path=== with SEARCH/REPLACE blocks
+  const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
+  while ((match = editRegex.exec(text)) !== null) {
+    const path = match[1]?.trim();
+    if (!path || path.startsWith("/") || path.includes("..")) continue;
+
+    const editBody = match[2];
+    const edits: { search: string; replace: string }[] = [];
+    const srRegex = /<<<SEARCH\n([\s\S]*?)>>>REPLACE\n([\s\S]*?)(?=<<<SEARCH|$)/g;
+    let srMatch;
+    while ((srMatch = srRegex.exec(editBody)) !== null) {
+      edits.push({
+        search: srMatch[1].replace(/\n$/, ""),
+        replace: srMatch[2].replace(/\n$/, ""),
+      });
+    }
+
+    if (edits.length > 0) {
+      // Find existing file content and apply edits
+      const findContent = (nodes: FileNode[]): string | null => {
+        for (const node of nodes) {
+          if (node.type === "file" && node.path === path) return node.content ?? null;
+          if (node.children) {
+            const found = findContent(node.children);
+            if (found !== null) return found;
+          }
+        }
+        return null;
+      };
+
+      const original = findContent(existingFiles);
+      if (original) {
+        let content = original;
+        for (const edit of edits) {
+          if (edit.search && content.includes(edit.search)) {
+            content = content.replace(edit.search, edit.replace);
+          }
+        }
+        files.push({ path, content });
+      }
+    }
+  }
+
   return files;
 }
 
@@ -160,8 +206,8 @@ export function useAutoFix(
         }
       }
 
-      // Parse and apply fixes
-      const fixedFiles = parseFixFiles(fullText);
+      // Parse and apply fixes (pass existing files for EDIT block resolution)
+      const fixedFiles = parseFixFiles(fullText, fileTreeRef.current);
       isFixingRef.current = false;
       if (fixedFiles.length > 0) {
         for (const file of fixedFiles) {

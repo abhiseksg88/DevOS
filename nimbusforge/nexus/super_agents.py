@@ -278,8 +278,8 @@ import { useState, useCallback } from "react";
 
 ### When to use which:
 - **New file** → ===FILE: ...===
-- **Editing < 50% of a file** → ===EDIT: ...=== with SEARCH/REPLACE blocks
-- **Rewriting > 50% of a file** → ===FILE: ...=== (full replacement)
+- **Existing file (any amount of change)** → ===EDIT: ...=== with SEARCH/REPLACE blocks
+- **NEVER use ===FILE=== for existing files** — full rewrites cause output truncation and system crashes
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -308,13 +308,17 @@ Use the universal `app_data` table via `window.supabase`:
 - DELETE: by collection + record_id
 - ALWAYS handle errors and show them to the user
 
-## CRITICAL
-1. For EXISTING files, use ===EDIT: ...=== with SEARCH/REPLACE. DO NOT rewrite full files.
-2. For NEW files, use ===FILE: ...===. Output complete content.
-3. NO explanations outside of file/edit blocks.
-4. Match the user's coding style from the Persona Protocol.
-5. Check constraints from the Staff Engineer before writing.
-6. Reuse existing utilities from the PSM — don't duplicate code.
+## CRITICAL — OUTPUT SAFETY
+1. For EXISTING files (in "Current Files" context): MUST use ===EDIT: ...=== with SEARCH/REPLACE.
+   NEVER use ===FILE: ...=== for existing files. Full-file rewrites cause output truncation crashes.
+2. For NEW files: use ===FILE: ...=== with complete content.
+3. If changing >50% of a file, use MULTIPLE ===EDIT=== blocks targeting different sections.
+   This is ALWAYS safer than a full rewrite.
+4. Keep each SEARCH block under 20 lines. Split larger changes into multiple pairs.
+5. NO explanations outside of file/edit blocks.
+6. Match the user's coding style from the Persona Protocol.
+7. Check constraints from the Staff Engineer before writing.
+8. Reuse existing utilities from the PSM — don't duplicate code.
 """
 
 
