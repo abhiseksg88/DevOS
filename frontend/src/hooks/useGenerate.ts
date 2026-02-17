@@ -243,7 +243,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
     allCodeBlocks.sort((a, b) => b.content.length - a.content.length);
     const biggest = allCodeBlocks[0];
     // Sanity check: must look like React code (has export, function, or return with JSX)
-    const looksLikeReact = /(?:export\s+default|function\s+\w+|return\s*\()/s.test(biggest.content);
+    const looksLikeReact = /(?:export\s+default|function\s+\w+|return\s*\()/.test(biggest.content);
     if (looksLikeReact) {
       console.warn('[parseFiles] LAST RESORT: Extracting largest code block as page.tsx (' + biggest.content.length + ' chars)');
       files.push({ path: "src/app/page.tsx", content: biggest.content });
@@ -359,9 +359,7 @@ async function streamGenerate(
           fullText += event.content;
           const parsed = parseFiles(fullText, false, existingFiles);
           if (parsed.length > lastParsedCount) {
-            console.log('[useGenerate] Parsed new files:', parsed.slice(lastParsedCount).map(f => ({ path: f.path, contentLength: f.content.length })));
             for (let i = lastParsedCount; i < parsed.length; i++) {
-              console.log('[useGenerate] Calling onFileGenerated:', parsed[i].path);
               onFileGenerated(parsed[i].path, parsed[i].content);
             }
             lastParsedCount = parsed.length;
@@ -391,17 +389,18 @@ async function streamGenerate(
     console.warn('[useGenerate] Response was TRUNCATED (hit max_tokens). Attempting to recover partial files...');
   }
 
-  // Try standard parse first, then truncated fallback if needed
+  // Try standard parse first
   let finalFiles = parseFiles(fullText, false, existingFiles);
-  if (wasTruncated) {
-    // Always attempt truncated recovery on truncation — even if we have some complete files,
-    // the last file (which got cut off) might be important
-    const withTruncated = parseFiles(fullText, true, existingFiles);
-    // Merge: add any recovered files that aren't already in finalFiles
-    for (const tf of withTruncated) {
-      if (!finalFiles.some(f => f.path === tf.path)) {
-        console.log('[useGenerate] Recovered truncated file:', tf.path, 'length:', tf.content.length);
-        finalFiles.push(tf);
+
+  // ALWAYS attempt recovery when standard parse is incomplete.
+  // Claude often outputs ===FILE: path===\n{code} but forgets ===END_FILE===
+  // even on end_turn (not just max_tokens). The recovery parser handles this.
+  {
+    const withRecovery = parseFiles(fullText, true, existingFiles);
+    for (const rf of withRecovery) {
+      if (!finalFiles.some(f => f.path === rf.path)) {
+        console.log('[useGenerate] Recovered unclosed file:', rf.path, 'length:', rf.content.length);
+        finalFiles.push(rf);
       }
     }
   }
