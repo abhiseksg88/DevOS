@@ -22,14 +22,22 @@ export default function LandingPage() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        router.replace("/dashboard");
-      } else {
+    try {
+      const supabase = createClient();
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session) {
+          router.replace("/dashboard");
+        } else {
+          setChecking(false);
+        }
+      }).catch(() => {
+        // If getSession fails (network error, invalid config), show landing page
         setChecking(false);
-      }
-    });
+      });
+    } catch {
+      // If createClient fails (missing env vars), show landing page anyway
+      setChecking(false);
+    }
   }, [router]);
 
   if (checking) {
