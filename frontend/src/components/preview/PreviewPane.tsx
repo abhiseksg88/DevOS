@@ -29,10 +29,7 @@ const VIEWPORTS: Record<
 interface PreviewPaneProps {
   url: string | null;
   files?: FileNode[];
-  /** Called when the preview iframe reports a runtime error */
-  onError?: (message: string) => void;
-  /** Whether a new generation is in progress — shows overlay on preview */
-  isGenerating?: boolean;
+  onError?: (errorMessage: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +53,28 @@ function collectCSS(files: FileNode[]): string {
 }
 
 function findMainFile(files: FileNode[]): string {
+  // Helper: check if content is real generated code vs placeholder
+  const isRealContent = (f: FileNode) =>
+    f.content && !f.content.includes("Your generated code will appear here");
+
+  // Prefer files with real generated content over placeholder
   const main =
+    files.find(
+      (f) => (f.path.includes("page.tsx") || f.path.includes("page.jsx")) && isRealContent(f)
+    ) ??
+    files.find(
+      (f) => (f.path.includes("App.tsx") || f.path.includes("App.jsx")) && isRealContent(f)
+    ) ??
+    files.find(
+      (f) => (f.path.includes("index.tsx") || f.path.includes("index.jsx")) && isRealContent(f)
+    ) ??
+    files.find(
+      (f) =>
+        (f.language === "typescriptreact" ||
+          f.language === "javascriptreact") &&
+        isRealContent(f)
+    ) ??
+    // Fallback: accept any matching file including placeholder
     files.find(
       (f) => f.path.includes("page.tsx") || f.path.includes("page.jsx")
     ) ??
@@ -434,10 +452,10 @@ export function buildDeployDocument(
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>${safeTitle} \u2014 Built with Vedaa</title>
-<meta name="description" content="${safeTitle} \u2014 Built and deployed with Vedaa, the Agentic Development OS."/>
+<title>${safeTitle} \u2014 Built with Vedaa.io</title>
+<meta name="description" content="${safeTitle} \u2014 Built and deployed with Vedaa.io, the autonomous agentic development platform."/>
 <meta property="og:title" content="${safeTitle}"/>
-<meta property="og:description" content="Built and deployed with Vedaa"/>
+<meta property="og:description" content="Built and deployed with Vedaa.io"/>
 
 <script>
 window.__errs=[];
@@ -577,10 +595,24 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files, onError, isGenerating }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
+
+  // Compute a content hash from file tree to detect changes
+  const contentHash = useMemo(() => {
+    if (!files || files.length === 0) return "";
+    const flat = flattenFiles(files);
+    let hash = 0;
+    for (const f of flat) {
+      const s = f.path + (f.content || "");
+      for (let i = 0; i < s.length; i++) {
+        hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+      }
+    }
+    return String(hash);
+  }, [files]);
 
   const srcdoc = useMemo(() => {
     if (files && files.length > 0) {
@@ -588,16 +620,15 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, refreshKey]);
+  }, [files, refreshKey, contentHash]);
 
   // Listen for error messages from the preview iframe
   useEffect(() => {
     function onMsg(e: MessageEvent) {
       if (e.data?.type === "PREVIEW_ERROR") {
-        const msg = e.data.payload?.message || "Unknown error";
-        setPreviewErrors((prev) => [...prev.slice(-19), msg]);
-        // Forward to auto-fix pipeline
-        onError?.(msg);
+        const errorMsg = e.data.payload?.message || "Unknown error";
+        setPreviewErrors((prev) => [...prev.slice(-19), errorMsg]);
+        onError?.(errorMsg);
       }
     }
     window.addEventListener("message", onMsg);
@@ -607,19 +638,52 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
   // Handle Supabase credential requests from preview iframe
   useEffect(() => {
     async function handleCredentialRequest(e: MessageEvent) {
-      if (e.data?.type !== "REQUEST_SUPABASE_CREDENTIALS") return;
-
-      // Only respond to same-origin messages (srcdoc iframes are same-origin)
-      if (e.origin !== "null" && e.origin !== window.location.origin) {
-        console.warn("[PreviewPane] Ignoring credential request from untrusted origin:", e.origin);
+      // Security: only respond to messages from same origin or blob/srcdoc iframes
+      if (e.origin !== window.location.origin && e.origin !== "null" && e.origin !== "") {
         return;
       }
 
-      try {
-        const response = await fetch("/api/preview-credentials");
-        if (!response.ok) {
-          console.error("[PreviewPane] Failed to fetch credentials:", response.statusText);
-          return;
+      if (e.data?.type === "REQUEST_SUPABASE_CREDENTIALS") {
+        try {
+          const response = await fetch("/api/preview-credentials");
+          if (!response.ok) {
+            console.error("[PreviewPane] Failed to fetch credentials:", response.statusText);
+            return;
+          }
+
+          const credentials = await response.json();
+
+          // Send credentials only to our own iframes, using specific origin
+          const iframes = document.getElementsByTagName("iframe");
+          const targetOrigin = window.location.origin;
+          for (let i = 0; i < iframes.length; i++) {
+            try {
+              iframes[i].contentWindow?.postMessage(
+                {
+                  type: "SUPABASE_INIT",
+                  url: credentials.url,
+                  anonKey: credentials.anonKey,
+                },
+                targetOrigin
+              );
+            } catch {
+              // srcdoc iframes have null origin, retry with *
+              try {
+                iframes[i].contentWindow?.postMessage(
+                  {
+                    type: "SUPABASE_INIT",
+                    url: credentials.url,
+                    anonKey: credentials.anonKey,
+                  },
+                  "*"
+                );
+              } catch {
+                // silently ignore
+              }
+            }
+          }
+        } catch (error) {
+          console.error("[PreviewPane] Error handling credential request:", error);
         }
 
         const credentials = await response.json();
@@ -755,7 +819,15 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
           className="bg-white rounded-lg shadow-2xl overflow-hidden transition-all duration-300 h-full"
           style={{ width: VIEWPORTS[viewport].width, maxWidth: "100%" }}
         >
-          {hasUrl ? (
+          {hasLivePreview ? (
+            <iframe
+              key={`live-${refreshKey}-${contentHash}`}
+              srcDoc={srcdoc!}
+              className="w-full h-full border-0"
+              title="Live Preview"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          ) : hasUrl ? (
             <iframe
               key={refreshKey}
               src={url}
@@ -763,15 +835,7 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
               title="App Preview"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
             />
-          ) : (
-            <iframe
-              key={`live-${refreshKey}`}
-              srcDoc={srcdoc!}
-              className="w-full h-full border-0"
-              title="Live Preview"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          )}
+          ) : null}
         </div>
 
         {/* Generating overlay — dims old preview while new code is being generated */}

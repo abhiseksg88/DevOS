@@ -122,8 +122,10 @@ export default function LoginPage() {
 
         <div className="relative z-10 max-w-md px-8">
           <div className="flex items-center gap-3 mb-8">
-            <Image src="/vedaa-logo.svg" alt="Vedaa" width={48} height={48} className="glow-brand rounded-xl" />
-            <span className="text-2xl font-bold gradient-text">Vedaa</span>
+            <div className="w-12 h-12 rounded-xl bg-brand-500 flex items-center justify-center glow-brand">
+              <Zap className="w-6 h-6 text-white" />
+            </div>
+            <span className="text-2xl font-bold gradient-text">Vedaa.io</span>
           </div>
           <h1 className="text-4xl font-bold text-white mb-4 leading-tight">
             The Agentic
@@ -158,8 +160,10 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 mb-10">
-            <Image src="/vedaa-logo.svg" alt="Vedaa" width={40} height={40} className="rounded-xl" />
-            <span className="text-xl font-bold gradient-text">Vedaa</span>
+            <div className="w-10 h-10 rounded-xl bg-brand-500 flex items-center justify-center">
+              <Zap className="w-5 h-5 text-white" />
+            </div>
+            <span className="text-xl font-bold gradient-text">Vedaa.io</span>
           </div>
 
           <h2 className="text-2xl font-bold text-white mb-2">

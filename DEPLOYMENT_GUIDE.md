@@ -55,11 +55,11 @@ Complete guide to deploy DevOS platform to production.
    # LLM
    ANTHROPIC_API_KEY=sk-ant-api03-...
 
-   # Netlify
-   NETLIFY_TOKEN=your-netlify-personal-access-token
-   NETLIFY_TEAM_SLUG=devos
-   NETLIFY_SITE_PREFIX=devos
-   NETLIFY_CUSTOM_DOMAIN=vedaa.io
+   # Netlify (use NF_ prefix on Netlify — it reserves the NETLIFY_ prefix)
+   NF_TOKEN=your-netlify-personal-access-token
+   NF_TEAM_SLUG=devos
+   NF_SITE_PREFIX=devos
+   NF_CUSTOM_DOMAIN=vedaa.io
 
    # Server
    PORT=8000
@@ -280,7 +280,8 @@ railway logs
 - Check Supabase URL is accessible
 
 **Problem**: `Netlify not configured`
-- Set `NETLIFY_TOKEN` in Railway environment variables
+- On Railway (backend): Set `NETLIFY_TOKEN` in environment variables
+- On Netlify (frontend): Set `NF_TOKEN` in environment variables (Netlify reserves the `NETLIFY_` prefix)
 - Restart deployment
 
 ### Frontend Issues

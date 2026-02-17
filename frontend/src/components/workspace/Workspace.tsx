@@ -4,14 +4,14 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
-import { useGenerate } from "@/hooks/useGenerate";
-import { useAutoFix } from "@/hooks/useAutoFix";
+import { useGenerate, type PipelineEvent } from "@/hooks/useGenerate";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
 import { FileTree } from "@/components/editor/FileTree";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { BuildLog } from "@/components/build/BuildLog";
+import { InfrastructurePanel } from "@/components/infrastructure/InfrastructurePanel";
 import type { ChatMessage, FileNode, BuildEvent } from "@/types";
 import {
   Zap,
@@ -19,16 +19,16 @@ import {
   Code2,
   Eye,
   Terminal,
+  Database,
+  History,
   Loader2,
   Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PublishButton } from "@/components/workspace/PublishButton";
-import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
-import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
-import * as api from "@/lib/api";
+import { VersionHistory } from "@/components/workspace/VersionHistory";
 
-type RightTab = "code" | "preview" | "console";
+type RightTab = "code" | "preview" | "console" | "infra" | "history";
 
 // Default file tree for new projects
 const defaultFileTree: FileNode[] = [
@@ -47,7 +47,7 @@ const defaultFileTree: FileNode[] = [
             path: "src/app/page.tsx",
             type: "file",
             language: "typescriptreact",
-            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to Vedaa</h1>\n    </main>\n  );\n}',
+            content: '// Your generated code will appear here\nexport default function Home() {\n  return (\n    <main className="min-h-screen flex items-center justify-center">\n      <h1>Welcome to Vedaa.io</h1>\n    </main>\n  );\n}',
           },
           {
             name: "layout.tsx",
@@ -150,6 +150,9 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }, [project?.deployed_url]);
   const seqRef = useRef(0);
+
+  // Track pipeline events we've already converted to build events
+  const pipelineSeenRef = useRef(0);
 
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
@@ -325,6 +328,20 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }
 
+  // File tree — updated from Claude output or editor changes
+  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
+
+  // Ref to track current file tree state (avoid stale closures in save operations)
+  const fileTreeRef = useRef<FileNode[]>(fileTree);
+
+  // Track last saved file count to prevent duplicate saves
+  const lastSavedCountRef = useRef<number>(0);
+
+  // Sync ref with state
+  useEffect(() => {
+    fileTreeRef.current = fileTree;
+  }, [fileTree]);
+
   // Hydrate state from persistence on load
   useEffect(() => {
     if (persistence.isLoading) return;
@@ -370,7 +387,11 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   /** Add or update a file in the tree */
   const addFileToTree = useCallback((path: string, content: string, language?: string) => {
-    const parts = path.split("/");
+    // Normalize path: strip leading ./ and /
+    let normalizedPath = path.replace(/^\.\/+/, "").replace(/^\/+/, "").trim();
+    console.log('[Workspace] addFileToTree called:', { path: normalizedPath, contentLength: content.length });
+
+    const parts = normalizedPath.split("/");
     const fileName = parts[parts.length - 1];
 
     const ext = fileName.split(".").pop() ?? "";
@@ -384,10 +405,17 @@ export function Workspace({ projectId }: { projectId: string }) {
 
     setFileTree((prev) => {
       const flat = flattenTree(prev);
-      if (flat.some((f) => f.path === path)) {
-        return updateInTree(prev, path, content);
+      const exists = flat.some((f) => f.path === normalizedPath);
+      console.log('[Workspace] Updating file tree:', { path: normalizedPath, exists, prevTreeSize: flat.length });
+
+      if (exists) {
+        const updated = updateInTree(prev, normalizedPath, content);
+        console.log('[Workspace] Updated existing file in tree');
+        return updated;
       }
-      return addToDirectory(prev, parts, 0, content, detectedLang);
+      const newTree = addToDirectory(prev, parts, 0, content, detectedLang);
+      console.log('[Workspace] Added new file to tree');
+      return newTree;
     });
 
     // Add a build event for the console
@@ -399,7 +427,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         build_id: "",
         kind: "patch",
         agent: "sonnet",
-        payload: { message: `Generated ${path}` },
+        payload: { message: `Generated ${normalizedPath}` },
         seq: seqRef.current,
         created_at: new Date().toISOString(),
       },
@@ -426,9 +454,58 @@ export function Workspace({ projectId }: { projectId: string }) {
     [activeFile, openFiles]
   );
 
+  // Sync pipeline events from the swarm into the build log
+  useEffect(() => {
+    const events = generator.pipelineEvents;
+    if (events.length <= pipelineSeenRef.current) return;
+
+    const newEvents = events.slice(pipelineSeenRef.current);
+    pipelineSeenRef.current = events.length;
+
+    const agentMap: Record<string, string> = {
+      analyzer: "deepseek",
+      coder: "sonnet",
+      reviewer: "haiku",
+      fixer: "sonnet",
+    };
+
+    const kindMap: Record<string, string> = {
+      running: "agent_start",
+      completed: "agent_end",
+      failed: "error",
+      skipped: "warning",
+    };
+
+    const converted: BuildEvent[] = newEvents.map((pe: PipelineEvent) => {
+      seqRef.current += 1;
+      const costStr = pe.meta?.cost_usd
+        ? ` ($${pe.meta.cost_usd.toFixed(4)})`
+        : "";
+      const latencyStr = pe.meta?.latency_ms
+        ? ` (${(pe.meta.latency_ms / 1000).toFixed(1)}s)`
+        : "";
+      const detailStr = pe.detail ? `\n   ${pe.detail}` : "";
+
+      return {
+        id: pe.id,
+        build_id: "",
+        kind: kindMap[pe.status] || "log",
+        agent: agentMap[pe.agent] || pe.agent,
+        payload: {
+          message: `${pe.message}${latencyStr}${costStr}${detailStr}`,
+        },
+        seq: seqRef.current,
+        created_at: new Date().toISOString(),
+      };
+    });
+
+    setGenerationEvents((prev) => [...prev, ...converted]);
+  }, [generator.pipelineEvents]);
+
   // When generation completes, switch to preview and save code
   useEffect(() => {
-    if (!generator.isGenerating && generator.files.length > 0) {
+    if (!generator.isGenerating && generator.files.length > 0 && generator.files.length !== lastSavedCountRef.current) {
+      console.log('[Workspace] Generation completed, saving code...', { fileCount: generator.files.length });
       setRightTab("preview");
 
       // Add completion event
@@ -446,10 +523,15 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
 
-      // Save code after generation completes
-      persistence.saveCode(treeToCodeMap(fileTree), 'generation', lastPromptRef.current);
+      // Save code after generation completes using ref (not stale closure)
+      const currentTree = fileTreeRef.current;
+      const codeMap = treeToCodeMap(currentTree);
+      console.log('[Workspace] Saving file tree:', { treeSize: flattenTree(currentTree).length, codeMapSize: Object.keys(codeMap).length });
+
+      persistence.saveCode(codeMap, 'generation', lastPromptRef.current);
+      lastSavedCountRef.current = generator.files.length;
     }
-  }, [generator.isGenerating, generator.files.length, persistence, fileTree]);
+  }, [generator.isGenerating, generator.files.length, persistence]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -470,15 +552,17 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Store prompt for saving with generation
       lastPromptRef.current = content;
 
-      // Reset events
+      // Reset events and pipeline tracking
       seqRef.current = 0;
+      pipelineSeenRef.current = 0;
+      lastSavedCountRef.current = 0; // Reset save guard for new generation
       setGenerationEvents([
         {
           id: crypto.randomUUID(),
           build_id: "",
           kind: "agent_start",
-          agent: "sonnet",
-          payload: { message: "Starting code generation with Claude..." },
+          agent: null,
+          payload: { message: "Starting AI pipeline — Analyze → Code → Review..." },
           seq: 1,
           created_at: new Date().toISOString(),
         },
@@ -489,7 +573,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       const generatingMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: "Generating your app with Claude Sonnet...",
+        content: "Running AI pipeline: Analyzer (DeepSeek) → Coder (Claude Sonnet) → Reviewer (Claude Haiku)...",
         timestamp: Date.now(),
         status: "coding",
       };
@@ -499,14 +583,15 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Switch to console to show progress
       setRightTab("console");
 
-      // Call Claude directly — inject Neural Nexus context + integration context
-      const contextParts = [content];
-      if (nexusContext) contextParts.push(nexusContext);
-      if (integrationContext) contextParts.push(integrationContext);
-      const promptWithContext = contextParts.join("\n\n");
-      const result = await generator.generate(promptWithContext, fileTree, (path, fileContent) => {
+      // Build conversation history for iterative chat (previous user+assistant turns)
+      const history = messages
+        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      // Call Claude with full conversation history
+      const result = await generator.generate(content, fileTree, (path, fileContent) => {
         addFileToTree(path, fileContent);
-      });
+      }, history.length > 1 ? history.slice(0, -1) : undefined);
 
       // Use the returned result (not stale closure state)
       if (result.error) {
@@ -566,22 +651,37 @@ export function Workspace({ projectId }: { projectId: string }) {
               {project?.name ?? "Project"}
             </span>
           </div>
-          {generator.isGenerating && (
-            <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20">
-              <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
-              <span className="text-2xs text-amber-400 font-medium uppercase tracking-wider">
-                Generating
-              </span>
-            </div>
-          )}
-          {autoFix.isFixing && (
-            <div className="flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/20">
-              <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse-dot" />
-              <span className="text-2xs text-teal-400 font-medium uppercase tracking-wider">
-                Auto-fixing ({autoFix.iteration}/{autoFix.maxIterations})
-              </span>
-            </div>
-          )}
+          {generator.isGenerating && (() => {
+            const activeEvent = [...generator.pipelineEvents].reverse().find(
+              (e) => e.status === "running"
+            );
+            const stageLabel = activeEvent
+              ? { analyzer: "Analyzing", coder: "Coding", reviewer: "Reviewing", fixer: "Fixing" }[activeEvent.agent] || "Generating"
+              : "Generating";
+            const stageStyles: Record<string, string> = {
+              analyzer: "bg-amber-500/10 border-amber-500/20 text-amber-400",
+              coder: "bg-blue-500/10 border-blue-500/20 text-blue-400",
+              reviewer: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
+              fixer: "bg-violet-500/10 border-violet-500/20 text-violet-400",
+            };
+            const dotStyles: Record<string, string> = {
+              analyzer: "bg-amber-400",
+              coder: "bg-blue-400",
+              reviewer: "bg-emerald-400",
+              fixer: "bg-violet-400",
+            };
+            const agent = activeEvent?.agent || "";
+            const badgeClass = stageStyles[agent] || "bg-amber-500/10 border-amber-500/20 text-amber-400";
+            const dotClass = dotStyles[agent] || "bg-amber-400";
+            return (
+              <div className={cn("flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full border", badgeClass)}>
+                <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse-dot", dotClass)} />
+                <span className="text-2xs font-medium uppercase tracking-wider">
+                  {stageLabel}
+                </span>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="flex items-center gap-2">
@@ -633,6 +733,8 @@ export function Workspace({ projectId }: { projectId: string }) {
                   { key: "code", icon: Code2, label: "Code" },
                   { key: "preview", icon: Eye, label: "Preview" },
                   { key: "console", icon: Terminal, label: "Console" },
+                  { key: "infra", icon: Database, label: "Infra" },
+                  { key: "history", icon: History, label: "History" },
                 ] as const
               ).map(({ key, icon: Icon, label }) => (
                 <button
@@ -681,14 +783,64 @@ export function Workspace({ projectId }: { projectId: string }) {
               )}
 
               {rightTab === "preview" && (
-                <PreviewPane url={deployedUrl} files={fileTree} onError={handlePreviewError} isGenerating={generator.isGenerating} />
+                <PreviewPane
+                  url={deployedUrl}
+                  files={fileTree}
+                  onError={(errorMsg) => {
+                    // Auto-suggest fix if not already generating
+                    if (!generator.isGenerating && errorMsg) {
+                      const fixMsg: ChatMessage = {
+                        id: crypto.randomUUID(),
+                        role: "system",
+                        content: `Preview error detected: "${errorMsg}". Click "Fix Error" below or send a new prompt to fix it.`,
+                        timestamp: Date.now(),
+                      };
+                      setMessages((prev) => {
+                        // Avoid duplicate error messages
+                        if (prev.some((m) => m.content === fixMsg.content)) return prev;
+                        return [...prev, fixMsg];
+                      });
+                    }
+                  }}
+                />
               )}
 
               {rightTab === "console" && (
                 <BuildLog
                   events={generationEvents}
                   isStreaming={generator.isGenerating}
-                  status={generator.isGenerating ? "coding" : generator.files.length > 0 ? "succeeded" : null}
+                  status={
+                    generator.isGenerating
+                      ? (() => {
+                          const active = [...generator.pipelineEvents].reverse().find(
+                            (e) => e.status === "running"
+                          );
+                          if (active?.agent === "analyzer") return "planning" as const;
+                          if (active?.agent === "reviewer") return "reviewing" as const;
+                          return "coding" as const;
+                        })()
+                      : generator.files.length > 0
+                      ? "succeeded"
+                      : null
+                  }
+                />
+              )}
+
+              {rightTab === "infra" && (
+                <InfrastructurePanel
+                  projectId={projectId}
+                  tenantId={resolvedTenantId}
+                />
+              )}
+
+              {rightTab === "history" && (
+                <VersionHistory
+                  projectId={projectId}
+                  onRestore={(codeFiles) => {
+                    const tree = codeMapToTree(codeFiles);
+                    setFileTree(tree);
+                    setRightTab("code");
+                  }}
                 />
               )}
             </div>
