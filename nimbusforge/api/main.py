@@ -119,7 +119,7 @@ app.add_middleware(RequestLoggingMiddleware)
 
 @app.on_event("startup")
 async def startup_event():
-    """Validate configuration on startup and log important info."""
+    """Validate configuration on startup, ensure database tables exist."""
     settings = get_settings()
 
     logger.info("Vedaa API starting")
@@ -131,6 +131,19 @@ async def startup_event():
         bool(settings.anthropic_api_key),
         bool(settings.netlify_token),
     )
+
+    # Auto-ensure app_data table exists (required for all CRUD apps)
+    try:
+        from supabase import create_client as _sc
+        _db = _sc(settings.supabase_url, settings.supabase_service_role_key)
+        from nimbusforge.agents.orchestrator import _ensure_app_data_table
+        if _ensure_app_data_table(_db, settings):
+            logger.info("app_data table: OK")
+        else:
+            logger.warning("app_data table: MISSING — CRUD apps will fail. Run: supabase db push")
+    except Exception as e:
+        logger.warning("Could not verify app_data table: %s", e)
+
     logger.info("Startup validation complete")
 
 

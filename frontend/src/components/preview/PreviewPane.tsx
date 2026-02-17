@@ -118,7 +118,13 @@ function toBase64(str: string): string {
 //   - TypeScript type annotations — Babel strips them
 // ---------------------------------------------------------------------------
 
-function buildPreviewDocument(files: FileNode[]): string {
+function buildPreviewDocument(
+  files: FileNode[],
+  supabaseUrl?: string,
+  supabaseAnonKey?: string,
+  tenantId?: string,
+  projectId?: string,
+): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
   const mainCode = findMainFile(allFiles);
@@ -164,6 +170,12 @@ function buildPreviewDocument(files: FileNode[]): string {
 
   // We build the registry as a raw JS object literal (safe — keys are JSON-escaped)
   const registry = `{${entries.join(",")}}`;
+
+  // Escape Supabase credentials for safe embedding in JS strings
+  const safeSupabaseUrl = (supabaseUrl || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeAnonKey = (supabaseAnonKey || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeTenantId = (tenantId || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeProjectId = (projectId || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
   /* ------------------------------------------------------------------ */
   /* The HTML document loaded inside the preview iframe                  */
@@ -221,63 +233,23 @@ ${cleanCSS}
 <div id="root"></div>
 <script>
 (function(){
-  /* --- Supabase queuing stub & initialization --- */
+  /* --- Core state --- */
   window.__supabase_ready=false;
   window.__sb_resolve=null;
   window.__sb_promise=new Promise(function(r){window.__sb_resolve=r});
-  /* Timeout: if credentials never arrive, resolve with null after 8s */
-  setTimeout(function(){if(!window.__supabase_ready){window.__sb_resolve(null)}},8000);
+  window.__VEDAA_TENANT_ID="${safeTenantId}";
+  window.__VEDAA_PROJECT_ID="${safeProjectId}";
+  window.__VEDAA_APP_INSTANCE_ID="${safeProjectId||'preview'}";
+  var __sbUrl="${safeSupabaseUrl}";
+  var __sbKey="${safeAnonKey}";
 
-  /* Queuing stub: records .from().select().eq()... chains and replays
-     them on the real Supabase client once credentials arrive via postMessage.
-     Prevents "X.filter is not a function" crashes when generated apps
-     call window.supabase before the client is initialized. */
-  (function(){
-    function _chain(ops,isSingle){
-      var b={};
-      'select,insert,update,delete,upsert,eq,neq,gt,gte,lt,lte,like,ilike,is,in,contains,containedBy,order,limit,range,not,or,filter,match,textSearch'.split(',').forEach(function(m){
-        b[m]=function(){var a=Array.prototype.slice.call(arguments);ops.push({m:m,a:a});return _chain(ops,isSingle)};
-      });
-      /* Track .single()/.maybeSingle() so we don't normalize object responses */
-      b.single=function(){ops.push({m:'single',a:[]});return _chain(ops,true)};
-      b.maybeSingle=function(){ops.push({m:'maybeSingle',a:[]});return _chain(ops,true)};
-      b.then=function(res,rej){
-        return window.__sb_promise.then(function(client){
-          if(!client) return {data:isSingle?null:[],error:{message:'Database connection unavailable'}};
-          try{var r=client;for(var i=0;i<ops.length;i++) r=r[ops[i].m].apply(r,ops[i].a);return r;}
-          catch(e){return {data:isSingle?null:[],error:{message:e.message}}}
-        }).then(function(result){
-          /* Normalize: {data:null} → {data:[]} for list queries (not .single()) */
-          if(result&&result.data===null&&!isSingle){
-            result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
-          }
-          /* Enrich: add array methods to response so setCases(result) still works */
-          if(!isSingle&&typeof __enrichResult==='function') __enrichResult(result);
-          return res?res(result):result;
-        },rej);
-      };
-      return b;
-    }
-    window.supabase={from:function(t){return _chain([{m:'from',a:[t]}],false)}};
-  })();
-
-  /* --- Supabase response normalizer ---
-     Wraps supabase.from() so that ALL query responses have data guaranteed
-     to be an array (never null). This prevents the #1 generated-app crash:
-     "cases.filter is not a function" caused by data being null or the
-     response object being used directly without destructuring.
-
-     How it works:
-     - Intercepts .from() to return a Proxy wrapping the PostgREST builder
-     - Every chainable method (.select, .eq, etc.) returns a fresh Proxy
-     - .single()/.maybeSingle() set a flag so we DON'T normalize those
-     - .then() (called by await) normalizes the response:
-       {data: null} → {data: []}  for list queries
-       No change for .single() queries
-     Additionally, for list queries the response object is enriched with array
-     methods (map, filter, etc.) that delegate to response.data. This handles
-     the case where generated code does setCases(result) without destructuring.
-  */
+  /* ================================================================
+     RESPONSE NORMALIZER (defined FIRST so basic init can use it)
+     Wraps supabase.from() chains so that:
+     1. {data: null} → {data: []}  for list queries
+     2. Response objects get array methods (map, filter, etc.)
+        that delegate to response.data
+     ================================================================ */
   var __arrayMethods='map,filter,find,findIndex,forEach,some,every,reduce,reduceRight,includes,indexOf,lastIndexOf,flat,flatMap,slice,sort,concat,join,splice,push,pop,shift,unshift,reverse,fill,copyWithin,entries,keys,values,at,toString'.split(',');
   function __enrichResult(result){
     if(!result||typeof result!=='object'||!Array.isArray(result.data)) return result;
@@ -334,6 +306,61 @@ ${cleanCSS}
     });
   }
 
+  /* ================================================================
+     IMMEDIATE INIT — use baked-in credentials (NEXT_PUBLIC_* are public)
+     This eliminates the postMessage roundtrip that caused
+     "Database connection unavailable" on 8s timeout.
+     ================================================================ */
+  if(__sbUrl&&__sbKey&&typeof supabase!=='undefined'&&supabase.createClient){
+    try{
+      var _basicClient=supabase.createClient(__sbUrl,__sbKey);
+      window.supabase=__wrapSB(_basicClient);
+      window.__supabase_ready=true;
+      window.__sb_resolve(_basicClient);
+      console.log('[Preview] Supabase initialized (basic):', __sbUrl);
+    }catch(err){
+      console.error('[Preview] Failed to init basic Supabase client:', err);
+    }
+  }
+
+  /* ================================================================
+     QUEUING STUB — fallback if Supabase CDN hasn't loaded yet
+     Records .from().select().eq()... chains and replays them once
+     the real client arrives via postMessage.
+     ================================================================ */
+  if(!window.__supabase_ready){
+    setTimeout(function(){if(!window.__supabase_ready){window.__sb_resolve(null)}},8000);
+    (function(){
+      function _chain(ops,isSingle){
+        var b={};
+        'select,insert,update,delete,upsert,eq,neq,gt,gte,lt,lte,like,ilike,is,in,contains,containedBy,order,limit,range,not,or,filter,match,textSearch'.split(',').forEach(function(m){
+          b[m]=function(){var a=Array.prototype.slice.call(arguments);ops.push({m:m,a:a});return _chain(ops,isSingle)};
+        });
+        b.single=function(){ops.push({m:'single',a:[]});return _chain(ops,true)};
+        b.maybeSingle=function(){ops.push({m:'maybeSingle',a:[]});return _chain(ops,true)};
+        b.then=function(res,rej){
+          return window.__sb_promise.then(function(client){
+            if(!client) return {data:isSingle?null:[],error:{message:'Database connection unavailable'}};
+            try{var r=client;for(var i=0;i<ops.length;i++) r=r[ops[i].m].apply(r,ops[i].a);return r;}
+            catch(e){return {data:isSingle?null:[],error:{message:e.message}}}
+          }).then(function(result){
+            if(result&&result.data===null&&!isSingle){
+              result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
+            }
+            if(!isSingle) __enrichResult(result);
+            return res?res(result):result;
+          },rej);
+        };
+        return b;
+      }
+      window.supabase={from:function(t){return _chain([{m:'from',a:[t]}],false)}};
+    })();
+  }
+
+  /* ================================================================
+     AUTH UPGRADE — postMessage handler for authenticated client.
+     Even if basic client works, we still want the auth token for RLS.
+     ================================================================ */
   window.addEventListener('message',function(e){
     if(e.data&&e.data.type==='SUPABASE_INIT'){
       try{
@@ -345,22 +372,22 @@ ${cleanCSS}
         if(e.data.token){
           opts.global={headers:{Authorization:'Bearer '+e.data.token}};
         }
-        var _client=supabase.createClient(e.data.url,e.data.anonKey,opts);
+        var _client=supabase.createClient(e.data.url||__sbUrl,e.data.anonKey||__sbKey,opts);
         window.supabase=__wrapSB(_client);
-        window.__VEDAA_TENANT_ID=e.data.tenantId||'';
-        window.__VEDAA_PROJECT_ID=e.data.projectId||'';
-        window.__VEDAA_APP_INSTANCE_ID=e.data.projectId||'preview';
+        if(e.data.tenantId) window.__VEDAA_TENANT_ID=e.data.tenantId;
+        if(e.data.projectId) window.__VEDAA_PROJECT_ID=e.data.projectId;
+        if(e.data.projectId) window.__VEDAA_APP_INSTANCE_ID=e.data.projectId;
         window.__supabase_ready=true;
         window.__sb_resolve(_client);
         window.dispatchEvent(new Event('supabase:ready'));
-        console.log('[Preview] Supabase initialized (authenticated):',e.data.url);
+        console.log('[Preview] Supabase upgraded (authenticated):', e.data.url||__sbUrl);
       }catch(err){
-        console.error('[Preview] Failed to initialize Supabase:',err);
+        console.error('[Preview] Failed to upgrade Supabase:', err);
       }
     }
   });
 
-  /* Request credentials from parent — srcdoc iframes are same-origin so '*' is safe here */
+  /* Request auth token from parent (even if basic client already works) */
   try{
     window.parent.postMessage({type:'REQUEST_SUPABASE_CREDENTIALS'},'*');
   }catch(e){console.warn('[Preview] Could not request Supabase credentials');}
@@ -943,7 +970,13 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
 
   const srcdoc = useMemo(() => {
     if (files && files.length > 0) {
-      return buildPreviewDocument(files);
+      return buildPreviewDocument(
+        files,
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+        tenantId,
+        projectId,
+      );
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
