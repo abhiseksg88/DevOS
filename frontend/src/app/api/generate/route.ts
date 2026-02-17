@@ -35,15 +35,15 @@ const FILE_FORMAT = `You MUST respond with ONLY code files in the following exac
 - Do NOT import from external packages (no lucide-react, no framer-motion, no date-fns, etc.)
 - Each component file MUST have a default export: \`export default function ComponentName() { ... }\`
 
-### Example file structure for a meal tracker app:
+### Example file structure for a meal tracker app (OUTPUT IN THIS ORDER):
 \`\`\`
-src/types.ts              — Meal, NutritionGoal interfaces
-src/data.ts               — MOCK_MEALS array, NUTRITION_GOALS
+src/app/page.tsx          — OUTPUT FIRST! imports components, manages state, renders layout
+src/app/globals.css       — animations
 src/components/MealForm.tsx      — add/edit meal form with validation
 src/components/MealTable.tsx     — meal list/table with search & filter
 src/components/NutritionStats.tsx — calorie/macro summary cards
-src/app/page.tsx          — imports above, manages state, renders layout
-src/app/globals.css       — animations
+src/types.ts              — Meal, NutritionGoal interfaces
+src/data.ts               — MOCK_MEALS array, NUTRITION_GOALS
 \`\`\`
 
 ## Design System — THIS IS CRITICAL
@@ -210,6 +210,17 @@ Do NOT include any explanation text outside of file blocks.
 ===FILE: path/to/file.tsx===
 (complete file content)
 ===END_FILE===
+
+### ⚠️ FILE OUTPUT ORDER — THIS IS CRITICAL (violating this causes app crashes):
+You MUST output files in this EXACT order:
+1. **FIRST**: \`src/app/page.tsx\` — the main entry point (MUST be output FIRST and be COMPLETE)
+2. **SECOND**: \`src/app/globals.css\` — CSS styles
+3. **THEN**: \`src/components/*.tsx\` — supporting components
+4. **LAST**: \`src/types.ts\`, \`src/data.ts\` — types and data files
+
+Why: If the response is truncated, the main page.tsx is already complete and the app renders.
+If you output page.tsx last, truncation destroys it and the app shows a blank white screen.
+Components imported by page.tsx that are missing will gracefully degrade to placeholders.
 
 ### When updating an existing project:
 - ONLY output files that need to change or are new
@@ -432,7 +443,7 @@ Follow this build plan precisely. Implement exactly the components, changes, and
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5-20250929",
-          max_tokens: hasExistingProject ? 16384 : 32768,
+          max_tokens: hasExistingProject ? 32768 : 65536,
           system: systemPrompt,
           messages: chatHistory && chatHistory.length > 0
             ? [
