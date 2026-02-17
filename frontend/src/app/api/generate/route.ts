@@ -443,7 +443,7 @@ Follow this build plan precisely. Implement exactly the components, changes, and
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5-20250929",
-          max_tokens: hasExistingProject ? 32768 : 65536,
+          max_tokens: hasExistingProject ? 32768 : 64000,
           system: systemPrompt,
           messages: chatHistory && chatHistory.length > 0
             ? [
