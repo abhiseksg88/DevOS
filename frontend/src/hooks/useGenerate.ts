@@ -143,21 +143,29 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
   }
 
   // Format 1b: Truncated file — has ===FILE: path=== but NO ===END_FILE===
-  // This happens when the response hits max_tokens and gets cut off
+  // This happens when the response hits max_tokens and gets cut off.
+  // BUG FIX: The old regex `([\s\S]+?)$` with `g` only matched the FIRST ===FILE:
+  // block, not the LAST truncated one. Now we find the last ===FILE: without a
+  // matching ===END_FILE=== by searching backwards from the end.
   if (allowTruncated) {
-    const truncatedRegex = /===FILE:\s*(.+?)===\n([\s\S]+?)$/g;
-    // Reset lastIndex for fresh search
-    truncatedRegex.lastIndex = 0;
-    while ((match = truncatedRegex.exec(text)) !== null) {
-      const safePath = sanitizePath(match[1].trim());
-      if (!safePath) continue;
-      // Skip if we already have this file from the complete match
-      if (files.some(f => f.path === safePath)) continue;
-      const content = match[2].trimEnd();
-      // Only include if there's substantial content (at least 100 chars)
-      if (content.length >= 100) {
-        console.log('[parseFiles] Found TRUNCATED file:', safePath, 'content length:', content.length);
-        files.push({ path: safePath, content });
+    const lastFileIdx = text.lastIndexOf("===FILE:");
+    if (lastFileIdx !== -1) {
+      const tail = text.substring(lastFileIdx);
+      // Only process if this block has NO closing delimiter (truly truncated)
+      if (!tail.includes("===END_FILE===")) {
+        const headerMatch = tail.match(/^===FILE:\s*(.+?)===\n([\s\S]+)$/);
+        if (headerMatch) {
+          const safePath = sanitizePath(headerMatch[1].trim());
+          if (safePath && !files.some(f => f.path === safePath)) {
+            const content = headerMatch[2].trimEnd();
+            if (content.length >= 100) {
+              console.log('[parseFiles] Found TRUNCATED file (last block):', safePath, 'content length:', content.length);
+              files.push({ path: safePath, content });
+            } else {
+              console.warn('[parseFiles] Truncated file too short to recover:', safePath, 'length:', content.length);
+            }
+          }
+        }
       }
     }
   }
@@ -325,8 +333,62 @@ async function streamGenerate(
 
   // Try standard parse first, then truncated fallback if needed
   let finalFiles = parseFiles(fullText, false, existingFiles);
-  if (finalFiles.length === 0 && wasTruncated) {
-    finalFiles = parseFiles(fullText, true, existingFiles); // Allow truncated files
+  if (wasTruncated) {
+    // Always attempt truncated recovery on truncation — even if we have some complete files,
+    // the last file (which got cut off) might be important
+    const withTruncated = parseFiles(fullText, true, existingFiles);
+    // Merge: add any recovered files that aren't already in finalFiles
+    for (const tf of withTruncated) {
+      if (!finalFiles.some(f => f.path === tf.path)) {
+        console.log('[useGenerate] Recovered truncated file:', tf.path, 'length:', tf.content.length);
+        finalFiles.push(tf);
+      }
+    }
+  }
+
+  // --- "Vanishing Keystone" safety net ---
+  // If we have component files but page.tsx is MISSING (truncated away),
+  // auto-scaffold a minimal page.tsx that imports and renders the available components.
+  const hasPageFile = finalFiles.some(f =>
+    f.path.includes("page.tsx") || f.path.includes("page.jsx") ||
+    f.path.includes("App.tsx") || f.path.includes("App.jsx")
+  );
+  const componentFiles = finalFiles.filter(f =>
+    f.path.includes("/components/") &&
+    (f.path.endsWith(".tsx") || f.path.endsWith(".jsx"))
+  );
+
+  if (!hasPageFile && componentFiles.length > 0) {
+    console.warn('[useGenerate] VANISHING KEYSTONE detected: page.tsx missing but', componentFiles.length, 'components exist. Auto-scaffolding page.tsx...');
+
+    // Build import lines and component render lines
+    const imports: string[] = [];
+    const renders: string[] = [];
+    for (const cf of componentFiles) {
+      // Extract component name from file name (e.g., "src/components/TodoList.tsx" → "TodoList")
+      const name = cf.path.split("/").pop()?.replace(/\.(tsx|jsx)$/, "") ?? "Component";
+      const importPath = "@/" + cf.path.replace(/^src\//, "").replace(/\.(tsx|jsx)$/, "");
+      imports.push(`import ${name} from "${importPath}";`);
+      renders.push(`        <${name} />`);
+    }
+
+    const scaffoldPage = `import { useState } from "react";
+${imports.join("\n")}
+
+export default function Home() {
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <h1 className="text-3xl font-bold text-slate-900 mb-8">App</h1>
+${renders.join("\n")}
+      </div>
+    </div>
+  );
+}
+`;
+    finalFiles.push({ path: "src/app/page.tsx", content: scaffoldPage });
+    onFileGenerated("src/app/page.tsx", scaffoldPage);
+    console.log('[useGenerate] Auto-scaffolded page.tsx with', componentFiles.length, 'component imports');
   }
 
   console.log('[useGenerate] Stream complete. Final parse:', { totalFiles: finalFiles.length, lastParsedCount, fullTextLength: fullText.length, stopReason });
