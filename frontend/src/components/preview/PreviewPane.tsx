@@ -437,6 +437,7 @@ ${cleanCSS}
     var enc=__reg[mod];
     if(!enc){
       var tries=[mod];
+      if(mod.startsWith('@/'))  tries.push('src/'+mod.slice(2));
       if(mod.startsWith('./'))  tries.push('src/'+mod.slice(2),'src/app/'+mod.slice(2));
       if(mod.startsWith('../')) tries.push('src/'+mod.replace(/^\\.\\.\\/*/,''));
       for(var t=0;t<tries.length&&!enc;t++){
@@ -861,6 +862,7 @@ ${cleanCSS}
     var enc=__reg[mod];
     if(!enc){
       var tries=[mod];
+      if(mod.startsWith('@/'))  tries.push('src/'+mod.slice(2));
       if(mod.startsWith('./'))  tries.push('src/'+mod.slice(2),'src/app/'+mod.slice(2));
       if(mod.startsWith('../')) tries.push('src/'+mod.replace(/^\\.\\.\\/*/,''));
       for(var t=0;t<tries.length&&!enc;t++){
