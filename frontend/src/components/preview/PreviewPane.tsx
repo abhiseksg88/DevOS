@@ -325,6 +325,45 @@ ${cleanCSS}
       window.__supabase_ready=true;
       window.__sb_resolve(_basicClient);
       console.log('[Preview] Supabase initialized'+ (__sbToken?' (authenticated)':' (anon)') +':', __sbUrl);
+
+      /* === DB Health Check — verify app_data table + RLS access === */
+      (async function(){
+        try{
+          var r=await _basicClient.from('app_data').select('id').limit(1);
+          if(r.error){
+            console.error('[Preview DB] app_data table check FAILED:',r.error.message,r.error.code);
+            if(r.error.message.indexOf('does not exist')!==-1||r.error.code==='42P01'){
+              console.error('[Preview DB] TABLE MISSING — attempting auto-creation via /api/db-setup...');
+              try{
+                var setupResp=await fetch('/api/db-setup',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+                var setupResult=await setupResp.json();
+                if(setupResult.success){
+                  console.log('[Preview DB] Auto-creation:',setupResult.message);
+                  /* Re-check after creation */
+                  var r2=await _basicClient.from('app_data').select('id').limit(1);
+                  if(r2.error){
+                    console.error('[Preview DB] Table created but access denied:',r2.error.message,'— RLS may be blocking. Ensure user is authenticated.');
+                  }else{
+                    console.log('[Preview DB] app_data table: OK (auto-created)');
+                  }
+                }else{
+                  console.error('[Preview DB] Auto-creation failed:',setupResult.error);
+                  console.error('[Preview DB] Run manually: supabase db push (migration 004_app_data_table.sql)');
+                }
+              }catch(setupErr){
+                console.error('[Preview DB] Auto-creation request failed:',setupErr);
+              }
+            }else if(r.error.code==='42501'||r.error.message.indexOf('permission denied')!==-1){
+              console.error('[Preview DB] RLS DENIED — User auth token may be missing or expired. tenant_id:',window.__VEDAA_TENANT_ID);
+            }
+          }else{
+            console.log('[Preview DB] app_data table: OK (',r.data?r.data.length:0,'rows accessible)');
+          }
+          console.log('[Preview DB] Globals — tenant_id:',window.__VEDAA_TENANT_ID||'EMPTY','project_id:',window.__VEDAA_PROJECT_ID||'EMPTY');
+          if(!window.__VEDAA_TENANT_ID) console.error('[Preview DB] WARNING: __VEDAA_TENANT_ID is empty — all INSERT operations will fail RLS');
+          if(!window.__VEDAA_PROJECT_ID) console.error('[Preview DB] WARNING: __VEDAA_PROJECT_ID is empty — all queries will return no results');
+        }catch(e){console.error('[Preview DB] Health check error:',e);}
+      })();
     }catch(err){
       console.error('[Preview] Failed to init Supabase client:', err);
     }

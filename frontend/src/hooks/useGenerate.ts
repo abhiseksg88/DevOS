@@ -90,6 +90,30 @@ function applyEdits(original: string, edits: { search: string; replace: string }
 }
 
 /**
+ * Pre-process LLM text to normalize common formatting variations.
+ * - Strips markdown code blocks wrapping ===FILE=== delimiters
+ * - Removes backticks around file paths in delimiters
+ * - Normalizes whitespace in delimiters
+ */
+function preprocessLLMText(text: string): string {
+  let cleaned = text;
+
+  // Strip outer markdown code blocks that wrap ===FILE=== delimiters
+  // e.g. ```\n===FILE: path===\n...\n===END_FILE===\n```
+  cleaned = cleaned.replace(/```[\w]*\s*\n(===(?:FILE|EDIT):)/g, "$1");
+  cleaned = cleaned.replace(/(===END_(?:FILE|EDIT)===)\s*\n```/g, "$1");
+
+  // Remove backticks around file paths: ===FILE: `src/app/page.tsx`=== → ===FILE: src/app/page.tsx===
+  cleaned = cleaned.replace(/===FILE:\s*`([^`]+)`\s*===/g, "===FILE: $1===");
+  cleaned = cleaned.replace(/===EDIT:\s*`([^`]+)`\s*===/g, "===EDIT: $1===");
+
+  // Handle ** bold ** around file paths: ===FILE: **src/app/page.tsx**=== → ===FILE: src/app/page.tsx===
+  cleaned = cleaned.replace(/===FILE:\s*\*\*([^*]+)\*\*\s*===/g, "===FILE: $1===");
+
+  return cleaned;
+}
+
+/**
  * Parse files from Claude's response. Supports multiple formats:
  * 1. ===FILE: path=== ... ===END_FILE===  (full file, new or rewrite)
  * 2. ===EDIT: path=== <<<SEARCH ... >>>REPLACE ... ===END_EDIT===  (search & replace)
@@ -99,10 +123,13 @@ function applyEdits(original: string, edits: { search: string; replace: string }
 function parseFiles(text: string, allowTruncated = false, existingFiles?: { path: string; content: string }[]): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
+  // Pre-process to handle common LLM formatting variations
+  const cleanText = preprocessLLMText(text);
+
   // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
   const delimiterRegex = /===FILE:\s*(.+?)===\s*\n([\s\S]*?)===END_FILE===/g;
   let match;
-  while ((match = delimiterRegex.exec(text)) !== null) {
+  while ((match = delimiterRegex.exec(cleanText)) !== null) {
     const safePath = sanitizePath(match[1].trim());
     if (safePath) {
       console.log('[parseFiles] Found file via delimiter format:', safePath, 'content length:', match[2].trimEnd().length);
@@ -112,7 +139,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
 
   // Format 1.5: ===EDIT: path=== with SEARCH/REPLACE blocks (safety net)
   const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
-  while ((match = editRegex.exec(text)) !== null) {
+  while ((match = editRegex.exec(cleanText)) !== null) {
     const editPath = match[1]?.trim();
     const safePath = editPath ? sanitizePath(editPath) : null;
     if (!safePath) continue;
@@ -148,9 +175,9 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
   // block, not the LAST truncated one. Now we find the last ===FILE: without a
   // matching ===END_FILE=== by searching backwards from the end.
   if (allowTruncated) {
-    const lastFileIdx = text.lastIndexOf("===FILE:");
+    const lastFileIdx = cleanText.lastIndexOf("===FILE:");
     if (lastFileIdx !== -1) {
-      const tail = text.substring(lastFileIdx);
+      const tail = cleanText.substring(lastFileIdx);
       // Only process if this block has NO closing delimiter (truly truncated)
       if (!tail.includes("===END_FILE===")) {
         const headerMatch = tail.match(/^===FILE:\s*(.+?)===\n([\s\S]+)$/);
@@ -177,7 +204,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
 
   // Format 3: ```language\n// filepath\n...``` or ```language:filepath\n...```
   const codeBlockRegex = /```(?:\w+)?\s*\n?\s*(?:\/\/\s*|\/\*\s*|#\s*)?(?:file:\s*|File:\s*|path:\s*)?([^\n*]+\.\w+)\s*\n([\s\S]*?)```/gi;
-  while ((match = codeBlockRegex.exec(text)) !== null) {
+  while ((match = codeBlockRegex.exec(cleanText)) !== null) {
     const path = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
     const safePath = sanitizePath(path);
     if (safePath && (safePath.includes("/") || safePath.includes("."))) {
@@ -187,7 +214,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
   if (files.length > 0) return files;
 
   // Format 4: Look for code blocks with file paths mentioned before them
-  const sections = text.split(/(?=###?\s|(?:^|\n)(?:\*\*)?(?:File|`)[:\s])/);
+  const sections = cleanText.split(/(?=###?\s|(?:^|\n)(?:\*\*)?(?:File|`)[:\s])/);
   for (const section of sections) {
     const pathMatch = section.match(
       /(?:###?\s*|(?:\*\*)?(?:File|`)[:\s]*\s*)([`"]?)([a-zA-Z][\w./\-]+\.\w{1,10})\1/
@@ -409,7 +436,15 @@ ${renders.join("\n")}
     } else if (wasTruncated) {
       errMsg = `Response was truncated (hit token limit). The app may be too complex for a single generation. Try a simpler prompt or break it into steps.`;
     } else {
-      errMsg = `Claude responded but output could not be parsed into files. Raw: ${fullText.length} chars.`;
+      // Log diagnostic info to help debug parsing failures
+      const hasFileDelimiter = fullText.includes("===FILE:");
+      const hasEndFile = fullText.includes("===END_FILE===");
+      const hasCodeBlock = fullText.includes("```");
+      const first500 = fullText.substring(0, 500);
+      console.error('[useGenerate] PARSE FAILURE — Could not extract files from LLM response.');
+      console.error('[useGenerate] Diagnostic:', { length: fullText.length, hasFileDelimiter, hasEndFile, hasCodeBlock });
+      console.error('[useGenerate] First 500 chars:', first500);
+      errMsg = `Claude responded but output could not be parsed into files. Raw: ${fullText.length} chars.${hasFileDelimiter && !hasEndFile ? ' Found ===FILE: but no ===END_FILE=== — response may have been cut off.' : ''}`;
     }
     return { files: [], error: errMsg };
   }
