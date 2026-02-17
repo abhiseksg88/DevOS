@@ -549,11 +549,20 @@ export async function POST(req: NextRequest) {
   // Select system prompt: update mode when modifying existing project, initial for greenfield
   const systemPrompt = hasExistingProject ? UPDATE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT;
 
-  // Assistant prefill: forces Claude to START in ===FILE: format (no preamble text)
-  // This is the #1 fix for "could not be parsed into files" errors.
-  // For new projects: always start with page.tsx (the entry point)
-  // For updates: use generic prefix so Claude fills in the appropriate file path
-  const PREFILL = hasExistingProject ? "===FILE: " : "===FILE: src/app/page.tsx===\n";
+  // Assistant prefill: forces Claude to START in ===FILE: format AND teaches it
+  // the closing delimiter by including one COMPLETE file (globals.css) first.
+  // This is critical — without seeing ===END_FILE=== in its own output, Claude
+  // often forgets to close file blocks, causing "could not be parsed" errors.
+  const PREFILL_NEW = `===FILE: src/app/globals.css===
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+===END_FILE===
+
+===FILE: src/app/page.tsx===
+`;
+  const PREFILL_UPDATE = "===FILE: ";
+  const PREFILL = hasExistingProject ? PREFILL_UPDATE : PREFILL_NEW;
 
   // Build PRD block if provided by the Analyzer agent
   let prdBlock = "";
@@ -566,9 +575,11 @@ Follow this build plan precisely. Implement exactly the components, changes, and
 `;
   }
 
+  // Format enforcement reminder — appended to EVERY user message
+  const FORMAT_REMINDER = `\n\nREMINDER: Output ONLY ===FILE: path=== blocks. Every file MUST end with ===END_FILE=== on its own line. No text outside file blocks.`;
+
   // Build the user message with structured context for updates
   function buildUserMessage(userPrompt: string): string {
-    if (!hasExistingProject && !prdBlock) return userPrompt;
     const parts: string[] = [];
     if (existingProjectBlock) parts.push(existingProjectBlock);
     if (prdBlock) parts.push(prdBlock);
@@ -576,6 +587,7 @@ Follow this build plan precisely. Implement exactly the components, changes, and
     if (hasExistingProject) {
       parts.push("Remember: Only output files that need to change or are new. Do not regenerate unchanged files.");
     }
+    parts.push(FORMAT_REMINDER);
     return parts.join("\n\n");
   }
 
