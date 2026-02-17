@@ -157,6 +157,84 @@ Use INLINE SVGs or emoji. Common patterns:
 - Stacked on mobile: \`flex flex-col lg:flex-row\`
 - Full width on mobile: \`w-full sm:w-auto\` for buttons
 
+## Database & Persistence — Supabase CRUD
+
+A global Supabase client is available at \`window.supabase\` (injected by the preview runtime).
+Context globals are also available: \`window.__VEDAA_TENANT_ID\`, \`window.__VEDAA_PROJECT_ID\`, \`window.__VEDAA_APP_INSTANCE_ID\`.
+
+The \`app_data\` table stores all application data:
+- id: UUID (auto-generated)
+- tenant_id: UUID (use \`window.__VEDAA_TENANT_ID\`)
+- project_id: UUID (use \`window.__VEDAA_PROJECT_ID\`)
+- app_instance_id: TEXT (use \`window.__VEDAA_APP_INSTANCE_ID\`)
+- collection: TEXT (e.g. "meals", "todos", "contacts")
+- record_id: TEXT (user-facing ID, use \`crypto.randomUUID()\`)
+- data: JSONB (flexible schema per collection)
+- version: INTEGER (for optimistic locking)
+- created_at, updated_at: TIMESTAMPTZ
+
+### CRUD Patterns (use these exact patterns when the user requests database features):
+
+**CREATE:**
+\`\`\`javascript
+const { data, error } = await window.supabase
+  .from('app_data')
+  .insert({
+    tenant_id: window.__VEDAA_TENANT_ID,
+    project_id: window.__VEDAA_PROJECT_ID,
+    app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
+    collection: 'items',
+    record_id: crypto.randomUUID(),
+    data: { name: 'Item', status: 'active' }
+  })
+  .select()
+  .single();
+\`\`\`
+
+**READ:**
+\`\`\`javascript
+const { data, error } = await window.supabase
+  .from('app_data')
+  .select('*')
+  .eq('collection', 'items')
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
+  .order('created_at', { ascending: false });
+\`\`\`
+
+**UPDATE:**
+\`\`\`javascript
+const { data, error } = await window.supabase
+  .from('app_data')
+  .update({ data: updatedData, version: currentVersion + 1 })
+  .eq('collection', 'items')
+  .eq('record_id', itemId)
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
+  .eq('version', currentVersion)
+  .select()
+  .single();
+\`\`\`
+
+**DELETE:**
+\`\`\`javascript
+const { error } = await window.supabase
+  .from('app_data')
+  .delete()
+  .eq('collection', 'items')
+  .eq('record_id', itemId)
+  .eq('project_id', window.__VEDAA_PROJECT_ID);
+\`\`\`
+
+### Database Rules:
+- ALWAYS use \`window.supabase\` (never import or create a new client)
+- ALWAYS include tenant_id, project_id, app_instance_id in INSERT using window.__VEDAA_* globals
+- ALWAYS filter by project_id in READ/UPDATE/DELETE
+- ALWAYS handle errors with try/catch and display to user
+- ALWAYS use isLoading state during async operations
+- ALWAYS use \`(data || [])\` when setting array state (data can be null)
+- ALWAYS use version check for UPDATE (optimistic locking)
+- NEVER use localStorage for persistence
+- NEVER mock data with hardcoded arrays when database is requested
+
 ## Content Rules
 - Use REALISTIC mock data — real names, actual descriptions, plausible numbers
 - Minimum 6-12 items in lists/tables (never just 2-3)

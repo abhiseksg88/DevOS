@@ -31,6 +31,9 @@ interface PreviewPaneProps {
   files?: FileNode[];
   onError?: (errorMessage: string) => void;
   isGenerating?: boolean;
+  tenantId?: string;
+  projectId?: string;
+  userToken?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,11 +257,18 @@ ${cleanCSS}
           console.error('[Preview] Supabase SDK not loaded');
           return;
         }
-        window.supabase=supabase.createClient(e.data.url,e.data.anonKey);
+        var opts={};
+        if(e.data.token){
+          opts.global={headers:{Authorization:'Bearer '+e.data.token}};
+        }
+        window.supabase=supabase.createClient(e.data.url,e.data.anonKey,opts);
+        window.__VEDAA_TENANT_ID=e.data.tenantId||'';
+        window.__VEDAA_PROJECT_ID=e.data.projectId||'';
+        window.__VEDAA_APP_INSTANCE_ID=e.data.projectId||'preview';
         window.__supabase_ready=true;
         window.__sb_resolve(window.supabase);
         window.dispatchEvent(new Event('supabase:ready'));
-        console.log('[Preview] Supabase initialized:',e.data.url);
+        console.log('[Preview] Supabase initialized (authenticated):',e.data.url);
       }catch(err){
         console.error('[Preview] Failed to initialize Supabase:',err);
       }
@@ -522,6 +532,8 @@ export function buildDeployDocument(
   supabaseUrl: string,
   supabaseAnonKey: string,
   appTitle: string = "App",
+  tenantId: string = "",
+  projectId: string = "",
 ): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
@@ -609,6 +621,9 @@ ${cleanCSS}
   /* --- Initialize Supabase directly --- */
   window.__supabase_ready=false;
   window.supabase=null;
+  window.__VEDAA_TENANT_ID="${tenantId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
+  window.__VEDAA_PROJECT_ID="${projectId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
+  window.__VEDAA_APP_INSTANCE_ID="${(projectId || "deployed").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
   try{
     if(typeof supabase!=='undefined'&&supabase.createClient){
       window.supabase=supabase.createClient("${safeSupabaseUrl}","${safeAnonKey}");
@@ -763,7 +778,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files, onError, isGenerating }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError, isGenerating, tenantId, projectId, userToken }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -821,30 +836,26 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
 
           const credentials = await response.json();
 
+          // Build payload with auth context for CRUD operations
+          const payload = {
+            type: "SUPABASE_INIT",
+            url: credentials.url,
+            anonKey: credentials.anonKey,
+            token: userToken || "",
+            tenantId: tenantId || "",
+            projectId: projectId || "",
+          };
+
           // Send credentials only to our own iframes, using specific origin
           const iframes = document.getElementsByTagName("iframe");
           const targetOrigin = window.location.origin;
           for (let i = 0; i < iframes.length; i++) {
             try {
-              iframes[i].contentWindow?.postMessage(
-                {
-                  type: "SUPABASE_INIT",
-                  url: credentials.url,
-                  anonKey: credentials.anonKey,
-                },
-                targetOrigin
-              );
+              iframes[i].contentWindow?.postMessage(payload, targetOrigin);
             } catch {
               // srcdoc iframes have null origin, retry with *
               try {
-                iframes[i].contentWindow?.postMessage(
-                  {
-                    type: "SUPABASE_INIT",
-                    url: credentials.url,
-                    anonKey: credentials.anonKey,
-                  },
-                  "*"
-                );
+                iframes[i].contentWindow?.postMessage(payload, "*");
               } catch {
                 // silently ignore
               }
@@ -858,7 +869,7 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
 
     window.addEventListener("message", handleCredentialRequest);
     return () => window.removeEventListener("message", handleCredentialRequest);
-  }, []);
+  }, [userToken, tenantId, projectId]);
 
   // Clear errors on new content / refresh
   useEffect(() => {

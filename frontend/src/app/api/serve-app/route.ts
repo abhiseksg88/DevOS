@@ -96,7 +96,7 @@ function toBase64(str: string): string {
 // Build self-contained HTML (server-side version of buildDeployDocument)
 // ---------------------------------------------------------------------------
 
-function buildAppHTML(files: FileNode[], appTitle: string): string {
+function buildAppHTML(files: FileNode[], appTitle: string, projectId?: string, tenantId?: string): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
   const mainCode = findMainFile(allFiles);
@@ -156,6 +156,9 @@ ${cleanCSS}
 (function(){
   window.__supabase_ready=false;
   window.supabase=null;
+  window.__VEDAA_TENANT_ID="${(tenantId || "").replace(/"/g, '\\"')}";
+  window.__VEDAA_PROJECT_ID="${(projectId || "").replace(/"/g, '\\"')}";
+  window.__VEDAA_APP_INSTANCE_ID="${(projectId || "deployed").replace(/"/g, '\\"')}";
   try{
     if(typeof supabase!=='undefined'&&supabase.createClient){
       window.supabase=supabase.createClient("${supabaseUrl}","${supabaseAnonKey}");
@@ -281,7 +284,7 @@ export async function GET(req: NextRequest) {
   // Fetch project by slug
   const { data: project, error } = await supabase
     .from("projects")
-    .select("id, name, slug, code_files, deployment_status")
+    .select("id, name, slug, code_files, deployment_status, tenant_id")
     .eq("slug", slug)
     .single();
 
@@ -322,7 +325,7 @@ export async function GET(req: NextRequest) {
 
   // Build self-contained HTML
   const fileTree = codeMapToTree(codeFiles);
-  const html = buildAppHTML(fileTree, project.name || "App");
+  const html = buildAppHTML(fileTree, project.name || "App", project.id, project.tenant_id);
 
   return new NextResponse(html, {
     status: 200,

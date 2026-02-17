@@ -161,6 +161,8 @@ export function PublishButton({
         supabaseUrl,
         supabaseAnonKey,
         project.name,
+        tenantId,
+        project.id,
       );
 
       // Step 2: Upload to Netlify via our API route
