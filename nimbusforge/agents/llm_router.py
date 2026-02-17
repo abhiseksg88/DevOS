@@ -1,11 +1,11 @@
 """
 LLM Router — Model selection, fallback, retry, and cost tracking.
 
-Routing table:
-  Opus    -> architecture/planning (cached, minimized)
-  Sonnet  -> code edits/refactors (patch-only output)
-  Haiku   -> QA/review/tests/security
-  DeepSeek -> bulk scaffolding, boilerplate, YAML/infra
+Routing table (task-type-based):
+  Claude (Opus):    Architecture, planning, complex decisions
+  Claude (Sonnet):  Backend code, diffs, repair patches
+  Claude (Haiku):   QA/review/tests/security
+  DeepSeek:         UI components, styling, layout, scaffolding
 
 Fallback chain:
   Opus fails    -> Sonnet (degraded planning)
@@ -31,6 +31,74 @@ class ModelTier(str, Enum):
     SONNET = "sonnet"
     HAIKU = "haiku"
     DEEPSEEK = "deepseek"
+
+
+class TaskType(str, Enum):
+    """Task types for intelligent model routing."""
+    ARCHITECTURE = "architecture"
+    BACKEND = "backend"
+    DIFF = "diff"
+    REPAIR = "repair"
+    REVIEW = "review"
+    UI_COMPONENT = "ui_component"
+    STYLING = "styling"
+    LAYOUT = "layout"
+    SCAFFOLD = "scaffold"
+
+
+# Task type → model tier routing
+TASK_ROUTING: dict[TaskType, ModelTier] = {
+    # Claude handles: architecture, backend, diffs, repair
+    TaskType.ARCHITECTURE: ModelTier.OPUS,
+    TaskType.BACKEND: ModelTier.SONNET,
+    TaskType.DIFF: ModelTier.SONNET,
+    TaskType.REPAIR: ModelTier.SONNET,
+    TaskType.REVIEW: ModelTier.HAIKU,
+    # DeepSeek handles: UI components, styling, layout
+    TaskType.UI_COMPONENT: ModelTier.DEEPSEEK,
+    TaskType.STYLING: ModelTier.DEEPSEEK,
+    TaskType.LAYOUT: ModelTier.DEEPSEEK,
+    TaskType.SCAFFOLD: ModelTier.DEEPSEEK,
+}
+
+
+def route_by_task(task_type: TaskType) -> ModelTier:
+    """Get the appropriate model tier for a task type."""
+    return TASK_ROUTING.get(task_type, ModelTier.SONNET)
+
+
+def classify_file_task(file_path: str) -> TaskType:
+    """Classify a file path into a task type for routing."""
+    path_lower = file_path.lower()
+
+    # UI/frontend files → DeepSeek
+    if any(p in path_lower for p in [
+        "/components/", "/pages/", "/app/page",
+        ".css", ".scss", ".tailwind",
+    ]):
+        return TaskType.UI_COMPONENT
+
+    if any(p in path_lower for p in [
+        "layout", "globals.css", "theme", "styles",
+    ]):
+        return TaskType.STYLING
+
+    # Backend/API files → Claude Sonnet
+    if any(p in path_lower for p in [
+        "/api/", "/services/", "/lib/", "/utils/",
+        ".py", "route.ts", "middleware",
+    ]):
+        return TaskType.BACKEND
+
+    # Types → Claude Sonnet (precision matters)
+    if "/types" in path_lower or path_lower.endswith(".d.ts"):
+        return TaskType.BACKEND
+
+    # Default to UI for tsx/jsx files
+    if path_lower.endswith((".tsx", ".jsx")):
+        return TaskType.UI_COMPONENT
+
+    return TaskType.BACKEND
 
 
 # Cost per 1M tokens (USD) — update as pricing changes

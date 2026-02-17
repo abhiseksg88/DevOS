@@ -9,6 +9,33 @@
   NODE_VERSION = "20"
   NPM_FLAGS = "--legacy-peer-deps"
 
+# Environment variable mapping:
+# NEXT_PUBLIC_* vars are available client-side (anon key only)
+# Server-side vars (API routes) can access SUPABASE_SERVICE_ROLE_KEY
+# NEVER expose service role key to client-side code
+#
+# Required Netlify env vars:
+#   NEXT_PUBLIC_SUPABASE_URL        — Supabase project URL
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY   — Supabase anon key (safe for client)
+#   ANTHROPIC_API_KEY               — For serverless /api/generate route
+#   NEXT_PUBLIC_API_URL             — Backend API URL (Railway)
+
 # Next.js adapter — handles SSR, API routes, middleware, and image optimization
 [[plugins]]
   package = "@netlify/plugin-nextjs"
+
+# Security headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+# SPA routing fallback for client-side navigation
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  conditions = {Role = ["admin"]}
