@@ -281,7 +281,13 @@ export function NeuralNexusPanel({
       const data = await api.nexus.getState(token, tenantId, projectId);
       setState(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load Neural Nexus");
+      const msg = err instanceof Error ? err.message : "Failed to load Neural Nexus";
+      const isNetworkError = msg.includes("Cannot reach backend") ||
+                             msg.includes("Backend API unreachable") ||
+                             msg.includes("CORS") ||
+                             msg.includes("Failed to fetch") ||
+                             msg.includes("NetworkError");
+      setError(isNetworkError ? "__NOT_CONNECTED__" : msg);
     } finally {
       setLoading(false);
     }
@@ -337,7 +343,37 @@ export function NeuralNexusPanel({
             </div>
           )}
 
-          {error && (
+          {error && error === "__NOT_CONNECTED__" && (
+            <div className="m-4 p-4 bg-surface-2 border border-surface-3 rounded-xl">
+              <div className="flex items-center gap-2 mb-3">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <span className="text-sm font-medium text-slate-300">
+                  Backend Not Connected
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed mb-3">
+                Neural Nexus requires the FastAPI backend to be running.
+                It will learn your preferences, track project health, and make every
+                generation smarter over time.
+              </p>
+              <div className="space-y-2 text-2xs text-slate-600">
+                <p className="font-medium text-slate-400">To enable Neural Nexus:</p>
+                <ol className="list-decimal list-inside space-y-1">
+                  <li>Deploy the <code className="bg-surface-3 px-1 rounded text-slate-400">nimbusforge/</code> backend to Railway or similar</li>
+                  <li>Set <code className="bg-surface-3 px-1 rounded text-slate-400">NEXT_PUBLIC_API_URL</code> in your deployment env vars</li>
+                  <li>Ensure CORS allows requests from this origin</li>
+                </ol>
+              </div>
+              <button
+                onClick={loadState}
+                className="mt-3 text-xs text-brand-400 hover:text-brand-300 font-medium transition-colors"
+              >
+                Retry Connection
+              </button>
+            </div>
+          )}
+
+          {error && error !== "__NOT_CONNECTED__" && (
             <div className="m-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-400">
               {error}
             </div>
