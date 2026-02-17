@@ -424,6 +424,13 @@ ${cleanCSS}
   function __req(mod){
     if(mod==='react') return React;
     if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
+    /* Intercept any Supabase-related imports and return window.supabase.
+       Generated code may do: import { supabaseClient } from '@/lib/supabase'
+       In the preview sandbox, window.supabase IS the client. */
+    if(mod.indexOf('supabase')!==-1&&mod!=='@supabase/supabase-js'){
+      var _sb=window.supabase||{};
+      return {__esModule:true,default:_sb,supabase:_sb,supabaseClient:_sb,createClient:function(){return _sb}};
+    }
     if(__cache[mod]) return __cache[mod];
 
     /* resolve from registry */
@@ -844,6 +851,11 @@ ${cleanCSS}
   function __req(mod){
     if(mod==='react') return React;
     if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
+    /* Intercept Supabase-related imports → return window.supabase */
+    if(mod.indexOf('supabase')!==-1&&mod!=='@supabase/supabase-js'){
+      var _sb=window.supabase||{};
+      return {__esModule:true,default:_sb,supabase:_sb,supabaseClient:_sb,createClient:function(){return _sb}};
+    }
     if(__cache[mod]) return __cache[mod];
 
     var enc=__reg[mod];
