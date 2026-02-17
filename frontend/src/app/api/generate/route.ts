@@ -277,6 +277,8 @@ ${FILE_FORMAT}
 
 ${BASE_RULES}`;
 
+const MAX_PROMPT_LENGTH = 50_000;
+
 // Simple in-memory rate limiter: 10 requests per minute per IP
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT = 10;
@@ -293,27 +295,6 @@ function checkRateLimit(ip: string): boolean {
   entry.count++;
   return true;
 }
-
-const requestLog = new Map<string, number[]>();
-
-function checkRateLimit(clientId: string): boolean {
-  const now = Date.now();
-  const timestamps = requestLog.get(clientId) ?? [];
-  const recent = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) return false;
-  recent.push(now);
-  requestLog.set(clientId, recent);
-  return true;
-}
-
-setInterval(() => {
-  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
-  for (const [key, timestamps] of requestLog.entries()) {
-    const recent = timestamps.filter((t) => t > cutoff);
-    if (recent.length === 0) requestLog.delete(key);
-    else requestLog.set(key, recent);
-  }
-}, 5 * 60_000);
 
 // ---------------------------------------------------------------------------
 // POST /api/generate — main generation endpoint
@@ -426,10 +407,11 @@ Follow this build plan precisely. Implement exactly the components, changes, and
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "output-128k-2025-02-19",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 16384,
+          model: "claude-sonnet-4-5-20250929",
+          max_tokens: hasExistingProject ? 16384 : 32768,
           system: systemPrompt,
           messages: chatHistory && chatHistory.length > 0
             ? [

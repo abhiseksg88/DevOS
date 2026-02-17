@@ -96,21 +96,6 @@ function applyEdits(original: string, edits: { search: string; replace: string }
  * 3. ```tsx // path/to/file.tsx ... ```  (legacy)
  * 4. // File: path/to/file.tsx ... (next file or end)  (legacy)
  */
-/** Sanitize and normalize file path to prevent directory traversal */
-function sanitizePath(path: string): string | null {
-  let clean = path.replace(/\0/g, "");
-  clean = clean.replace(/\\/g, "/");
-  clean = clean.replace(/^\/+/, "");
-  // Strip leading ./ prefix (Claude sometimes outputs ./src/app/page.tsx)
-  clean = clean.replace(/^\.\/+/, "");
-  // Strip trailing whitespace
-  clean = clean.trim();
-  if (clean.includes("..")) return null;
-  if (clean.startsWith("~")) return null;
-  if (clean.length === 0 || clean.length > 500) return null;
-  return clean;
-}
-
 function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
@@ -383,7 +368,13 @@ export function useGenerate() {
         pipelineEvents: [],
       });
 
+      // Flatten the tree so we can look up existing file content for EDIT operations
+      // and filter out default placeholder files.
       const flatFiles = flattenForContext(existingFiles);
+      const contextFiles = flatFiles.filter(
+        (f) => !f.content.includes("// Your generated code will appear here")
+      );
+
       let prd: Record<string, unknown> | undefined;
 
       // ---------------------------------------------------------------
@@ -398,24 +389,11 @@ export function useGenerate() {
         message: "Analyzing requirements...",
       });
 
-      // Flatten the tree so we can look up existing file content for EDIT operations.
-      // existingFiles is a nested FileNode[] tree; .find() alone only checks the top level.
-      const flatExisting = flattenForContext(existingFiles);
-
       try {
-        // Filter out default placeholder files so Claude generates fresh ===FILE=== blocks
-        // instead of trying to ===EDIT=== the "Welcome to Vedaa" skeleton.
-        const contextFiles = flatExisting.filter(
-          (f) => !f.content.includes("// Your generated code will appear here")
-        );
-
-        const response = await fetch("/api/generate", {
+        const analyzeResp = await fetch("/api/swarm/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            existingFiles: contextFiles,
-          }),
+          body: JSON.stringify({ prompt, existingFiles: contextFiles }),
           signal: controller.signal,
         });
 
@@ -436,7 +414,6 @@ export function useGenerate() {
             meta,
           });
         } else {
-          // Analyzer failed — continue without PRD (graceful degradation)
           updatePipelineEvent(analyzeId, {
             status: "skipped",
             message: "Analyzer unavailable, proceeding with direct generation",
@@ -452,93 +429,37 @@ export function useGenerate() {
         });
       }
 
-        const decoder = new TextDecoder();
-        let fullText = "";
-        let lastParsedCount = 0;
-        let buffer = "";
-        let wasTruncated = false;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Process complete lines from buffer
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? ""; // keep incomplete line in buffer
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr) continue;
-            try {
-              const event = JSON.parse(jsonStr);
-              if (event.type === "text") {
-                fullText += event.content;
-                setState((prev) => ({ ...prev, streamedText: fullText }));
-
-                // Check for newly completed files
-                const parsed = parseFiles(fullText);
-                if (parsed.length > lastParsedCount) {
-                  for (let i = lastParsedCount; i < parsed.length; i++) {
-                    const file = parsed[i];
-                    // Handle edit operations (search/replace)
-                    if (file.content.startsWith("__EDIT_OPERATIONS__")) {
-                      try {
-                        const edits = JSON.parse(file.content.slice("__EDIT_OPERATIONS__".length));
-                        // Find existing content from the flattened file tree
-                        const existing = flatExisting.find((f) => f.path === file.path);
-                        if (existing?.content) {
-                          const updated = applyEdits(existing.content, edits);
-                          onFileGenerated(file.path, updated);
-                        }
-                      } catch {
-                        // Fallback — treat as regular file
-                        onFileGenerated(file.path, file.content);
-                      }
-                    } else {
-                      onFileGenerated(file.path, file.content);
-                    }
-                  }
-                  lastParsedCount = parsed.length;
-                  setState((prev) => ({ ...prev, files: parsed }));
-                }
-              } else if (event.type === "warning" && event.warning === "truncated") {
-                wasTruncated = true;
-              } else if (event.type === "error") {
-                const errMsg = event.error || "Generation error";
-                setState((prev) => ({ ...prev, error: errMsg }));
-                return { files: [], error: errMsg };
-              }
-            } catch {
-              // skip malformed JSON
-            }
-          }
-        }
+      // ---------------------------------------------------------------
+      // STAGE 2: Coder (Claude Sonnet) — generate code
+      // ---------------------------------------------------------------
+      const coderId = crypto.randomUUID();
+      addPipelineEvent({
+        id: coderId,
+        agent: "coder",
+        model: "claude-sonnet",
+        status: "running",
+        message: "Generating code...",
+      });
 
       const coderStart = Date.now();
       let result: GenerateResult;
 
-        // Final parse for any remaining files
-        const finalFiles = parseFiles(fullText);
-        if (finalFiles.length > lastParsedCount) {
-          for (let i = lastParsedCount; i < finalFiles.length; i++) {
-            const file = finalFiles[i];
-            if (file.content.startsWith("__EDIT_OPERATIONS__")) {
-              try {
-                const edits = JSON.parse(file.content.slice("__EDIT_OPERATIONS__".length));
-                const existing = flatExisting.find((f) => f.path === file.path);
-                if (existing?.content) {
-                  onFileGenerated(file.path, applyEdits(existing.content, edits));
-                }
-              } catch {
-                onFileGenerated(file.path, file.content);
-              }
-            } else {
-              onFileGenerated(file.path, file.content);
-            }
-          }
+      try {
+        result = await streamGenerate(
+          prompt,
+          contextFiles,
+          chatHistory,
+          prd,
+          undefined,
+          onFileGenerated,
+          (text, files) => {
+            setState((prev) => ({ ...prev, streamedText: text, files }));
+          },
+          controller.signal,
+        );
+      } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          return { files: [], error: null };
         }
         const errMsg = err instanceof Error ? err.message : "Generation failed";
         setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
@@ -646,7 +567,7 @@ export function useGenerate() {
         try {
           const fixResult = await streamGenerate(
             prompt,
-            flatFiles,
+            contextFiles,
             chatHistory,
             prd,
             reviewFindings,
