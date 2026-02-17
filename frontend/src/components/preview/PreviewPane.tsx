@@ -344,90 +344,110 @@ ${cleanCSS}
         return;
       }
 
-      /* Null-safe wrapper: if App returns null, show a loading skeleton instead of blank screen.
-         Also wraps in React error boundary to catch render crashes. */
-      var _hasRendered=false;
-      var ErrorBoundary=function(props){
-        var _s=React.useState(null),err=_s[0],setErr=_s[1];
-        if(err) return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
-          React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Render Error'),
-          React.createElement('pre',{style:{background:'#181825',padding:'16px',borderRadius:'8px',whiteSpace:'pre-wrap',wordBreak:'break-word'}},String(err)));
-        return React.createElement(React.Component.bind(null),null,props.children);
-      };
-      /* Class-based error boundary since hooks can't catch render errors */
-      function makeErrorBoundary(){
-        function EB(props){React.Component.call(this,props);this.state={error:null};}
-        EB.prototype=Object.create(React.Component.prototype);
-        EB.prototype.constructor=EB;
-        EB.getDerivedStateFromError=function(e){return{error:e};};
-        EB.prototype.render=function(){
-          if(this.state.error){
-            var e=this.state.error;
-            return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
+      /* ---- Class-based Error Boundary ---- */
+      function EB(p){React.Component.call(this,p);this.state={error:null};}
+      EB.prototype=Object.create(React.Component.prototype);
+      EB.prototype.constructor=EB;
+      EB.getDerivedStateFromError=function(e){return{error:e};};
+      EB.prototype.render=function(){
+        if(this.state.error){
+          var e=this.state.error;
+          return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
+            React.createElement('div',{style:{maxWidth:'640px',margin:'40px auto'}},
               React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Render Error'),
-              React.createElement('pre',{style:{background:'#181825',padding:'16px',borderRadius:'8px',border:'1px solid #313244',whiteSpace:'pre-wrap',wordBreak:'break-word'}},
-                String(e.message||e)+(e.stack?'\\n\\n'+e.stack:'')));
-          }
-          return this.props.children;
-        };
-        return EB;
-      }
-      var EB=makeErrorBoundary();
+              React.createElement('pre',{style:{background:'#181825',padding:'16px',borderRadius:'8px',border:'1px solid #313244',whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:'1.6'}},
+                String(e.message||e)+(e.stack?'\\n\\n'+e.stack:''))));
+        }
+        return this.props.children;
+      };
 
+      /* ---- Loading Skeleton (React component) ---- */
+      function Skeleton(){
+        var s={borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'};
+        return React.createElement('div',{style:{padding:'32px',maxWidth:'800px',margin:'0 auto'}},
+          React.createElement('div',{style:Object.assign({},{height:'32px',width:'60%',background:'#e2e8f0',marginBottom:'16px'},s)}),
+          React.createElement('div',{style:Object.assign({},{height:'16px',width:'90%',background:'#e2e8f0',marginBottom:'12px'},s)}),
+          React.createElement('div',{style:Object.assign({},{height:'16px',width:'75%',background:'#e2e8f0',marginBottom:'24px'},s)}),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'16px'}},
+            React.createElement('div',{style:Object.assign({},{height:'120px',background:'#e2e8f0',borderRadius:'12px'},s)}),
+            React.createElement('div',{style:Object.assign({},{height:'120px',background:'#e2e8f0',borderRadius:'12px',animationDelay:'0.2s'},s)}),
+            React.createElement('div',{style:Object.assign({},{height:'120px',background:'#e2e8f0',borderRadius:'12px',animationDelay:'0.4s'},s)})));
+      }
+
+      /* ---- SafeApp: renders App + skeleton fallback when App returns null ---- */
       function SafeApp(){
-        var _r=React.useState(0),rerender=_r[1];
-        var ref=React.useRef(null);
+        var _v=React.useState(true),showSkel=_v[0],setShowSkel=_v[1];
+        var _d=React.useState(null),diagErr=_d[0],setDiagErr=_d[1];
+        var appRef=React.useRef(null);
+
         React.useEffect(function(){
-          /* Check if App rendered anything visible after mount */
-          var checks=[300,800,1500,3000];
-          var timers=checks.map(function(ms){
+          /* Check if App rendered real DOM content */
+          function hasContent(){
+            var el=appRef.current;
+            if(!el) return false;
+            for(var i=0;i<el.childNodes.length;i++){
+              var n=el.childNodes[i];
+              if(n.nodeType===1) return true;
+              if(n.nodeType===3&&n.textContent&&n.textContent.trim()) return true;
+            }
+            return false;
+          }
+
+          /* Check at staggered intervals */
+          var delays=[200,600,1200,2500,4000];
+          var timers=delays.map(function(ms,idx){
             return setTimeout(function(){
-              var el=ref.current;
-              if(el && el.children.length===0){
-                /* App returned null — force re-render (state may have updated via useEffect) */
-                rerender(function(c){return c+1;});
-              } else if(el && el.children.length>0){
-                _hasRendered=true;
+              if(hasContent()){
+                setShowSkel(false);
+              } else if(idx===delays.length-1){
+                setShowSkel(false);
+                var d=['Errors captured: '+window.__errs.length];
+                if(window.__errs.length>0) d.push('First error: '+window.__errs[0].message);
+                setDiagErr('The component rendered nothing after 4 seconds.\\n\\nThis usually means the component has a conditional return like "if (!data) return null" that never resolves.\\n\\n'+d.join('\\n'));
+                try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'Component returned null for 4s'}},'*')}catch(x){}
               }
             },ms);
           });
-          return function(){timers.forEach(clearTimeout);};
+
+          /* MutationObserver for instant detection when App content appears */
+          var obs;
+          try{
+            obs=new MutationObserver(function(){
+              if(hasContent()){ setShowSkel(false); obs.disconnect(); }
+            });
+            if(appRef.current) obs.observe(appRef.current,{childList:true,subtree:true});
+          }catch(e){}
+
+          return function(){
+            timers.forEach(clearTimeout);
+            if(obs) try{obs.disconnect();}catch(e){}
+          };
         },[]);
 
-        var appEl;
-        try{ appEl=React.createElement(App); }catch(e){ appEl=null; }
+        /* Show diagnostic error screen */
+        if(diagErr){
+          return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
+            React.createElement('div',{style:{maxWidth:'640px',margin:'40px auto'}},
+              React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Preview Error'),
+              React.createElement('div',{style:{background:'#181825',padding:'16px',borderRadius:'8px',border:'1px solid #313244',whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:'1.6'}},diagErr)));
+        }
 
-        return React.createElement('div',{ref:ref,style:{minHeight:'100%'}},
-          appEl,
-          /* Skeleton fallback: shown via CSS when #app-wrapper is empty */
-          React.createElement('style',null,
-            '#app-wrapper:empty ~ #skeleton-fallback{display:block}'+
-            '#skeleton-fallback{display:none}')
-        );
+        var appEl;
+        try{appEl=React.createElement(App);}catch(e){appEl=null;}
+
+        /* Render App content in a ref'd div (for null detection) + skeleton below */
+        return React.createElement(React.Fragment,null,
+          React.createElement('div',{ref:appRef},appEl),
+          showSkel?React.createElement(Skeleton):null);
       }
 
-      var rootEl=document.getElementById('root');
-      /* Show loading skeleton immediately so root is NEVER empty */
-      rootEl.innerHTML='<div id="app-wrapper-init" style="padding:32px;max-width:800px;margin:0 auto"><div style="height:32px;width:60%;background:#e2e8f0;border-radius:8px;margin-bottom:16px;animation:pulse 1.5s ease-in-out infinite"></div><div style="height:16px;width:90%;background:#e2e8f0;border-radius:6px;margin-bottom:12px;animation:pulse 1.5s ease-in-out infinite"></div><div style="height:16px;width:75%;background:#e2e8f0;border-radius:6px;margin-bottom:24px;animation:pulse 1.5s ease-in-out infinite"></div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px"><div style="height:120px;background:#e2e8f0;border-radius:12px;animation:pulse 1.5s ease-in-out infinite"></div><div style="height:120px;background:#e2e8f0;border-radius:12px;animation:pulse 1.5s ease-in-out infinite;animation-delay:0.2s"></div><div style="height:120px;background:#e2e8f0;border-radius:12px;animation:pulse 1.5s ease-in-out infinite;animation-delay:0.4s"></div></div><style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style></div>';
+      /* Inject skeleton keyframes into document head */
+      var sty=document.createElement('style');
+      sty.textContent='@keyframes _skelpulse{0%,100%{opacity:1}50%{opacity:0.4}}';
+      document.head.appendChild(sty);
 
-      var root=ReactDOM.createRoot(rootEl);
+      var root=ReactDOM.createRoot(document.getElementById('root'));
       root.render(React.createElement(EB,null,React.createElement(SafeApp)));
-
-      /* Final diagnostic check — if still showing skeleton after 4s, something is really wrong */
-      setTimeout(function(){
-        var el=document.getElementById('root');
-        if(!el) return;
-        var html=el.innerHTML;
-        if(html.indexOf('app-wrapper-init')!==-1 || html.trim()===''){
-          var diag=[];
-          diag.push('React: '+(typeof React!=='undefined'));
-          diag.push('Babel: '+(typeof Babel!=='undefined'));
-          diag.push('Errors: '+window.__errs.length);
-          if(window.__errs.length>0) diag.push('First: '+window.__errs[0].message);
-          showErr('Component failed to render after 4 seconds.\\n\\n'+diag.join('\\n')+'\\n\\nThe component may be returning null or waiting for data that never arrives.');
-          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'Component failed to render after 4s'}},'*')}catch(x){}
-        }
-      },4000);
     }catch(err){
       showErr(err.message,err.stack);
       try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:err.message}},'*')}catch(x){}
@@ -643,7 +663,23 @@ ${cleanCSS}
       return;
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+    /* Error boundary for deployed apps */
+    function EB(p){React.Component.call(this,p);this.state={error:null};}
+    EB.prototype=Object.create(React.Component.prototype);
+    EB.prototype.constructor=EB;
+    EB.getDerivedStateFromError=function(e){return{error:e};};
+    EB.prototype.render=function(){
+      if(this.state.error){
+        var e=this.state.error;
+        return React.createElement('div',{style:{padding:'24px',fontFamily:'system-ui',fontSize:'14px',color:'#dc2626',minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}},
+          React.createElement('div',{style:{maxWidth:'480px',textAlign:'center'}},
+            React.createElement('h2',{style:{fontSize:'18px',fontWeight:'600',color:'#111',marginBottom:'8px'}},'Something went wrong'),
+            React.createElement('p',{style:{color:'#6b7280'}},String(e.message||e))));
+      }
+      return this.props.children;
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(EB,null,React.createElement(App)));
   }catch(err){
     showErr(err.message,err.stack);
   }
