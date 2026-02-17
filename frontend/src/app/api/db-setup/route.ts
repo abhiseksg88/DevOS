@@ -25,6 +25,24 @@ CREATE TABLE IF NOT EXISTS app_data (
     UNIQUE(project_id, app_instance_id, collection, record_id)
 );
 
+-- Add FK constraints if referenced tables exist (safe for fresh installs)
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tenants') THEN
+        BEGIN
+            ALTER TABLE app_data ADD CONSTRAINT app_data_tenant_id_fkey
+                FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE;
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'projects') THEN
+        BEGIN
+            ALTER TABLE app_data ADD CONSTRAINT app_data_project_id_fkey
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_app_data_project_collection ON app_data(project_id, collection);
 CREATE INDEX IF NOT EXISTS idx_app_data_lookup ON app_data(project_id, app_instance_id, collection, record_id);
 CREATE INDEX IF NOT EXISTS idx_app_data_created ON app_data(project_id, created_at DESC);
@@ -32,22 +50,23 @@ CREATE INDEX IF NOT EXISTS idx_app_data_tenant ON app_data(tenant_id);
 
 ALTER TABLE app_data ENABLE ROW LEVEL SECURITY;
 
+-- Policy names match migration 004_app_data_table.sql exactly
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_tenant_select') THEN
-        CREATE POLICY app_data_tenant_select ON app_data FOR SELECT
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_select') THEN
+        CREATE POLICY app_data_select ON app_data FOR SELECT
             USING (tenant_id = ANY(public.get_tenant_ids()));
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_tenant_insert') THEN
-        CREATE POLICY app_data_tenant_insert ON app_data FOR INSERT
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_insert') THEN
+        CREATE POLICY app_data_insert ON app_data FOR INSERT
             WITH CHECK (tenant_id = ANY(public.get_tenant_ids()));
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_tenant_update') THEN
-        CREATE POLICY app_data_tenant_update ON app_data FOR UPDATE
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_update') THEN
+        CREATE POLICY app_data_update ON app_data FOR UPDATE
             USING (tenant_id = ANY(public.get_tenant_ids()))
             WITH CHECK (tenant_id = ANY(public.get_tenant_ids()));
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_tenant_delete') THEN
-        CREATE POLICY app_data_tenant_delete ON app_data FOR DELETE
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_delete') THEN
+        CREATE POLICY app_data_delete ON app_data FOR DELETE
             USING (tenant_id = ANY(public.get_tenant_ids()));
     END IF;
 END $$;
@@ -107,7 +126,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({ query: CREATE_TABLE_SQL }),
         signal: AbortSignal.timeout(15000),
       });
-      if (resp.ok || resp.status < 400) {
+      if (resp.ok) {
         return NextResponse.json({
           success: true,
           message: `app_data table created via ${endpoint}`,
@@ -127,7 +146,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({ sql: CREATE_TABLE_SQL }),
       signal: AbortSignal.timeout(15000),
     });
-    if (resp.ok || resp.status < 400) {
+    if (resp.ok) {
       return NextResponse.json({
         success: true,
         message: "app_data table created via exec_sql RPC",

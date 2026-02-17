@@ -552,7 +552,7 @@ export async function POST(req: NextRequest) {
   // Assistant prefill: forces Claude to START in ===FILE=== format.
   // Kept minimal to avoid SSE encoding issues with multiline content.
   // The client-side auto-close handles the missing ===END_FILE=== case.
-  const PREFILL = "===FILE: src/app/page.tsx===\n";
+  const PREFILL = "===FILE: src/app/page.tsx===";
 
   // Build PRD block if provided by the Analyzer agent
   let prdBlock = "";
