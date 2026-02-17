@@ -120,6 +120,13 @@ DATABASE & PERSISTENCE — UNIVERSAL TABLE STRATEGY
 
 A global Supabase client is available at `window.supabase`.
 
+DATABASE PRIORITY RULE — CRITICAL:
+If the app involves CREATING, READING, UPDATING, or DELETING data (e.g. todo lists,
+case management, CRM, inventory, notes, contacts, trackers, planners, boards, tickets,
+or ANY app where users add/edit/remove items), you MUST implement REAL Supabase CRUD
+using the patterns below. NEVER use in-memory state or hardcoded mock arrays for
+user data in these apps. The app MUST persist data to the database.
+
 DATABASE SCHEMA (single universal table):
 The `app_data` table stores all application data with this structure:
 {

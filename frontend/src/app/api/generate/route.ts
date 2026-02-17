@@ -162,6 +162,12 @@ Use INLINE SVGs or emoji. Common patterns:
 A global Supabase client is available at \`window.supabase\` (injected by the preview runtime).
 Context globals are also available: \`window.__VEDAA_TENANT_ID\`, \`window.__VEDAA_PROJECT_ID\`, \`window.__VEDAA_APP_INSTANCE_ID\`.
 
+**DATABASE PRIORITY RULE — THIS IS CRITICAL:**
+If the app involves CREATING, READING, UPDATING, or DELETING data (e.g. todo lists, case management, CRM, inventory, notes, contacts, project trackers, meal planners, expense trackers, booking systems, or ANY app where users add/edit/remove items), you MUST implement REAL Supabase CRUD using the patterns below. NEVER use in-memory state or hardcoded mock arrays for these apps. The app MUST persist data to the database.
+
+Apps that DO need database CRUD: todo, list, tracker, manager, CRM, planner, board, inventory, booking, notes, journal, contacts, tickets, cases, orders, invoices, tasks, events, calendar entries, blog posts, comments, reviews, registrations, forms that save data.
+Apps that do NOT need database CRUD: landing pages, calculators, static dashboards, games, animations, UI demos.
+
 The \`app_data\` table stores all application data:
 - id: UUID (auto-generated)
 - tenant_id: UUID (use \`window.__VEDAA_TENANT_ID\`)
@@ -347,6 +353,18 @@ CORRECT (renders instantly):
 
 - If you MUST use useEffect for a timer/animation, STILL render the full UI on first render
 - Every component must return a \`<div>\` (or other element) with visible content — no exceptions
+
+DEFENSIVE CODING — PREVENT UNDEFINED CRASHES:
+- When passing arrays as props to child components, ALWAYS provide a default: \`function StatsCards({ cases = [] })\`
+- When accessing .length, .map(), .filter() etc., ALWAYS guard: \`(items || []).length\`, \`(items || []).map(...)\`
+- When destructuring props, ALWAYS provide defaults for arrays and objects:
+  FORBIDDEN: \`function Stats({ cases }) { return cases.length; }\`  // ❌ crashes if cases is undefined
+  CORRECT: \`function Stats({ cases = [] }) { return cases.length; }\`  // ✅ safe
+
+DATABASE APPS — IMPORTANT:
+- For apps that manage data (CRUD), initialize arrays as empty \`useState([])\` and load from database in useEffect
+- Show a loading spinner while data loads, and an empty state when array is empty
+- Do NOT use hardcoded mock arrays — use real Supabase CRUD (see Database section above)
 
 Interactivity:
 - You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext
