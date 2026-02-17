@@ -326,16 +326,6 @@ ${cleanCSS}
   if(typeof React==='undefined'||typeof ReactDOM==='undefined'){ showErr('React failed to load — check your internet connection.'); return; }
   if(typeof supabase==='undefined'){ console.warn('[Preview] Supabase SDK not loaded (continuing without persistence)'); }
 
-  /* --- Show loading state while waiting for database connection --- */
-  function showLoading(msg){
-    document.getElementById('root').innerHTML=
-      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;color:#94a3b8;font-family:system-ui;gap:12px">'+
-      '<div style="width:40px;height:40px;border:3px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:spin 0.8s linear infinite"></div>'+
-      '<p style="font-size:13px">'+msg+'</p>'+
-      '<style>@keyframes spin{to{transform:rotate(360deg)}}</style></div>';
-  }
-
-  /* Wait for Supabase to be ready before rendering */
   function renderApp(){
     try{
       var transpiled=Babel.transform(code,{
@@ -353,7 +343,17 @@ ${cleanCSS}
         return;
       }
 
-      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+      var root=ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(App));
+
+      /* Detect white-screen: if root is empty after render, the component returned null */
+      setTimeout(function(){
+        var el=document.getElementById('root');
+        if(el && el.innerHTML.trim()==='' ){
+          showErr('The generated component rendered nothing (returned null or empty).\\n\\nThis usually means the component has a conditional return that evaluates to null on first render.\\nTip: make sure the default export always returns visible JSX.');
+          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'Component rendered empty — possible null return'}},'*')}catch(x){}
+        }
+      },500);
     }catch(err){
       showErr(err.message,err.stack);
       /* Error diagnostic — non-sensitive, srcdoc same-origin */
@@ -361,20 +361,8 @@ ${cleanCSS}
     }
   }
 
-  /* Wait for Supabase ready event (max 3 seconds) */
-  if(window.__supabase_ready){
-    renderApp();
-  }else{
-    showLoading('Connecting to database...');
-    var timeout=setTimeout(function(){
-      console.warn('[Preview] Supabase initialization timeout - continuing anyway');
-      renderApp();
-    },3000);
-    window.addEventListener('supabase:ready',function(){
-      clearTimeout(timeout);
-      renderApp();
-    });
-  }
+  /* Render immediately — do NOT wait for Supabase (it initializes in background) */
+  renderApp();
 })();
 <\/script>
 </body>

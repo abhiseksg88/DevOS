@@ -230,13 +230,18 @@ const BASE_RULES = `Rules:
 - CSS file should be "src/app/globals.css"
 
 Code architecture:
-- CRITICAL: In page.tsx, define ALL helper component functions (Header, Hero, Footer, etc.) directly in the same file ABOVE the default export. The page MUST be fully self-contained.
+- Split code into multiple files as described in the Architecture section above
+- page.tsx should import components from @/components/ and keep under 150 lines
+- Each component file MUST have a default export function component
 - You MAY import from "react" (e.g. import { useState, useEffect } from "react"). React hooks ARE supported.
 - Do NOT import from next/image, next/link, next/router, or any Next.js packages
 - Do NOT import from third-party packages (no lucide-react, no framer-motion, etc.) — use inline SVG icons or emoji instead
-- Do NOT import local component files — define everything inline in page.tsx
-- You may create separate component files for code organization, but page.tsx must NOT depend on them
 - Export the main page component as the default export
+
+CRITICAL rendering rule:
+- The default export component in page.tsx MUST always return visible JSX on the FIRST render
+- Do NOT return null, undefined, or an empty fragment from the default export
+- If you need loading states, render a loading UI (skeleton/spinner) — NEVER return null
 
 Interactivity:
 - You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext
