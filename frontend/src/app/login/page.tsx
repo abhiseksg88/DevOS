@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Zap, Github, Mail, ArrowRight, Loader2, CheckCircle } from "lucide-react";
+import { Github, Mail, ArrowRight, Loader2, CheckCircle } from "lucide-react";
+import Image from "next/image";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,71 +15,100 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [confirmationSent, setConfirmationSent] = useState(false);
 
+  // Detect misconfigured Supabase credentials
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const isMisconfigured =
+    !supabaseUrl ||
+    supabaseUrl === "http://localhost:54321" ||
+    supabaseUrl.includes("localhost") ||
+    !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === "local-dev-anon-key";
+
   async function handleEmailAuth(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
     setConfirmationSent(false);
-    const supabase = createClient();
 
-    if (isSignUp) {
-      const { data, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
+    try {
+      const supabase = createClient();
 
-      if (authError) {
-        setError(authError.message);
-        setLoading(false);
-        return;
-      }
+      if (isSignUp) {
+        const { data, error: authError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+          },
+        });
 
-      // If session is null but user exists, email confirmation is required
-      if (data.user && !data.session) {
-        setConfirmationSent(true);
-        setLoading(false);
-        return;
-      }
-
-      // Auto-confirmed — go to dashboard
-      router.push("/dashboard");
-    } else {
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (authError) {
-        // Provide friendlier error messages
-        if (authError.message === "Invalid login credentials") {
-          setError("Invalid email or password. If you just signed up, check your email to confirm your account first.");
-        } else if (authError.message === "Email not confirmed") {
-          setError("Please confirm your email address. Check your inbox for the confirmation link.");
-        } else {
+        if (authError) {
           setError(authError.message);
+          setLoading(false);
+          return;
         }
-        setLoading(false);
-        return;
+
+        // If session is null but user exists, email confirmation is required
+        if (data.user && !data.session) {
+          setConfirmationSent(true);
+          setLoading(false);
+          return;
+        }
+
+        // Auto-confirmed — go to dashboard
+        router.push("/dashboard");
+      } else {
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (authError) {
+          // Provide friendlier error messages
+          if (authError.message === "Invalid login credentials") {
+            setError("Invalid email or password. If you just signed up, check your email to confirm your account first.");
+          } else if (authError.message === "Email not confirmed") {
+            setError("Please confirm your email address. Check your inbox for the confirmation link.");
+          } else {
+            setError(authError.message);
+          }
+          setLoading(false);
+          return;
+        }
+        router.push("/dashboard");
       }
-      router.push("/dashboard");
+    } catch (err) {
+      // Network errors (wrong Supabase URL, no connectivity, etc.)
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed")) {
+        setError("Cannot connect to authentication server. Please check that NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are configured correctly.");
+      } else {
+        setError(`Authentication error: ${msg}`);
+      }
     }
     setLoading(false);
   }
 
   async function handleOAuth(provider: "github" | "google") {
     setError("");
-    const supabase = createClient();
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    });
-    if (oauthError) {
-      setError(
-        `${provider === "github" ? "GitHub" : "Google"} login is not configured yet. Please use email/password or ask the admin to enable ${provider} OAuth in Supabase.`
-      );
+    try {
+      const supabase = createClient();
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: `${window.location.origin}/auth/callback` },
+      });
+      if (oauthError) {
+        setError(
+          `${provider === "github" ? "GitHub" : "Google"} login is not configured yet. Please use email/password or ask the admin to enable ${provider} OAuth in Supabase.`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.includes("fetch") || msg.includes("network") || msg.includes("Failed")) {
+        setError("Cannot connect to authentication server. Check your Supabase environment variables.");
+      } else {
+        setError(`OAuth error: ${msg}`);
+      }
     }
   }
 
@@ -98,13 +128,13 @@ export default function LoginPage() {
             <span className="text-2xl font-bold gradient-text">Vedaa.io</span>
           </div>
           <h1 className="text-4xl font-bold text-white mb-4 leading-tight">
-            Build full-stack apps
+            The Agentic
             <br />
-            <span className="gradient-text">with AI agents.</span>
+            <span className="gradient-text">Development OS.</span>
           </h1>
           <p className="text-slate-400 text-lg leading-relaxed">
-            Describe what you want. Our multi-agent pipeline plans, codes, reviews,
-            builds, and deploys your application — all in minutes.
+            Describe what you want. Vedaa&apos;s multi-agent pipeline plans, codes, reviews,
+            and deploys your application — in minutes, not months.
           </p>
 
           <div className="mt-12 space-y-4">
@@ -153,6 +183,18 @@ export default function LoginPage() {
               <p className="text-sm text-slate-400">
                 We sent a confirmation link to <span className="text-white font-medium">{email}</span>.
                 Click the link to activate your account, then come back and sign in.
+              </p>
+            </div>
+          )}
+
+          {/* Misconfigured env warning */}
+          {isMisconfigured && (
+            <div className="mb-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <p className="text-sm text-amber-400 font-medium mb-1">Supabase not configured</p>
+              <p className="text-xs text-slate-400">
+                Set <code className="text-amber-300">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
+                <code className="text-amber-300">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in your
+                environment variables (Netlify: Site settings → Environment variables).
               </p>
             </div>
           )}

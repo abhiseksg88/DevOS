@@ -52,6 +52,21 @@ class PlanTier(str, Enum):
     pro = "pro"
     enterprise = "enterprise"
 
+class IntegrationCategory(str, Enum):
+    llm = "llm"
+    auth = "auth"
+    database = "database"
+    payment = "payment"
+    email = "email"
+    storage = "storage"
+    analytics = "analytics"
+    custom = "custom"
+
+class IntegrationStatus(str, Enum):
+    active = "active"
+    inactive = "inactive"
+    error = "error"
+
 
 # ---------------------------------------------------------------------------
 # Request schemas
@@ -96,6 +111,22 @@ class DeploymentCreate(BaseModel):
 
 class RollbackRequest(BaseModel):
     deployment_id: UUID
+
+class IntegrationCreate(BaseModel):
+    """Add an integration connector to a project."""
+    provider: str = Field(..., min_length=1, max_length=50, pattern=r"^[a-z0-9_\-]+$")
+    category: IntegrationCategory
+    display_name: str = Field(..., min_length=1, max_length=100)
+    credentials: dict = Field(default_factory=dict)
+    config: dict = Field(default_factory=dict)
+
+class IntegrationUpdate(BaseModel):
+    """Update an integration's credentials or config."""
+    display_name: Optional[str] = None
+    credentials: Optional[dict] = None
+    config: Optional[dict] = None
+    status: Optional[IntegrationStatus] = None
+
 
 class PublishRequest(BaseModel):
     """Frontend sends the fully-built HTML document to deploy."""
@@ -190,3 +221,24 @@ class UsageSummary(BaseModel):
     total_tokens_out: int
     total_cost_usd: float
     by_model: dict
+
+class IntegrationResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    project_id: UUID
+    provider: str
+    category: IntegrationCategory
+    display_name: str
+    status: IntegrationStatus
+    credentials: dict  # Masked — only hints, never raw keys
+    config: dict
+    last_tested_at: Optional[datetime]
+    last_test_ok: Optional[bool]
+    last_error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+class IntegrationTestResult(BaseModel):
+    ok: bool
+    message: str
+    latency_ms: Optional[int] = None

@@ -13,6 +13,8 @@ import {
   Globe,
   Upload,
   Zap,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildDeployDocument } from "@/components/preview/PreviewPane";
@@ -20,6 +22,7 @@ import type { FileNode, Project } from "@/types";
 
 type PublishState =
   | "idle"
+  | "preflight"
   | "generating"
   | "uploading"
   | "deploying"
@@ -47,8 +50,10 @@ export function PublishButton({
     project?.deployed_url ?? null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [showPanel, setShowPanel] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [preflightStatus, setPreflightStatus] = useState<api.PublishHealth | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Sync deployed URL from project
@@ -75,8 +80,19 @@ export function PublishButton({
   const pollStatus = useCallback(
     (deployId: string) => {
       setState("polling");
+      pollStartRef.current = Date.now();
 
       pollRef.current = setInterval(async () => {
+        // Timeout guard — stop polling after POLL_TIMEOUT_MS
+        if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
+          stopPolling();
+          setState("error");
+          setError(
+            "Deploy is taking longer than expected. Check Netlify dashboard for status.",
+          );
+          return;
+        }
+
         try {
           const res = await fetch(
             `/api/publish-status?deploy_id=${encodeURIComponent(deployId)}`
@@ -92,15 +108,20 @@ export function PublishButton({
           } else if (status.state === "error" || status.state === "failed") {
             stopPolling();
             setState("error");
-            setError("Deployment failed on Netlify");
+            setError("Deployment failed on Netlify. Try again or check the Netlify dashboard.");
           }
           // Otherwise keep polling (preparing, uploading, uploaded)
         } catch (err) {
-          stopPolling();
-          setState("error");
-          setError(err instanceof Error ? err.message : "Polling failed");
+          // Don't stop polling on transient network errors — only stop after timeout
+          const elapsed = Date.now() - pollStartRef.current;
+          if (elapsed > POLL_TIMEOUT_MS) {
+            stopPolling();
+            setState("error");
+            setError(err instanceof Error ? err.message : "Polling failed");
+          }
+          // Otherwise silently retry on next interval
         }
-      }, 2000);
+      }, 2500);
     },
     [stopPolling, onPublished],
   );
@@ -109,6 +130,7 @@ export function PublishButton({
     if (!project || !token || !tenantId) return;
 
     setError(null);
+    setWarning(null);
     setShowPanel(true);
 
     try {
@@ -191,6 +213,7 @@ export function PublishButton({
   }, [deployedUrl]);
 
   const isPublishing =
+    state === "preflight" ||
     state === "generating" ||
     state === "uploading" ||
     state === "deploying" ||
@@ -280,6 +303,17 @@ export function PublishButton({
             {isPublishing && (
               <div className="space-y-3">
                 <PublishStep
+                  icon={<ShieldCheck className="w-3.5 h-3.5" />}
+                  label="Pre-flight check"
+                  status={
+                    state === "preflight"
+                      ? "active"
+                      : (["generating", "uploading", "deploying", "polling"] as string[]).includes(state)
+                        ? "done"
+                        : "pending"
+                  }
+                />
+                <PublishStep
                   icon={<Zap className="w-3.5 h-3.5" />}
                   label="Generate deployment"
                   status={
@@ -308,6 +342,13 @@ export function PublishButton({
                       : "pending"
                   }
                 />
+
+                {warning && (
+                  <p className="text-xs text-amber-400 mt-2 flex items-start gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    {warning}
+                  </p>
+                )}
 
                 {error && (
                   <p className="text-xs text-amber-400 mt-2">{error}</p>
@@ -353,6 +394,13 @@ export function PublishButton({
                   </button>
                 </div>
 
+                {warning && (
+                  <p className="text-xs text-amber-400 flex items-start gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    {warning}
+                  </p>
+                )}
+
                 <div className="flex gap-2">
                   <a
                     href={deployedUrl}
@@ -383,6 +431,30 @@ export function PublishButton({
                     Deploy failed
                   </span>
                 </div>
+
+                {/* Pre-flight failure details */}
+                {preflightStatus && !preflightStatus.ready && (
+                  <div className="space-y-1.5 p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+                    <PreflightItem
+                      ok={preflightStatus.netlify_configured}
+                      label="Netlify token"
+                    />
+                    <PreflightItem
+                      ok={preflightStatus.netlify_reachable}
+                      label="Netlify API reachable"
+                    />
+                    <PreflightItem
+                      ok={preflightStatus.supabase_configured}
+                      label="Supabase credentials"
+                    />
+                    {preflightStatus.netlify_team && (
+                      <p className="text-xs text-slate-500 mt-1">
+                        Team: {preflightStatus.netlify_team}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {error && (
                   <p className="text-xs text-slate-400 bg-surface-2 rounded-lg p-3 border border-surface-3">
                     {error}
@@ -400,6 +472,23 @@ export function PublishButton({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pre-flight check item
+// ---------------------------------------------------------------------------
+
+function PreflightItem({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      {ok ? (
+        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+      ) : (
+        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+      )}
+      <span className={ok ? "text-slate-400" : "text-red-400"}>{label}</span>
     </div>
   );
 }

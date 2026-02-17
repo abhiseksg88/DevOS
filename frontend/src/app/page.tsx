@@ -17,7 +17,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 
-export default function Home() {
+export default function LandingPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
 

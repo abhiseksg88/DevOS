@@ -59,26 +59,29 @@ export async function middleware(request: NextRequest) {
             response.cookies.set(name, value, options);
           });
         },
-      },
+      }
+    );
+
+    const { data: { session } } = await supabase.auth.getSession();
+
+    // Protect dashboard and project routes
+    const isProtected = request.nextUrl.pathname.startsWith("/dashboard") ||
+                        request.nextUrl.pathname.startsWith("/project");
+
+    if (isProtected && !session) {
+      return NextResponse.redirect(new URL("/login", request.url));
     }
-  );
 
-  const { data: { session } } = await supabase.auth.getSession();
+    // Redirect logged-in users away from login
+    if (request.nextUrl.pathname === "/login" && session) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
 
-  // Protect dashboard and project routes
-  const isProtected = request.nextUrl.pathname.startsWith("/dashboard") ||
-                      request.nextUrl.pathname.startsWith("/project");
-
-  if (isProtected && !session) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return response;
+  } catch {
+    // If Supabase env vars are missing or client fails, pass through
+    return NextResponse.next();
   }
-
-  // Redirect logged-in users away from login
-  if (request.nextUrl.pathname === "/login" && session) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
-  }
-
-  return response;
 }
 
 export const config = {

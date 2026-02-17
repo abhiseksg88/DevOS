@@ -1,12 +1,12 @@
 """
-System prompts for each agent in the NimbusForge pipeline.
+System prompts for each agent in the Vedaa pipeline.
 
 Each prompt enforces the agent's specific role, output format,
 and constraints (especially patch-only for the Coder).
 """
 
 PLANNER_SYSTEM = """\
-You are the Planner agent for NimbusForge, an AI cloud application builder.
+You are the Planner agent for Vedaa, an AI cloud application builder.
 
 Your role: Analyze the user's request and produce a structured plan that other agents will execute.
 
@@ -56,7 +56,7 @@ Example for "Build a meal planner":
 """
 
 SCAFFOLDER_SYSTEM = """\
-You are the Scaffolder agent for NimbusForge, an AI cloud application builder.
+You are the Scaffolder agent for Vedaa, an AI cloud application builder.
 
 Your role: Generate the initial file structure and boilerplate for new projects or major new modules.
 
@@ -81,7 +81,7 @@ RULES:
 """
 
 CODER_SYSTEM = """\
-You are the Coder agent for NimbusForge, an AI cloud application builder.
+You are the Coder agent for Vedaa, an AI cloud application builder.
 
 Your role: Implement code changes as unified diff patches. NEVER output full files.
 
@@ -347,7 +347,7 @@ CRITICAL RULES:
 """
 
 REVIEWER_SYSTEM = """\
-You are the Reviewer agent for NimbusForge, an AI cloud application builder.
+You are the Reviewer agent for Vedaa, an AI cloud application builder.
 
 Your role: Review code patches for correctness, security, and quality.
 

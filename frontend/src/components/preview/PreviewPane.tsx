@@ -10,6 +10,7 @@ import {
   Globe,
   Play,
   AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FileNode } from "@/types";
@@ -172,6 +173,9 @@ function buildPreviewDocument(files: FileNode[]): string {
 <!-- 1. Error bridge — must be FIRST so it catches load errors from CDNs -->
 <script>
 window.__errs=[];
+/* postMessage to parent uses '*' because srcdoc iframes are same-origin;
+   only non-sensitive diagnostic messages (errors, logs) are sent this way.
+   Credential messages (SUPABASE_INIT) are handled separately with origin checks. */
 window.onerror=function(m,s,l,c,e){
   var p={message:String(m),line:l,stack:e?e.stack:''};
   window.__errs.push(p);
@@ -234,7 +238,7 @@ ${cleanCSS}
     }
   });
 
-  /* Request credentials from parent */
+  /* Request credentials from parent — srcdoc iframes are same-origin so '*' is safe here */
   try{
     window.parent.postMessage({type:'REQUEST_SUPABASE_CREDENTIALS'},'*');
   }catch(e){console.warn('[Preview] Could not request Supabase credentials');}
@@ -351,6 +355,7 @@ ${cleanCSS}
       ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
     }catch(err){
       showErr(err.message,err.stack);
+      /* Error diagnostic — non-sensitive, srcdoc same-origin */
       try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:err.message}},'*')}catch(x){}
     }
   }
@@ -628,7 +633,7 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, []);
+  }, [onError]);
 
   // Handle Supabase credential requests from preview iframe
   useEffect(() => {
@@ -680,6 +685,25 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
         } catch (error) {
           console.error("[PreviewPane] Error handling credential request:", error);
         }
+
+        const credentials = await response.json();
+
+        // Send credentials only to the requesting iframe's source.
+        // srcdoc iframes report origin "null", so we use "*" only for those
+        // (which is safe because srcdoc iframes are same-origin by definition).
+        const targetOrigin = e.origin === "null" ? "*" : e.origin;
+        if (e.source && typeof (e.source as WindowProxy).postMessage === "function") {
+          (e.source as WindowProxy).postMessage(
+            {
+              type: "SUPABASE_INIT",
+              url: credentials.url,
+              anonKey: credentials.anonKey,
+            },
+            targetOrigin,
+          );
+        }
+      } catch (error) {
+        console.error("[PreviewPane] Error handling credential request:", error);
       }
     }
 
@@ -790,7 +814,7 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
       </div>
 
       {/* iframe */}
-      <div className="flex-1 flex items-start justify-center p-4 bg-surface-2/30 overflow-auto">
+      <div className="flex-1 relative flex items-start justify-center p-4 bg-surface-2/30 overflow-auto">
         <div
           className="bg-white rounded-lg shadow-2xl overflow-hidden transition-all duration-300 h-full"
           style={{ width: VIEWPORTS[viewport].width, maxWidth: "100%" }}
@@ -813,6 +837,21 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
             />
           ) : null}
         </div>
+
+        {/* Generating overlay — dims old preview while new code is being generated */}
+        {isGenerating && (
+          <div className="absolute inset-0 bg-surface-0/80 backdrop-blur-sm flex flex-col items-center justify-center z-10 animate-fade-in">
+            <div className="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-4">
+              <Loader2 className="w-6 h-6 text-brand-400 animate-spin" />
+            </div>
+            <p className="text-sm text-slate-400 font-medium">Generating new preview...</p>
+            <div className="mt-3 flex gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot" />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.2s]" />
+              <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.4s]" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

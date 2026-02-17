@@ -38,10 +38,63 @@ interface GenerateState {
 }
 
 /**
+ * Sanitize a file path from LLM output to prevent directory traversal
+ * and overwriting sensitive files.
+ */
+function sanitizePath(path: string): string | null {
+  let cleaned = path.trim();
+
+  // Reject absolute paths
+  if (cleaned.startsWith("/") || /^[A-Za-z]:/.test(cleaned)) return null;
+
+  // Collapse and reject directory traversal
+  if (cleaned.includes("..")) return null;
+
+  // Strip leading slashes and dots
+  cleaned = cleaned.replace(/^[./\\]+/, "");
+
+  // Reject empty paths
+  if (!cleaned) return null;
+
+  // Reject sensitive file patterns
+  const blocked = [".env", ".git", ".ssh", "node_modules", "credentials", ".secret"];
+  const lowerPath = cleaned.toLowerCase();
+  if (blocked.some((b) => lowerPath.startsWith(b) || lowerPath.includes("/" + b))) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Parsed file operation — either a full file create or a search/replace edit.
+ */
+interface FileOperation {
+  type: "create" | "edit";
+  path: string;
+  content?: string;  // full content for "create"
+  edits?: { search: string; replace: string }[];  // for "edit"
+}
+
+/**
+ * Apply search/replace edits to existing file content.
+ */
+function applyEdits(original: string, edits: { search: string; replace: string }[]): string {
+  let content = original;
+  for (const edit of edits) {
+    if (edit.search && content.includes(edit.search)) {
+      content = content.replace(edit.search, edit.replace);
+    }
+  }
+  return content;
+}
+
+/**
  * Parse files from Claude's response. Supports multiple formats:
- * 1. ===FILE: path=== ... ===END_FILE===
- * 2. ```tsx // path/to/file.tsx ... ```
- * 3. // File: path/to/file.tsx ... (next file or end)
+ * 1. ===FILE: path=== ... ===END_FILE===  (full file, new or rewrite)
+ * 2. ===EDIT: path=== <<<SEARCH ... >>>REPLACE ... ===END_EDIT===  (search & replace)
+ * 3. ```tsx // path/to/file.tsx ... ```  (legacy)
+ * 4. // File: path/to/file.tsx ... (next file or end)  (legacy)
  */
 /** Sanitize and normalize file path to prevent directory traversal */
 function sanitizePath(path: string): string | null {
@@ -61,8 +114,8 @@ function sanitizePath(path: string): string | null {
 function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
-  // Format 1: ===FILE: path=== ... ===END_FILE===
-  const delimiterRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
+  // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
+  const delimiterRegex = /===FILE:\s*(.+?)===\s*\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(text)) !== null) {
     const safePath = sanitizePath(match[1].trim());
@@ -97,7 +150,7 @@ function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
     return files;
   }
 
-  // Format 2: ```language\n// filepath\n...``` or ```language:filepath\n...```
+  // Format 3: ```language\n// filepath\n...``` or ```language:filepath\n...```
   const codeBlockRegex = /```(?:\w+)?\s*\n?\s*(?:\/\/\s*|\/\*\s*|#\s*)?(?:file:\s*|File:\s*|path:\s*)?([^\n*]+\.\w+)\s*\n([\s\S]*?)```/gi;
   while ((match = codeBlockRegex.exec(text)) !== null) {
     const path = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
@@ -108,7 +161,7 @@ function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
   }
   if (files.length > 0) return files;
 
-  // Format 3: Look for code blocks with file paths mentioned before them
+  // Format 4: Look for code blocks with file paths mentioned before them
   const sections = text.split(/(?=###?\s|(?:^|\n)(?:\*\*)?(?:File|`)[:\s])/);
   for (const section of sections) {
     const pathMatch = section.match(

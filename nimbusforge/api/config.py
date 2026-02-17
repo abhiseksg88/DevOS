@@ -1,10 +1,10 @@
 """
-NimbusForge API Configuration.
+Vedaa API Configuration.
 Loaded from environment variables with sensible defaults.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from functools import lru_cache
 import logging
 
@@ -53,8 +53,8 @@ class Settings(BaseSettings):
 
     # --- Netlify (One-Click Publish) ---
     netlify_token: str = ""              # Personal access token
-    netlify_team_slug: str = "devos"     # Team slug on Netlify
-    netlify_site_prefix: str = "devos"   # Prefix for site names (devos-{slug})
+    netlify_team_slug: str = "vedaa"     # Team slug on Netlify
+    netlify_site_prefix: str = "vedaa"   # Prefix for site names (vedaa-{slug})
     netlify_custom_domain: str = ""      # Base domain for user apps (e.g., "vedaa.io")
 
     # --- Plan Cache ---
@@ -64,9 +64,41 @@ class Settings(BaseSettings):
     build_timeout_seconds: int = 600  # 10 minutes
     max_agent_iterations: int = 5
 
+    # --- CORS ---
+    frontend_url: str = ""  # Set to your Netlify URL (e.g. https://devos-app.netlify.app)
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "https://vedaa.io",
+        "https://www.vedaa.io",
+        "https://vedaaio.netlify.app",
+    ]
+
+    # --- Debug ---
+    debug_mode: bool = False
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Accept comma-separated string OR JSON list from env vars."""
+        if isinstance(v, str):
+            # Try JSON first, then comma-separated
+            v = v.strip()
+            if v.startswith("["):
+                import json
+                return json.loads(v)
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
+
     @model_validator(mode='after')
-    def validate_supabase_credentials(self):
-        """Validate that essential Supabase credentials are configured."""
+    def validate_critical_config(self):
+        """Validate that essential credentials are configured."""
+        # Auto-add frontend_url to CORS origins if set
+        if self.frontend_url:
+            url = self.frontend_url.rstrip("/")
+            if url not in self.cors_allowed_origins:
+                self.cors_allowed_origins.append(url)
+                logger.info("Added FRONTEND_URL to CORS origins: %s", url)
+
         if not self.supabase_url:
             logger.warning("SUPABASE_URL not set. Preview apps may not persist data.")
 
@@ -74,11 +106,16 @@ class Settings(BaseSettings):
             logger.warning("SUPABASE_ANON_KEY not set. Preview apps cannot connect to database.")
 
         if not self.supabase_service_role_key:
-            logger.error("SUPABASE_SERVICE_ROLE_KEY not set. Backend operations will fail.")
+            raise ValueError(
+                "SUPABASE_SERVICE_ROLE_KEY is required. "
+                "Set it in .env or as an environment variable."
+            )
 
-        # Log successful configuration
         if self.supabase_url and self.supabase_anon_key and self.supabase_service_role_key:
             logger.info(f"Supabase configured: {self.supabase_url}")
+
+        if not self.anthropic_api_key:
+            logger.warning("ANTHROPIC_API_KEY not set. LLM generation will be unavailable.")
 
         return self
 

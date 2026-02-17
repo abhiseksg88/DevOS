@@ -7,7 +7,6 @@
 [build.environment]
   # Use Node.js 20 (stable, recommended for Next.js 14)
   NODE_VERSION = "20"
-  # Do NOT install Python packages
   NPM_FLAGS = "--legacy-peer-deps"
 
 # Next.js adapter — handles SSR, API routes, middleware, and image optimization

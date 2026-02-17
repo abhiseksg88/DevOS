@@ -3,7 +3,7 @@
  * All calls go through the FastAPI backend.
  */
 
-import type { Build, Deployment, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
+import type { Build, Deployment, Integration, IntegrationContext, IntegrationTestResult, NexusAgentExecution, NexusState, Project, PublishResult, PublishStatus, Tenant, UsageSummary } from "@/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -13,14 +13,25 @@ async function request<T>(
   token: string,
   body?: unknown
 ): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    // Network error — backend unreachable
+    if (API.includes("localhost")) {
+      throw new Error(
+        "Backend API unreachable. Set NEXT_PUBLIC_API_URL in your environment variables to point to your deployed backend (e.g. https://your-backend.railway.app)."
+      );
+    }
+    throw new Error(`Cannot reach backend at ${API}. This may be a CORS issue — ensure the backend allows requests from this origin. Check your NEXT_PUBLIC_API_URL and CORS settings.`);
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail ?? `API error ${res.status}`);
@@ -65,7 +76,33 @@ export const deployments = {
 };
 
 // --- Publish (Netlify One-Click Deploy) ---
+export interface PublishHealth {
+  ready: boolean;
+  netlify_configured: boolean;
+  netlify_reachable: boolean;
+  netlify_team: string | null;
+  custom_domain: string | null;
+  supabase_configured: boolean;
+  netlify_error?: string;
+}
+
 export const publish = {
+  /** Pre-flight health check — validates Netlify token/team before attempting publish */
+  health: async (token: string): Promise<PublishHealth> => {
+    try {
+      return await request<PublishHealth>("GET", "/health/publish", token);
+    } catch {
+      return {
+        ready: false,
+        netlify_configured: false,
+        netlify_reachable: false,
+        netlify_team: null,
+        custom_domain: null,
+        supabase_configured: false,
+        netlify_error: "Backend unreachable",
+      };
+    }
+  },
   deploy: (token: string, tenantId: string, projectId: string, html: string) =>
     request<PublishResult>(
       "POST",
@@ -81,6 +118,72 @@ export const publish = {
     ),
 };
 
+// --- Integrations ---
+export const integrations = {
+  list: (token: string, tenantId: string, projectId: string) =>
+    request<Integration[]>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/integrations`,
+      token,
+    ),
+  create: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    data: {
+      provider: string;
+      category: string;
+      display_name: string;
+      credentials?: Record<string, string>;
+      config?: Record<string, unknown>;
+    },
+  ) =>
+    request<Integration>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/integrations`,
+      token,
+      data,
+    ),
+  update: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    integrationId: string,
+    data: {
+      display_name?: string;
+      credentials?: Record<string, string>;
+      config?: Record<string, unknown>;
+      status?: string;
+    },
+  ) =>
+    request<Integration>(
+      "PATCH",
+      `/tenants/${tenantId}/projects/${projectId}/integrations/${integrationId}`,
+      token,
+      data,
+    ),
+  delete: (token: string, tenantId: string, projectId: string, integrationId: string) =>
+    fetch(
+      `${API}/tenants/${tenantId}/projects/${projectId}/integrations/${integrationId}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    ),
+  test: (token: string, tenantId: string, projectId: string, integrationId: string) =>
+    request<IntegrationTestResult>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/integrations/${integrationId}/test`,
+      token,
+    ),
+  context: (token: string, tenantId: string, projectId: string) =>
+    request<IntegrationContext>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/integrations/context`,
+      token,
+    ),
+};
+
 // --- Usage ---
 export const usage = {
   get: (token: string, tenantId: string, period?: string) =>
@@ -91,6 +194,63 @@ export const usage = {
 export const preview = {
   getCredentials: (token: string) =>
     request<{ url: string; anonKey: string }>("GET", "/preview/credentials", token),
+};
+
+// --- Neural Nexus ---
+export const nexus = {
+  /** Get full Neural Nexus state (UPP + PSM + Business Logic + Activity) */
+  getState: (token: string, tenantId: string, projectId: string) =>
+    request<NexusState>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/nexus`,
+      token,
+    ),
+  /** Get Neural Nexus context string for code generation */
+  getContext: (token: string, tenantId: string, projectId: string) =>
+    request<{ context: string }>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/context`,
+      token,
+    ),
+  /** Update user persona preferences/expertise */
+  updatePersona: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    data: { preferences?: Record<string, unknown>; expertise?: Record<string, string> },
+  ) =>
+    request<{ status: string }>(
+      "PATCH",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/persona`,
+      token,
+      data,
+    ),
+  /** Record feedback into the flywheel */
+  recordFeedback: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    data: {
+      event_type: string;
+      feedback: Record<string, unknown>;
+      agent?: string;
+      prompt?: string;
+      response_summary?: string;
+    },
+  ) =>
+    request<{ status: string }>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/feedback`,
+      token,
+      data,
+    ),
+  /** Get recent agent activity */
+  getActivity: (token: string, tenantId: string, projectId: string, limit = 20) =>
+    request<NexusAgentExecution[]>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/nexus/activity?limit=${limit}`,
+      token,
+    ),
 };
 
 // --- SSE Stream ---

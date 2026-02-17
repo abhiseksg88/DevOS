@@ -1,5 +1,5 @@
 # =============================================================================
-# NimbusForge Control Plane — Production Dockerfile
+# Vedaa Control Plane — Production Dockerfile
 # Multi-stage build for the FastAPI + Agent Orchestrator
 # =============================================================================
 
