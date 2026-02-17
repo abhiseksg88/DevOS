@@ -73,29 +73,107 @@ def _get_db(settings: Settings):
 
 
 def _ensure_app_data_table(db, settings: Settings) -> bool:
-    """Ensure the app_data table exists. Logs warning if missing.
+    """Ensure the app_data table exists. Auto-creates it if missing.
 
-    Returns:
-        True if table exists
-        False if table is missing (should run migrations)
+    Uses the service-role key to create the table via Supabase SQL API.
+    Returns True if table exists or was created, False on failure.
     """
+    import logging
+    _tbl_logger = logging.getLogger(__name__)
+
     try:
-        # Test if table exists by attempting a simple query
         db.table("app_data").select("id").limit(1).execute()
         return True
     except Exception as e:
         error_msg = str(e).lower()
 
-        # If table doesn't exist, log warning
-        import logging
-        _tbl_logger = logging.getLogger(__name__)
-        if "relation" in error_msg or "does not exist" in error_msg or "not found" in error_msg:
-            _tbl_logger.warning("app_data table not found. Run: supabase db push")
-            _tbl_logger.warning("Migration: supabase/migrations/004_app_data_table.sql")
-            return True
-        else:
+        if "relation" not in error_msg and "does not exist" not in error_msg and "not found" not in error_msg:
             _tbl_logger.info("Database check error (non-critical): %s", e)
             return True
+
+        # Table is missing — attempt to auto-create it
+        _tbl_logger.warning("app_data table not found. Attempting auto-creation...")
+
+        create_sql = """
+        CREATE TABLE IF NOT EXISTS app_data (
+            id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            app_instance_id TEXT NOT NULL,
+            collection      TEXT NOT NULL,
+            record_id       TEXT NOT NULL,
+            data            JSONB NOT NULL,
+            version         INTEGER NOT NULL DEFAULT 1,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(project_id, app_instance_id, collection, record_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_data_project_collection ON app_data(project_id, collection);
+        CREATE INDEX IF NOT EXISTS idx_app_data_lookup ON app_data(project_id, app_instance_id, collection, record_id);
+        CREATE INDEX IF NOT EXISTS idx_app_data_created ON app_data(project_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_app_data_tenant ON app_data(tenant_id);
+        ALTER TABLE app_data ENABLE ROW LEVEL SECURITY;
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_select') THEN
+                CREATE POLICY app_data_select ON app_data FOR SELECT USING (tenant_id = ANY(public.get_tenant_ids()));
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_insert') THEN
+                CREATE POLICY app_data_insert ON app_data FOR INSERT WITH CHECK (tenant_id = ANY(public.get_tenant_ids()));
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_update') THEN
+                CREATE POLICY app_data_update ON app_data FOR UPDATE
+                    USING (tenant_id = ANY(public.get_tenant_ids()))
+                    WITH CHECK (tenant_id = ANY(public.get_tenant_ids()));
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_delete') THEN
+                CREATE POLICY app_data_delete ON app_data FOR DELETE USING (tenant_id = ANY(public.get_tenant_ids()));
+            END IF;
+        END $$;
+        """
+
+        try:
+            import httpx
+            # Use Supabase's PostgREST SQL execution via the /rest/v1/rpc endpoint
+            # The service-role key bypasses RLS and has DDL permissions
+            url = settings.supabase_url.rstrip("/")
+            headers = {
+                "apikey": settings.supabase_service_role_key,
+                "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            }
+
+            # Try to create via the Supabase SQL query endpoint (Management API)
+            # For hosted Supabase, the SQL endpoint is at the project URL
+            # For self-hosted, we try the PostgREST RPC approach
+            resp = httpx.post(
+                f"{url}/rest/v1/rpc/",
+                json={"query": create_sql},
+                headers=headers,
+                timeout=30,
+            )
+
+            if resp.status_code >= 400:
+                # Fallback: the RPC endpoint may not exist.
+                # Log the SQL for manual execution.
+                _tbl_logger.warning(
+                    "Auto-creation failed (status %d). Please run the migration manually:\n"
+                    "  supabase db push\n"
+                    "  OR paste supabase/migrations/004_app_data_table.sql into the SQL editor.",
+                    resp.status_code,
+                )
+                return False
+
+            _tbl_logger.info("app_data table auto-created successfully.")
+            return True
+        except Exception as create_err:
+            _tbl_logger.warning(
+                "Could not auto-create app_data table: %s\n"
+                "Run manually: supabase db push\n"
+                "Or paste supabase/migrations/004_app_data_table.sql into the SQL editor.",
+                create_err,
+            )
+            return False
 
 
 # ---------------------------------------------------------------------------
