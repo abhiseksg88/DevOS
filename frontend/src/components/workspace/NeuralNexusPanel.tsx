@@ -284,6 +284,12 @@ export function NeuralNexusPanel({
       const data = await api.nexus.getState(token, tenantId, projectId);
       setState(data);
       retryCountRef.current = 0; // Reset on success
+      // Show warning from backend if nexus tables are missing
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const warning = (data as any)?._warning;
+      if (typeof warning === "string") {
+        setError(warning);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load Neural Nexus";
       const lower = msg.toLowerCase();
