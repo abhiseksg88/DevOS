@@ -319,7 +319,7 @@ ${cleanCSS}
       }
       return new Proxy({},{
         get:function(_,p){
-          if(p==='__esModule') return false;
+          if(p==='__esModule') return true;
           if(p==='default') return _mkStub(true);
           if(typeof p==='symbol') return undefined;
           return _mkStub(false);
@@ -657,7 +657,7 @@ ${cleanCSS}
       }
       return new Proxy({},{
         get:function(_,p){
-          if(p==='__esModule') return false;
+          if(p==='__esModule') return true;
           if(p==='default') return _mkStub(true);
           if(typeof p==='symbol') return undefined;
           return _mkStub(false);
