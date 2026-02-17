@@ -45,16 +45,20 @@ RULES:
 5. Never suggest regenerating entire files. All changes will be patches.
 6. The backend discriminator will enforce genesis vs surgical mode.
    Your needs_scaffold is advisory — the backend has final say.
-7. No file may exceed 120 lines of code.
-8. Types belong in src/types/ only.
-9. API logic belongs in src/lib/ or src/services/ only.
-10. Pages are composition only — import components and render.
+7. CRUD page.tsx may be up to 300 lines. Other files: 120 lines max.
+
+SINGLE-FILE CRUD RULE:
+For CRUD apps with 1-3 entities (todo list, case management, CRM, contacts, inventory,
+notes, trackers, boards), plan a SINGLE src/app/page.tsx file containing ALL code:
+state, database operations, form handling, table rendering, and UI.
+DO NOT plan separate component files, service files, or type files for simple CRUD.
+This prevents prop name mismatches that cause runtime errors in the preview.
 
 DATABASE PLANNING:
 If the request involves data persistence:
-1. Identify collections needed
+1. Identify collections needed (will be stored in universal `app_data` table)
 2. Plan JSONB schema for each collection
-3. List CRUD operations required
+3. List CRUD operations required — ALL go in page.tsx using window.supabase
 4. Identify where loading/error UI states are needed
 5. Note if UPDATE operations need optimistic locking
 """
@@ -84,8 +88,31 @@ must contain real, functional Supabase database calls.
 2. Every async function MUST contain real database calls — NEVER leave empty or with TODOs.
 3. Data fetching MUST happen in useEffect on mount — NEVER show hardcoded/empty data.
 4. NEVER output "// TODO" comments — implement everything fully.
-5. If a file would exceed 120 lines, split into multiple files where EACH file is
-   fully functional (not a stub that depends on a future patch).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SINGLE-FILE CRUD RULE — CRITICAL (prevents "onSubmit is not a function"):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For apps that involve CRUD operations on 1-3 entities (e.g., case management,
+todo list, inventory, contacts), you MUST generate a SINGLE self-contained
+src/app/page.tsx file that includes ALL of the following INLINE:
+- State declarations (useState for items, loading, error)
+- Database operations (load, add, update, delete) using window.supabase
+- Form handling (input state, submit handlers)
+- Table/list rendering
+- Error and loading UI
+
+DO NOT split CRUD logic into separate component files.
+DO NOT create separate child components in src/components/.
+DO NOT create service files in src/lib/ or src/services/.
+Everything goes in ONE src/app/page.tsx file.
+
+WHY: Multi-file CRUD apps fail in the preview because:
+- Prop name mismatches between parent and child cause "onSubmit is not a function"
+- Callback wiring between 4+ files is error-prone
+- The preview sandbox's module resolution is fragile for inter-file imports
+
+The page.tsx file may be up to 300 lines for CRUD apps.
+Only split into multiple files when the app has 4+ distinct pages or entities.
 
 DATABASE INTEGRATION — REQUIRED FOR ALL CRUD APPS:
 A global Supabase client is available at `window.supabase`.
@@ -100,18 +127,114 @@ ALWAYS destructure { data, error } from every Supabase call.
 ALWAYS guard arrays: (data || []).map(row => ({ id: row.record_id, ...row.data }))
 ALWAYS include loading state (useState), error display, and empty-state UI.
 
+COMPLETE SINGLE-FILE EXAMPLE — Case Management App:
+```jsx
+'use client';
+import { useState, useEffect } from 'react';
+
+export default function CaseManager() {
+  const [cases, setCases] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [title, setTitle] = useState('');
+  const [priority, setPriority] = useState('medium');
+
+  useEffect(() => { loadCases(); }, []);
+
+  async function loadCases() {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const { data, error: err } = await window.supabase
+        .from('app_data').select('*')
+        .eq('collection', 'cases')
+        .eq('project_id', window.__VEDAA_PROJECT_ID)
+        .order('created_at', { ascending: false });
+      if (err) throw err;
+      setCases((data || []).map(row => ({ id: row.record_id, ...row.data, version: row.version })));
+    } catch (e) { setError(e.message); } finally { setIsLoading(false); }
+  }
+
+  async function addCase(e) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    setError(null);
+    try {
+      const { data, error: err } = await window.supabase
+        .from('app_data').insert({
+          tenant_id: window.__VEDAA_TENANT_ID,
+          project_id: window.__VEDAA_PROJECT_ID,
+          app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
+          collection: 'cases',
+          record_id: crypto.randomUUID(),
+          data: { title, priority, status: 'open', createdAt: new Date().toISOString() }
+        }).select().single();
+      if (err) throw err;
+      setCases(prev => [{ id: data.record_id, ...data.data, version: data.version }, ...prev]);
+      setTitle('');
+    } catch (e) { setError(e.message); }
+  }
+
+  async function deleteCase(id) {
+    setError(null);
+    try {
+      const { error: err } = await window.supabase
+        .from('app_data').delete()
+        .eq('collection', 'cases').eq('record_id', id)
+        .eq('project_id', window.__VEDAA_PROJECT_ID);
+      if (err) throw err;
+      setCases(prev => prev.filter(c => c.id !== id));
+    } catch (e) { setError(e.message); }
+  }
+
+  return (
+    <div className="p-8 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6">Case Manager</h1>
+      {error && <div className="mb-4 p-4 bg-red-100 text-red-700 rounded">{error}</div>}
+      <form onSubmit={addCase} className="mb-6 flex gap-2">
+        <input value={title} onChange={e => setTitle(e.target.value)}
+          placeholder="Case title" className="flex-1 px-4 py-2 border rounded" />
+        <select value={priority} onChange={e => setPriority(e.target.value)}
+          className="px-3 py-2 border rounded">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+        <button type="submit" className="px-6 py-2 bg-blue-500 text-white rounded">Add Case</button>
+      </form>
+      {isLoading ? (
+        <div className="text-center py-8 text-gray-500">Loading cases...</div>
+      ) : cases.length === 0 ? (
+        <p className="text-gray-500 text-center py-8">No cases yet. Add one above.</p>
+      ) : (
+        <div className="space-y-2">
+          {cases.map(c => (
+            <div key={c.id} className="flex justify-between items-center p-4 bg-white shadow rounded">
+              <div>
+                <span className="font-medium">{c.title}</span>
+                <span className="ml-2 text-sm text-gray-500">{c.priority}</span>
+                <span className="ml-2 text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">{c.status}</span>
+              </div>
+              <button onClick={() => deleteCase(c.id)}
+                className="px-3 py-1 bg-red-500 text-white rounded text-sm">Delete</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
 HARD CONSTRAINTS:
-1. NO file may exceed 120 lines of code. Split if needed.
-2. Types ONLY in src/types/ or types.ts — never inline.
-3. API logic ONLY in src/lib/ or src/services/.
-4. Pages are composition only — import + render layout.
-5. Never mix types + UI + API logic in one file.
-6. One file per concern (no god files).
-7. Generate production-quality code with proper imports.
-8. Follow the stack specified in the project manifest.
-9. Include proper .gitignore, package.json/requirements.txt.
-10. Use TypeScript for frontend, Python for backend.
-11. NEVER generate TODO comments — all code must be functional.
+1. CRUD page.tsx may be up to 300 lines. Other files: 120 lines max.
+2. For simple CRUD apps (1-3 entities): ALL code in src/app/page.tsx. No splitting.
+3. For complex apps (4+ entities/pages): Split files, but ensure prop names match exactly.
+4. Generate production-quality code with proper imports.
+5. Follow the stack specified in the project manifest.
+6. NEVER generate TODO comments — all code must be functional.
+7. NEVER use localStorage — always use window.supabase for persistence.
+8. NEVER hardcode mock data — always fetch from the database.
 """
 
 CODER_SYSTEM = """\
@@ -293,39 +416,28 @@ Supabase queries return { data, error }. You MUST destructure correctly:
     if (error) { setError(error.message); return; }
     setCases((data || []).map(row => ({ id: row.record_id, ...row.data })));
 
-COMPONENT WIRING — PARENT-TO-CHILD PROPS (violating this causes "Cannot read properties of undefined"):
-When passing data from parent to child components:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SINGLE-FILE CRUD RULE — CRITICAL (prevents "onSubmit is not a function"):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For CRUD apps with 1-3 entities, ALL code MUST be in a single src/app/page.tsx file.
+DO NOT create separate child components, service files, or type files.
+This prevents prop name mismatches that cause "onSubmit is not a function".
 
-  FORBIDDEN — crashes with "Cannot read properties of undefined (reading 'map')":
-    <CaseTable />  // ❌ no cases prop passed — child gets undefined
+The page.tsx file may be up to 300 lines for CRUD apps.
 
-  FORBIDDEN — prop name mismatch:
-    <CaseTable data={cases} />  // parent calls it "data"
-    function CaseTable({ cases }) { ... }  // child expects "cases" — gets undefined
+COMPLETE SINGLE-FILE EXAMPLE — Case Manager (copy this pattern exactly):
 
-  CORRECT:
-    <CaseTable cases={cases} onDelete={deleteCase} />  // ✅ explicit prop
-    function CaseTable({ cases = [], onDelete }) { return cases.map(...) }  // ✅ default
-
-  Rules:
-  1. Parent MUST explicitly pass ALL array/object props
-  2. Child MUST default every array prop: { cases = [], items = [] }
-  3. Prop names MUST match exactly between parent and child
-  4. NEVER rely on child reading state directly — always pass via props
-
-COMPLETE EXAMPLE — MULTI-COMPONENT (Case Manager with parent→child wiring):
-
-File: src/app/page.tsx (parent — owns state, passes props to children)
+File: src/app/page.tsx (EVERYTHING in one file — state, CRUD, form, table)
 ```jsx
 'use client';
 import { useState, useEffect } from 'react';
-import CaseTable from '@/components/CaseTable';
-import AddCaseForm from '@/components/AddCaseForm';
 
 export default function CaseManager() {
-  const [cases, setCases] = useState([]);       // ← always [] never undefined
+  const [cases, setCases] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [title, setTitle] = useState('');
+  const [priority, setPriority] = useState('medium');
 
   useEffect(() => { loadCases(); }, []);
 
@@ -333,133 +445,93 @@ export default function CaseManager() {
     setIsLoading(true);
     setError(null);
     try {
-      const { data, error: err } = await window.supabase  // ← MUST destructure { data, error }
-        .from('app_data')
-        .select('*')
+      const { data, error: err } = await window.supabase
+        .from('app_data').select('*')
         .eq('collection', 'cases')
         .eq('project_id', window.__VEDAA_PROJECT_ID)
         .order('created_at', { ascending: false });
-
       if (err) throw err;
-      // ← MUST use (data || []) — data can be null
       setCases((data || []).map(row => ({ id: row.record_id, ...row.data, version: row.version })));
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch (e) { setError(e.message); } finally { setIsLoading(false); }
   }
 
-  async function addCase(title, priority) {
+  async function addCase(e) {
+    e.preventDefault();
+    if (!title.trim()) return;
     setError(null);
     try {
       const { data, error: err } = await window.supabase
-        .from('app_data')
-        .insert({
+        .from('app_data').insert({
           tenant_id: window.__VEDAA_TENANT_ID,
           project_id: window.__VEDAA_PROJECT_ID,
           app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
           collection: 'cases',
           record_id: crypto.randomUUID(),
           data: { title, priority, status: 'open', createdAt: new Date().toISOString() }
-        })
-        .select()
-        .single();
-
+        }).select().single();
       if (err) throw err;
       setCases(prev => [{ id: data.record_id, ...data.data, version: data.version }, ...prev]);
-    } catch (e) {
-      setError(e.message);
-    }
+      setTitle('');
+    } catch (e) { setError(e.message); }
   }
 
   async function deleteCase(id) {
     setError(null);
     try {
       const { error: err } = await window.supabase
-        .from('app_data')
-        .delete()
-        .eq('collection', 'cases')
-        .eq('record_id', id)
+        .from('app_data').delete()
+        .eq('collection', 'cases').eq('record_id', id)
         .eq('project_id', window.__VEDAA_PROJECT_ID);
       if (err) throw err;
       setCases(prev => prev.filter(c => c.id !== id));
-    } catch (e) {
-      setError(e.message);
-    }
+    } catch (e) { setError(e.message); }
   }
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-6">Case Manager</h1>
-      {error && <div className="mb-4 p-4 bg-red-100 text-red-700 rounded">Error: {error}</div>}
-      <AddCaseForm onAdd={addCase} />
+      {error && <div className="mb-4 p-4 bg-red-100 text-red-700 rounded">{error}</div>}
+      <form onSubmit={addCase} className="mb-6 flex gap-2">
+        <input value={title} onChange={e => setTitle(e.target.value)}
+          placeholder="Case title" className="flex-1 px-4 py-2 border rounded" />
+        <select value={priority} onChange={e => setPriority(e.target.value)}
+          className="px-3 py-2 border rounded">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+        <button type="submit" className="px-6 py-2 bg-blue-500 text-white rounded">Add</button>
+      </form>
       {isLoading ? (
         <div className="text-center py-8 text-gray-500">Loading cases...</div>
+      ) : cases.length === 0 ? (
+        <p className="text-gray-500 text-center py-8">No cases yet.</p>
       ) : (
-        <CaseTable cases={cases} onDelete={deleteCase} />
+        <div className="space-y-2">
+          {cases.map(c => (
+            <div key={c.id} className="flex justify-between items-center p-4 bg-white shadow rounded">
+              <div>
+                <span className="font-medium">{c.title}</span>
+                <span className="ml-2 text-sm text-gray-500">{c.priority}</span>
+              </div>
+              <button onClick={() => deleteCase(c.id)}
+                className="px-3 py-1 bg-red-500 text-white rounded text-sm">Delete</button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 ```
 
-File: src/components/CaseTable.tsx (child — receives props, defaults arrays)
-```jsx
-export default function CaseTable({ cases = [], onDelete }) {
-  if (cases.length === 0) {
-    return <p className="text-gray-500 text-center py-8">No cases yet.</p>;
-  }
-  return (
-    <div className="space-y-2">
-      {cases.map((c) => (
-        <div key={c.id} className="flex justify-between items-center p-4 bg-white shadow rounded">
-          <div>
-            <span className="font-medium">{c.title}</span>
-            <span className="ml-2 text-sm text-gray-500">{c.priority}</span>
-          </div>
-          <button onClick={() => onDelete(c.id)} className="px-3 py-1 bg-red-500 text-white rounded text-sm">Delete</button>
-        </div>
-      ))}
-    </div>
-  );
-}
-```
-
-File: src/components/AddCaseForm.tsx (child — receives callback)
-```jsx
-import { useState } from 'react';
-export default function AddCaseForm({ onAdd }) {
-  const [title, setTitle] = useState('');
-  const [priority, setPriority] = useState('medium');
-  function handleSubmit(e) {
-    e.preventDefault();
-    if (!title.trim()) return;
-    onAdd(title, priority);
-    setTitle('');
-  }
-  return (
-    <form onSubmit={handleSubmit} className="mb-6 flex gap-2">
-      <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Case title" className="flex-1 px-4 py-2 border rounded" />
-      <select value={priority} onChange={e => setPriority(e.target.value)} className="px-3 py-2 border rounded">
-        <option value="low">Low</option>
-        <option value="medium">Medium</option>
-        <option value="high">High</option>
-      </select>
-      <button type="submit" className="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Add Case</button>
-    </form>
-  );
-}
-```
-
-KEY PATTERNS demonstrated above:
-1. State lives in the PARENT (page.tsx) — initialized as [] not undefined
-2. ALWAYS destructure { data, error } from Supabase — NEVER setCases(result)
-3. ALWAYS guard: setCases((data || []).map(...)) — NEVER setCases(data)
-4. Parent passes array prop explicitly: <CaseTable cases={cases} onDelete={deleteCase} />
-5. Child defaults array props: function CaseTable({ cases = [], onDelete })
-6. Loading state renders visible JSX (not null) — loading spinner or text
-7. State updates use functional form: setCases(prev => [...prev, newItem])
+KEY PATTERNS:
+1. EVERYTHING in one file — no child components, no prop wiring, no import failures
+2. Form onSubmit={addCase} calls the function DIRECTLY — no callback props to mismatch
+3. ALWAYS destructure { data, error } from Supabase — NEVER setCases(result)
+4. ALWAYS guard: setCases((data || []).map(...)) — NEVER setCases(data)
+5. Loading state renders visible JSX — not null
+6. State updates use functional form: setCases(prev => [...prev, newItem])
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -476,13 +548,12 @@ CRITICAL RULES:
 10. Do not introduce OWASP top-10 vulnerabilities.
 
 STRUCTURAL CONSTRAINTS (enforced by Sentinel):
-11. No file may exceed 120 lines of code. If a patch would exceed this, split into multiple files.
+11. General files: max 120 lines. CRUD page.tsx: up to 300 lines (single-file CRUD is preferred).
 12. One diff per patch — each patch modifies exactly one file.
-13. Types belong in src/types/ only. Never define types inline.
-14. API logic belongs in src/lib/ or src/services/ only.
-15. Pages are composition only — import components, render layout, no business logic.
-16. Use the AST dependency graph to understand import relationships.
-17. Respect all decisions in the architectural ledger.
+13. For simple CRUD apps (1-3 entities): keep ALL code in page.tsx. No separate type/service/component files.
+14. For complex apps (4+ entities): Types in src/types/, API in src/lib/, components in src/components/.
+15. Use the AST dependency graph to understand import relationships.
+16. Respect all decisions in the architectural ledger.
 """
 
 REVIEWER_SYSTEM = """\
@@ -556,11 +627,11 @@ If a CRUD app has ANY button, form, or action that doesn't actually perform a re
 database operation, set approved=false with severity="critical".
 
 STRUCTURAL CHECKS (from refactored architecture):
-11. No file exceeds 120 LOC (CRITICAL if violated)
-12. Types are not defined outside src/types/
-13. API logic is not in component or page files
-14. Pages are composition-only (no business logic)
-15. Each patch is a self-contained atomic change
+11. General files: max 120 LOC. CRUD page.tsx: up to 300 LOC is ALLOWED (single-file CRUD preferred).
+12. For simple CRUD apps (1-3 entities): ALL code in page.tsx is CORRECT. Do NOT flag this as a violation.
+    Business logic, database calls, forms, and tables in page.tsx are EXPECTED for single-file CRUD.
+13. For complex apps (4+ entities): Types in src/types/, API in src/lib/.
+14. Each patch is a self-contained atomic change.
 
 RULES:
 1. Set approved=false if there are any "critical" findings.
@@ -569,5 +640,5 @@ RULES:
 4. Don't be pedantic — focus on real issues, not style preferences.
 5. If patches look correct and secure, approve them. Don't find problems that aren't there.
 6. Database operations without error handling are CRITICAL violations.
-7. LOC > 120 in any file is a CRITICAL violation.
+7. CRUD page.tsx up to 300 LOC is allowed. Other files: max 120 LOC.
 """
