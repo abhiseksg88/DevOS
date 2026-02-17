@@ -36,10 +36,22 @@ function flattenForContext(nodes: FileNode[]): { path: string; content: string }
 function parseFixFiles(text: string, existingFiles: FileNode[]): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
+  // AUTO-CLOSE: Same logic as useGenerate.ts — if the last ===FILE: block
+  // lacks ===END_FILE===, append it so the regex can match.
+  let textToParse = text;
+  const lastFileStart = text.lastIndexOf("===FILE:");
+  if (lastFileStart !== -1) {
+    const textAfterLast = text.substring(lastFileStart);
+    if (!textAfterLast.includes("===END_FILE===")) {
+      console.warn("[useAutoFix] AUTO-CLOSE: Appending ===END_FILE=== to unclosed block");
+      textToParse = text.trimEnd() + "\n===END_FILE===";
+    }
+  }
+
   // Format 1: ===FILE: path=== ... ===END_FILE=== (full file replacement)
   const fileRegex = /===FILE:\s*(.+?)===\n([\s\S]*?)===END_FILE===/g;
   let match;
-  while ((match = fileRegex.exec(text)) !== null) {
+  while ((match = fileRegex.exec(textToParse)) !== null) {
     const path = match[1].trim();
     if (path && !path.startsWith("/") && !path.includes("..")) {
       files.push({ path, content: match[2].trimEnd() });
@@ -156,7 +168,19 @@ export function useAutoFix(
         .map((e, i) => `${i + 1}. ${e}`)
         .join("\n");
 
-      const prompt = `Fix these runtime errors from the preview render:\n\n${errorList}\n\nThis is auto-fix iteration ${iteration}/${MAX_ITERATIONS}. Fix ALL the errors.\n\nCOMMON FIXES:\n- "onSubmit is not a function" or "onAdd is not a function" → PROP NAME MISMATCH between parent and child component. The BEST fix: MERGE all components into a single page.tsx file. Move the form, table, and all CRUD functions into page.tsx directly. Remove child component imports. This eliminates prop wiring entirely.\n- "Cannot read properties of undefined (reading 'length')" or ".map()" → The component receives an undefined prop. Add default values: function Component({ items = [] }) or use (items || []).length\n- "Cannot read properties of undefined (reading 'X')" → Add optional chaining: obj?.X or provide default objects in destructuring\n- "X is not a function" → Likely a prop callback that was never passed from the parent. MERGE components into a single file instead of trying to fix prop wiring.\n- All array props MUST have defaults: { cases = [], items = [], data = [] }\n- All data from database queries must use (data || []) guard before .map(), .filter(), .length\n\nSINGLE-FILE CRUD RULE: If the app involves CRUD (add/edit/delete items), put ALL code in page.tsx — state, database calls (window.supabase), form handling, table rendering. Do NOT use separate component files for CRUD apps. This prevents prop name mismatches.\n\nDATABASE: Use window.supabase.from('app_data') for all CRUD. Include tenant_id: window.__VEDAA_TENANT_ID, project_id: window.__VEDAA_PROJECT_ID, app_instance_id: window.__VEDAA_APP_INSTANCE_ID in INSERT. Filter by .eq('project_id', window.__VEDAA_PROJECT_ID) in READ/UPDATE/DELETE.\n\nIMPORTANT: Output COMPLETE fixed files using ===FILE: path=== format. Do not output partial snippets.`;
+      // Detect if this is a syntax/truncation error vs a runtime error
+      const isSyntaxError = errors.some(e =>
+        e.includes("Unterminated string") ||
+        e.includes("Unexpected token") ||
+        e.includes("SyntaxError") ||
+        e.includes("Unexpected end of input")
+      );
+
+      const syntaxFixGuidance = isSyntaxError
+        ? `\n\nSYNTAX ERROR DETECTED — This is likely caused by TRUNCATED code (the file was cut off mid-line by token limits). You MUST:\n1. Output the COMPLETE file from start to finish — do NOT skip or abbreviate any section\n2. Make sure EVERY string literal is closed, EVERY JSX tag is closed, EVERY function body has its closing brace\n3. If the file is too long (>250 lines), SIMPLIFY the UI to fit. Remove decorative elements, reduce table columns, simplify forms. Working > pretty.\n4. Keep the file under 250 lines to avoid truncation. This is more important than visual polish.`
+        : "";
+
+      const prompt = `Fix these preview errors:\n\n${errorList}\n\nThis is auto-fix iteration ${iteration}/${MAX_ITERATIONS}. Fix ALL the errors.${syntaxFixGuidance}\n\nCOMMON FIXES:\n- "Unterminated string constant" or "Unexpected token" → CODE WAS TRUNCATED. Regenerate the COMPLETE file, keeping it under 250 lines. Simplify UI if needed.\n- "onSubmit is not a function" or "onAdd is not a function" → PROP NAME MISMATCH. MERGE all components into a single page.tsx file.\n- "Cannot read properties of undefined" → Add optional chaining: obj?.X or default values: { items = [] }\n- "X is not a function" → MERGE components into a single file.\n- All array props MUST have defaults: { cases = [], items = [], data = [] }\n- All data from queries must use (data || []) guard before .map(), .filter(), .length\n\nSINGLE-FILE CRUD RULE: Put ALL CRUD code in page.tsx — state, database calls, form, table. No separate components.\n\nDATABASE: Use window.supabase.from('app_data') for CRUD. Include tenant_id: window.__VEDAA_TENANT_ID, project_id: window.__VEDAA_PROJECT_ID, app_instance_id: window.__VEDAA_APP_INSTANCE_ID in INSERT. Filter by .eq('project_id', window.__VEDAA_PROJECT_ID) in READ/UPDATE/DELETE.\n\nIMPORTANT: Output COMPLETE fixed files using ===FILE: path=== format. Every file MUST end with ===END_FILE===. Do not output partial snippets.`;
 
       const response = await fetch("/api/generate", {
         method: "POST",

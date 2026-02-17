@@ -547,13 +547,104 @@ ${cleanCSS}
   if(typeof React==='undefined'||typeof ReactDOM==='undefined'){ showErr('React failed to load — check your internet connection.'); return; }
   if(typeof supabase==='undefined'){ console.warn('[Preview] Supabase SDK not loaded (continuing without persistence)'); }
 
-  function renderApp(){
-    try{
-      var transpiled=Babel.transform(code,{
-        presets:['react','typescript',['env',{modules:'commonjs'}]],
-        filename:'page.tsx'
-      }).code;
+  /* ================================================================
+     TRUNCATED CODE REPAIR — fixes code cut off by token limits.
+     When Babel fails on raw code, this attempts structural repair:
+     1. Close unclosed string literals (" ' \`)
+     2. Close unclosed JSX tags (</div>, />)
+     3. Balance braces/parens for function bodies
+     4. Add default export if missing
+     Called only as fallback when Babel.transform fails on raw code.
+     ================================================================ */
+  function repairTruncatedCode(src){
+    var repaired=src;
+    /* --- Step 1: Close unclosed strings --- */
+    var inSQ=false,inDQ=false,inTL=false;
+    for(var i=0;i<repaired.length;i++){
+      var ch=repaired[i],prev=i>0?repaired[i-1]:'';
+      if(prev==='\\\\') continue;
+      if(!inDQ&&!inTL&&ch==="'"&&prev!=='\\\\') inSQ=!inSQ;
+      else if(!inSQ&&!inTL&&ch==='"'&&prev!=='\\\\') inDQ=!inDQ;
+      else if(!inSQ&&!inDQ&&ch==='${'`'}') inTL=!inTL;
+    }
+    if(inDQ) repaired+='"';
+    if(inSQ) repaired+="'";
+    if(inTL) repaired+='${'`'}';
 
+    /* --- Step 2: Close unclosed JSX attribute/tag --- */
+    var lines=repaired.split('\\n');
+    var lastLines=lines.slice(-3).join(' ');
+    if(lastLines.match(/<\\w[^>]*$/)){
+      repaired+=' />';
+    }
+
+    /* --- Step 3: Balance braces and parens --- */
+    var braces=0,parens=0,brackets=0;
+    inSQ=false;inDQ=false;inTL=false;
+    var inLineComment=false,inBlockComment=false;
+    for(var j=0;j<repaired.length;j++){
+      var c=repaired[j],p=j>0?repaired[j-1]:'',n=j<repaired.length-1?repaired[j+1]:'';
+      if(inLineComment){if(c==='\\n')inLineComment=false;continue;}
+      if(inBlockComment){if(c==='*'&&n==='/')inBlockComment=false;continue;}
+      if(!inSQ&&!inDQ&&!inTL&&c==='/'&&n==='/')inLineComment=true;
+      if(!inSQ&&!inDQ&&!inTL&&c==='/'&&n==='*')inBlockComment=true;
+      if(p==='\\\\') continue;
+      if(!inDQ&&!inTL&&c==="'"&&!inLineComment&&!inBlockComment) inSQ=!inSQ;
+      else if(!inSQ&&!inTL&&c==='"'&&!inLineComment&&!inBlockComment) inDQ=!inDQ;
+      else if(!inSQ&&!inDQ&&c==='${'`'}'&&!inLineComment&&!inBlockComment) inTL=!inTL;
+      if(inSQ||inDQ||inTL||inLineComment||inBlockComment) continue;
+      if(c==='{')braces++;else if(c==='}')braces--;
+      if(c==='(')parens++;else if(c===')')parens--;
+      if(c==='[')brackets++;else if(c===']')brackets--;
+    }
+    while(brackets>0){repaired+=']';brackets--;}
+    while(parens>0){repaired+=')';parens--;}
+    /* Close JSX return before closing function braces */
+    if(braces>1){
+      repaired+='\\n      </div>';
+    }
+    while(braces>0){repaired+='\\n}';braces--;}
+
+    /* --- Step 4: Ensure default export --- */
+    if(repaired.indexOf('export default')===-1){
+      var fnMatch=repaired.match(/(?:^|\\n)\\s*function\\s+(\\w+)/);
+      if(fnMatch) repaired+='\\nexport default '+fnMatch[1]+';';
+    }
+
+    console.log('[Preview] repairTruncatedCode applied — added',repaired.length-src.length,'chars');
+    return repaired;
+  }
+
+  function renderApp(){
+    var babelOpts={presets:['react','typescript',['env',{modules:'commonjs'}]],filename:'page.tsx'};
+    var codeToUse=code;
+
+    /* Try normal Babel compile first; if it fails, attempt repair and retry */
+    var transpiled;
+    try{
+      transpiled=Babel.transform(codeToUse,babelOpts).code;
+    }catch(firstErr){
+      console.warn('[Preview] Babel failed on raw code:',firstErr.message,'— attempting repair...');
+      var repaired=repairTruncatedCode(codeToUse);
+      if(repaired!==codeToUse){
+        try{
+          transpiled=Babel.transform(repaired,babelOpts).code;
+          codeToUse=repaired;
+          console.log('[Preview] Repair succeeded — code compiles after structural fix');
+        }catch(secondErr){
+          /* Repair also failed — report original error for auto-fix */
+          showErr(firstErr.message,firstErr.stack);
+          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:firstErr.message,repairable:true}},'*')}catch(x){}
+          return;
+        }
+      }else{
+        showErr(firstErr.message,firstErr.stack);
+        try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:firstErr.message}},'*')}catch(x){}
+        return;
+      }
+    }
+
+    try{
       var mod={exports:{}};
       (new Function('module','exports','require','React','ReactDOM',transpiled))(mod,mod.exports,__req,React,ReactDOM);
 

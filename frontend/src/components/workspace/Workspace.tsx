@@ -252,15 +252,37 @@ export function Workspace({ projectId }: { projectId: string }) {
     }, []),
   );
 
-  // Callback for PreviewPane error reporting
+  // Queue errors that arrive during generation — re-fire after generation completes
+  const pendingErrorsRef = useRef<string[]>([]);
+
   const handlePreviewError = useCallback(
     (msg: string) => {
       if (!generator.isGenerating && !autoFix.isFixing) {
         autoFix.reportError(msg);
+      } else {
+        // Queue errors that arrive while generating — they'll be re-fired below
+        if (!pendingErrorsRef.current.includes(msg)) {
+          pendingErrorsRef.current.push(msg);
+        }
       }
     },
     [generator.isGenerating, autoFix],
   );
+
+  // When generation finishes, flush any queued preview errors to auto-fix
+  useEffect(() => {
+    if (!generator.isGenerating && pendingErrorsRef.current.length > 0) {
+      const queued = [...pendingErrorsRef.current];
+      pendingErrorsRef.current = [];
+      // Small delay to let the final render settle
+      const timer = setTimeout(() => {
+        for (const msg of queued) {
+          autoFix.reportError(msg);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [generator.isGenerating, autoFix]);
 
   // Helper: Convert file tree to code map for persistence
   function treeToCodeMap(tree: FileNode[]): Record<string, string> {
