@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { LogOut, CreditCard, Settings } from "lucide-react";
+import { LogOut, CreditCard, Settings, Zap } from "lucide-react";
 import Image from "next/image";
 import type { User } from "@supabase/supabase-js";
 

@@ -30,6 +30,7 @@ interface PreviewPaneProps {
   url: string | null;
   files?: FileNode[];
   onError?: (errorMessage: string) => void;
+  isGenerating?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +596,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError, isGenerating }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -685,25 +686,6 @@ export function PreviewPane({ url, files, onError }: PreviewPaneProps) {
         } catch (error) {
           console.error("[PreviewPane] Error handling credential request:", error);
         }
-
-        const credentials = await response.json();
-
-        // Send credentials only to the requesting iframe's source.
-        // srcdoc iframes report origin "null", so we use "*" only for those
-        // (which is safe because srcdoc iframes are same-origin by definition).
-        const targetOrigin = e.origin === "null" ? "*" : e.origin;
-        if (e.source && typeof (e.source as WindowProxy).postMessage === "function") {
-          (e.source as WindowProxy).postMessage(
-            {
-              type: "SUPABASE_INIT",
-              url: credentials.url,
-              anonKey: credentials.anonKey,
-            },
-            targetOrigin,
-          );
-        }
-      } catch (error) {
-        console.error("[PreviewPane] Error handling credential request:", error);
       }
     }
 

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
 import { useGenerate, type PipelineEvent } from "@/hooks/useGenerate";
+import { useAutoFix } from "@/hooks/useAutoFix";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
@@ -25,7 +26,10 @@ import {
   Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import * as api from "@/lib/api";
 import { PublishButton } from "@/components/workspace/PublishButton";
+import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
+import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
 import { VersionHistory } from "@/components/workspace/VersionHistory";
 
 type RightTab = "code" | "preview" | "console" | "infra" | "history";
@@ -327,9 +331,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       node.content = content;
     }
   }
-
-  // File tree — updated from Claude output or editor changes
-  const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
 
   // Ref to track current file tree state (avoid stale closures in save operations)
   const fileTreeRef = useRef<FileNode[]>(fileTree);

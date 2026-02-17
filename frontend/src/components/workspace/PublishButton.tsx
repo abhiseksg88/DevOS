@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { buildDeployDocument } from "@/components/preview/PreviewPane";
 import type { FileNode, Project } from "@/types";
+import * as api from "@/lib/api";
 
 type PublishState =
   | "idle"
@@ -29,6 +30,8 @@ type PublishState =
   | "polling"
   | "success"
   | "error";
+
+const POLL_TIMEOUT_MS = 5 * 60_000; // 5 minutes
 
 interface PublishButtonProps {
   project: Project | null;
@@ -55,6 +58,7 @@ export function PublishButton({
   const [copied, setCopied] = useState(false);
   const [preflightStatus, setPreflightStatus] = useState<api.PublishHealth | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number>(0);
 
   // Sync deployed URL from project
   useEffect(() => {
