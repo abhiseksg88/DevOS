@@ -170,7 +170,7 @@ if (error) {
   console.error('Read failed:', error.message);
   setError(error.message);
 } else {
-  setMeals(data.map(row => ({ id: row.record_id, ...row.data })));
+  setMeals((data || []).map(row => ({ id: row.record_id, ...row.data })));
 }
 ```
 
@@ -197,7 +197,7 @@ if (error) {
     setError(error.message);
   }
 } else {
-  setMeals(meals.map(m => m.id === mealId ? { id: data.record_id, ...data.data } : m));
+  setMeals(prev => prev.map(m => m.id === mealId ? { id: data.record_id, ...data.data } : m));
 }
 ```
 
@@ -228,6 +228,7 @@ MANDATORY PATTERNS:
 8. ✅ NEVER use localStorage for persistence
 9. ✅ NEVER mock data with hardcoded arrays
 10. ✅ NEVER skip error handling
+11. ✅ ALWAYS use (data || []) when setting array state from query results (data can be null)
 
 COMPLETE EXAMPLE (Meal Planner with CRUD):
 ```jsx
@@ -256,7 +257,7 @@ export default function MealPlanner() {
         .order('created_at', { ascending: false });
 
       if (err) throw err;
-      setMeals(data.map(row => ({ id: row.record_id, ...row.data, version: row.version })));
+      setMeals((data || []).map(row => ({ id: row.record_id, ...row.data, version: row.version })));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -414,6 +415,7 @@ DATABASE-SPECIFIC CHECKS:
 8. ✅ window.supabase used correctly (not imported or undefined)
 9. ⚠️  Empty states handled (show message when data.length === 0)
 10. ⚠️  Loading UI shown while fetching data
+11. ✅ Array state uses (data || []) guard — setCases(data) is UNSAFE, setCases((data || []).map(...)) is correct
 
 CRITICAL DATABASE VIOLATIONS (auto-reject):
 - Using localStorage instead of window.supabase
@@ -421,6 +423,7 @@ CRITICAL DATABASE VIOLATIONS (auto-reject):
 - UPDATE without version check (risk of data conflicts)
 - Collection names with spaces or special characters
 - Hardcoded/mocked data instead of real database fetch
+- Setting array state directly from data without null guard (must use data || [])
 
 STRUCTURAL CHECKS (from refactored architecture):
 11. No file exceeds 120 LOC (CRITICAL if violated)

@@ -218,9 +218,34 @@ ${cleanCSS}
 <div id="root"></div>
 <script>
 (function(){
-  /* --- Supabase initialization (postMessage from parent) --- */
+  /* --- Supabase queuing stub & initialization --- */
   window.__supabase_ready=false;
-  window.supabase=null;
+  window.__sb_resolve=null;
+  window.__sb_promise=new Promise(function(r){window.__sb_resolve=r});
+  /* Timeout: if credentials never arrive, resolve with null after 8s */
+  setTimeout(function(){if(!window.__supabase_ready){window.__sb_resolve(null)}},8000);
+
+  /* Queuing stub: records .from().select().eq()... chains and replays
+     them on the real Supabase client once credentials arrive via postMessage.
+     Prevents "X.filter is not a function" crashes when generated apps
+     call window.supabase before the client is initialized. */
+  (function(){
+    function _chain(ops){
+      var b={};
+      'select,insert,update,delete,upsert,eq,neq,gt,gte,lt,lte,like,ilike,is,in,contains,containedBy,order,limit,range,single,maybeSingle,not,or,filter,match,textSearch'.split(',').forEach(function(m){
+        b[m]=function(){var a=Array.prototype.slice.call(arguments);ops.push({m:m,a:a});return _chain(ops)};
+      });
+      b.then=function(res,rej){
+        return window.__sb_promise.then(function(client){
+          if(!client) return {data:[],error:{message:'Database connection unavailable'}};
+          try{var r=client;for(var i=0;i<ops.length;i++) r=r[ops[i].m].apply(r,ops[i].a);return r;}
+          catch(e){return {data:[],error:{message:e.message}}}
+        }).then(res,rej);
+      };
+      return b;
+    }
+    window.supabase={from:function(t){return _chain([{m:'from',a:[t]}])}};
+  })();
 
   window.addEventListener('message',function(e){
     if(e.data&&e.data.type==='SUPABASE_INIT'){
@@ -231,6 +256,7 @@ ${cleanCSS}
         }
         window.supabase=supabase.createClient(e.data.url,e.data.anonKey);
         window.__supabase_ready=true;
+        window.__sb_resolve(window.supabase);
         window.dispatchEvent(new Event('supabase:ready'));
         console.log('[Preview] Supabase initialized:',e.data.url);
       }catch(err){
@@ -589,6 +615,19 @@ ${cleanCSS}
       window.__supabase_ready=true;
     }
   }catch(err){console.error('Failed to init Supabase:',err)}
+  /* Fallback stub if Supabase SDK failed to load — prevents crashes */
+  if(!window.__supabase_ready){
+    (function(){
+      function _c(){var o={};
+        'from,select,insert,update,delete,upsert,eq,neq,gt,gte,lt,lte,like,ilike,is,in,contains,containedBy,order,limit,range,single,maybeSingle,not,or,filter,match,textSearch'.split(',').forEach(function(m){
+          o[m]=function(){return _c()};
+        });
+        o.then=function(r){return Promise.resolve({data:[],error:{message:'Database connection unavailable'}}).then(r)};
+        return o;
+      }
+      window.supabase={from:function(){return _c()}};
+    })();
+  }
 
   function b64d(b){
     var s=atob(b),a=new Uint8Array(s.length);

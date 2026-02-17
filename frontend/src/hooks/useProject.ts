@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import * as db from "@/lib/supabase-db";
@@ -17,21 +17,40 @@ export function useProject(projectId: string) {
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Use ref to stabilize getToken — prevents effect re-runs when token changes
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
   const getToken = useCallback(async () => {
-    if (token) return token;
-    const supabase = createClient();
-    const { data } = await supabase.auth.getSession();
-    const t = data.session?.access_token ?? "";
-    const uid = data.session?.user?.id ?? null;
-    setToken(t);
-    setUserId(uid);
-    return t;
-  }, [token]);
+    if (tokenRef.current) return tokenRef.current;
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.auth.getSession();
+      const t = data.session?.access_token ?? "";
+      const uid = data.session?.user?.id ?? null;
+      setToken(t);
+      setUserId(uid);
+      tokenRef.current = t;
+      return t;
+    } catch (err) {
+      console.error("[useProject] Failed to get auth session:", err);
+      return "";
+    }
+  }, []); // Stable — no dependencies
 
   useEffect(() => {
     if (!projectId) return;
+
+    let cancelled = false;
+
     (async () => {
-      await getToken();
+      try {
+        await getToken();
+      } catch {
+        // Auth not available — continue in offline mode
+      }
+
+      if (cancelled) return;
 
       let tid = tenantParam;
 
@@ -39,7 +58,7 @@ export function useProject(projectId: string) {
       if (!tid) {
         try {
           const tenants = await db.listTenants();
-          if (tenants.length > 0) {
+          if (!cancelled && tenants.length > 0) {
             tid = tenants[0].id;
             setResolvedTenantId(tid);
           }
@@ -47,31 +66,35 @@ export function useProject(projectId: string) {
           // DB not ready — load workspace in offline mode
         }
       } else {
-        setResolvedTenantId(tid);
+        if (!cancelled) setResolvedTenantId(tid);
       }
 
       if (!tid) {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
         return;
       }
 
       // Load project and builds via Supabase directly
       try {
         const p = await db.getProject(tid, projectId);
-        setProject(p);
+        if (!cancelled) setProject(p);
       } catch {
         // Project may not exist yet
       }
 
       try {
         const b = await db.listBuilds(tid, projectId);
-        setBuilds(b);
+        if (!cancelled) setBuilds(b);
       } catch {
         // No builds yet
       }
 
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [tenantParam, projectId, getToken]);
 
   // Build creation still goes through the backend API (needs LLM pipeline)
