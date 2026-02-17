@@ -262,7 +262,8 @@ ${cleanCSS}
   }
 
   /* --- component-file registry & require shim --- */
-  var __reg=${registry};
+  var __reg;
+  try{__reg=${registry};}catch(e){__reg={};console.error('[Preview] Registry parse error:',e.message);showErr('Failed to load component registry: '+e.message);}
   var __cache={};
 
   function __req(mod){
@@ -346,14 +347,21 @@ ${cleanCSS}
       var root=ReactDOM.createRoot(document.getElementById('root'));
       root.render(React.createElement(App));
 
-      /* Detect white-screen: if root is empty after render, the component returned null */
+      /* Detect white-screen: if root is empty after render, show diagnostics */
       setTimeout(function(){
         var el=document.getElementById('root');
         if(el && el.innerHTML.trim()==='' ){
-          showErr('The generated component rendered nothing (returned null or empty).\\n\\nThis usually means the component has a conditional return that evaluates to null on first render.\\nTip: make sure the default export always returns visible JSX.');
-          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'Component rendered empty — possible null return'}},'*')}catch(x){}
+          var diag=[];
+          diag.push('React loaded: '+(typeof React!=='undefined'));
+          diag.push('ReactDOM loaded: '+(typeof ReactDOM!=='undefined'));
+          diag.push('Babel loaded: '+(typeof Babel!=='undefined'));
+          diag.push('Errors captured: '+window.__errs.length);
+          if(window.__errs.length>0) diag.push('First error: '+window.__errs[0].message);
+          var diagText=diag.join('\\n');
+          showErr('The generated component rendered nothing (returned null or empty).\\n\\nDiagnostics:\\n'+diagText+'\\n\\nTip: make sure the default export always returns visible JSX.');
+          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'White screen - component rendered empty',diagnostics:diagText}},'*')}catch(x){}
         }
-      },500);
+      },2000);
     }catch(err){
       showErr(err.message,err.stack);
       /* Error diagnostic — non-sensitive, srcdoc same-origin */

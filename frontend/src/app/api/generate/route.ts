@@ -200,23 +200,22 @@ Use INLINE SVGs or emoji. Common patterns:
 - Pricing table
 - CTA sections
 
-Do NOT include any explanation text outside of file/edit blocks.
+Do NOT include any explanation text outside of file blocks.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ## OUTPUT FORMAT — MANDATORY RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### CRITICAL INSTRUCTION — READ THIS FIRST
-When existing project files are provided in context below, you MUST use ===EDIT===
-with SEARCH/REPLACE blocks to modify them. Do NOT output ===FILE: path=== for any
-file that already exists in the context. Full-file rewrites of existing files WILL
-CRASH THE SYSTEM by exceeding the output token limit and truncating your response.
-The parser will fail and the user will see an error.
-
-### For NEW files (not in context):
-===FILE: path/to/new_file.tsx===
+### CRITICAL: Use ONLY this format for ALL files (new AND modified):
+===FILE: path/to/file.tsx===
 (complete file content)
 ===END_FILE===
+
+### When updating an existing project:
+- ONLY output files that need to change or are new
+- Do NOT output unchanged files — this wastes tokens
+- When modifying a file, output the COMPLETE updated content (not a diff or snippet)
+- Each changed file must use ===FILE: path=== with its full new content
 
 Do NOT include any explanation text outside of ===FILE: ... === blocks.`;
 

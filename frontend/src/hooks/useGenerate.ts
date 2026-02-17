@@ -96,7 +96,7 @@ function applyEdits(original: string, edits: { search: string; replace: string }
  * 3. ```tsx // path/to/file.tsx ... ```  (legacy)
  * 4. // File: path/to/file.tsx ... (next file or end)  (legacy)
  */
-function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
+function parseFiles(text: string, allowTruncated = false, existingFiles?: { path: string; content: string }[]): GeneratedFile[] {
   const files: GeneratedFile[] = [];
 
   // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
@@ -107,6 +107,38 @@ function parseFiles(text: string, allowTruncated = false): GeneratedFile[] {
     if (safePath) {
       console.log('[parseFiles] Found file via delimiter format:', safePath, 'content length:', match[2].trimEnd().length);
       files.push({ path: safePath, content: match[2].trimEnd() });
+    }
+  }
+
+  // Format 1.5: ===EDIT: path=== with SEARCH/REPLACE blocks (safety net)
+  const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
+  while ((match = editRegex.exec(text)) !== null) {
+    const editPath = match[1]?.trim();
+    const safePath = editPath ? sanitizePath(editPath) : null;
+    if (!safePath) continue;
+    // Skip if we already have this file from ===FILE=== format
+    if (files.some(f => f.path === safePath)) continue;
+
+    const editBody = match[2];
+    const edits: { search: string; replace: string }[] = [];
+    const srRegex = /<<<SEARCH\n([\s\S]*?)>>>REPLACE\n([\s\S]*?)(?=<<<SEARCH|$)/g;
+    let srMatch;
+    while ((srMatch = srRegex.exec(editBody)) !== null) {
+      edits.push({
+        search: srMatch[1].replace(/\n$/, ""),
+        replace: srMatch[2].replace(/\n$/, ""),
+      });
+    }
+
+    if (edits.length > 0 && existingFiles) {
+      const existing = existingFiles.find(f => f.path === safePath);
+      if (existing) {
+        const result = applyEdits(existing.content, edits);
+        console.log('[parseFiles] Applied EDIT block for:', safePath, 'edits:', edits.length);
+        files.push({ path: safePath, content: result });
+      } else {
+        console.warn('[parseFiles] EDIT block for unknown file:', safePath);
+      }
     }
   }
 
@@ -257,7 +289,7 @@ async function streamGenerate(
         const event = JSON.parse(jsonStr);
         if (event.type === "text") {
           fullText += event.content;
-          const parsed = parseFiles(fullText);
+          const parsed = parseFiles(fullText, false, existingFiles);
           if (parsed.length > lastParsedCount) {
             console.log('[useGenerate] Parsed new files:', parsed.slice(lastParsedCount).map(f => ({ path: f.path, contentLength: f.content.length })));
             for (let i = lastParsedCount; i < parsed.length; i++) {
@@ -292,9 +324,9 @@ async function streamGenerate(
   }
 
   // Try standard parse first, then truncated fallback if needed
-  let finalFiles = parseFiles(fullText);
+  let finalFiles = parseFiles(fullText, false, existingFiles);
   if (finalFiles.length === 0 && wasTruncated) {
-    finalFiles = parseFiles(fullText, true); // Allow truncated files
+    finalFiles = parseFiles(fullText, true, existingFiles); // Allow truncated files
   }
 
   console.log('[useGenerate] Stream complete. Final parse:', { totalFiles: finalFiles.length, lastParsedCount, fullTextLength: fullText.length, stopReason });
