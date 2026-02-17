@@ -124,6 +124,7 @@ function buildPreviewDocument(
   supabaseAnonKey?: string,
   tenantId?: string,
   projectId?: string,
+  userToken?: string,
 ): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
@@ -176,6 +177,7 @@ function buildPreviewDocument(
   const safeAnonKey = (supabaseAnonKey || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const safeTenantId = (tenantId || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const safeProjectId = (projectId || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const safeUserToken = (userToken || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
   /* ------------------------------------------------------------------ */
   /* The HTML document loaded inside the preview iframe                  */
@@ -242,6 +244,7 @@ ${cleanCSS}
   window.__VEDAA_APP_INSTANCE_ID="${safeProjectId||'preview'}";
   var __sbUrl="${safeSupabaseUrl}";
   var __sbKey="${safeAnonKey}";
+  var __sbToken="${safeUserToken}";
 
   /* ================================================================
      RESPONSE NORMALIZER (defined FIRST so basic init can use it)
@@ -313,13 +316,17 @@ ${cleanCSS}
      ================================================================ */
   if(__sbUrl&&__sbKey&&typeof supabase!=='undefined'&&supabase.createClient){
     try{
-      var _basicClient=supabase.createClient(__sbUrl,__sbKey);
+      var _initOpts={};
+      if(__sbToken){
+        _initOpts.global={headers:{Authorization:'Bearer '+__sbToken}};
+      }
+      var _basicClient=supabase.createClient(__sbUrl,__sbKey,_initOpts);
       window.supabase=__wrapSB(_basicClient);
       window.__supabase_ready=true;
       window.__sb_resolve(_basicClient);
-      console.log('[Preview] Supabase initialized (basic):', __sbUrl);
+      console.log('[Preview] Supabase initialized'+ (__sbToken?' (authenticated)':' (anon)') +':', __sbUrl);
     }catch(err){
-      console.error('[Preview] Failed to init basic Supabase client:', err);
+      console.error('[Preview] Failed to init Supabase client:', err);
     }
   }
 
@@ -976,11 +983,12 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
         tenantId,
         projectId,
+        userToken,
       );
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, refreshKey, contentHash]);
+  }, [files, refreshKey, contentHash, userToken]);
 
   // Listen for error messages from the preview iframe
   useEffect(() => {
