@@ -344,27 +344,92 @@ ${cleanCSS}
         return;
       }
 
-      var root=ReactDOM.createRoot(document.getElementById('root'));
-      root.render(React.createElement(App));
+      /* Null-safe wrapper: if App returns null, show a loading skeleton instead of blank screen.
+         Also wraps in React error boundary to catch render crashes. */
+      var _hasRendered=false;
+      var ErrorBoundary=function(props){
+        var _s=React.useState(null),err=_s[0],setErr=_s[1];
+        if(err) return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
+          React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Render Error'),
+          React.createElement('pre',{style:{background:'#181825',padding:'16px',borderRadius:'8px',whiteSpace:'pre-wrap',wordBreak:'break-word'}},String(err)));
+        return React.createElement(React.Component.bind(null),null,props.children);
+      };
+      /* Class-based error boundary since hooks can't catch render errors */
+      function makeErrorBoundary(){
+        function EB(props){React.Component.call(this,props);this.state={error:null};}
+        EB.prototype=Object.create(React.Component.prototype);
+        EB.prototype.constructor=EB;
+        EB.getDerivedStateFromError=function(e){return{error:e};};
+        EB.prototype.render=function(){
+          if(this.state.error){
+            var e=this.state.error;
+            return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
+              React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Render Error'),
+              React.createElement('pre',{style:{background:'#181825',padding:'16px',borderRadius:'8px',border:'1px solid #313244',whiteSpace:'pre-wrap',wordBreak:'break-word'}},
+                String(e.message||e)+(e.stack?'\\n\\n'+e.stack:'')));
+          }
+          return this.props.children;
+        };
+        return EB;
+      }
+      var EB=makeErrorBoundary();
 
-      /* Detect white-screen: if root is empty after render, show diagnostics */
+      function SafeApp(){
+        var _r=React.useState(0),rerender=_r[1];
+        var ref=React.useRef(null);
+        React.useEffect(function(){
+          /* Check if App rendered anything visible after mount */
+          var checks=[300,800,1500,3000];
+          var timers=checks.map(function(ms){
+            return setTimeout(function(){
+              var el=ref.current;
+              if(el && el.children.length===0){
+                /* App returned null — force re-render (state may have updated via useEffect) */
+                rerender(function(c){return c+1;});
+              } else if(el && el.children.length>0){
+                _hasRendered=true;
+              }
+            },ms);
+          });
+          return function(){timers.forEach(clearTimeout);};
+        },[]);
+
+        var appEl;
+        try{ appEl=React.createElement(App); }catch(e){ appEl=null; }
+
+        return React.createElement('div',{ref:ref,style:{minHeight:'100%'}},
+          appEl,
+          /* Skeleton fallback: shown via CSS when #app-wrapper is empty */
+          React.createElement('style',null,
+            '#app-wrapper:empty ~ #skeleton-fallback{display:block}'+
+            '#skeleton-fallback{display:none}')
+        );
+      }
+
+      var rootEl=document.getElementById('root');
+      /* Show loading skeleton immediately so root is NEVER empty */
+      rootEl.innerHTML='<div id="app-wrapper-init" style="padding:32px;max-width:800px;margin:0 auto"><div style="height:32px;width:60%;background:#e2e8f0;border-radius:8px;margin-bottom:16px;animation:pulse 1.5s ease-in-out infinite"></div><div style="height:16px;width:90%;background:#e2e8f0;border-radius:6px;margin-bottom:12px;animation:pulse 1.5s ease-in-out infinite"></div><div style="height:16px;width:75%;background:#e2e8f0;border-radius:6px;margin-bottom:24px;animation:pulse 1.5s ease-in-out infinite"></div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px"><div style="height:120px;background:#e2e8f0;border-radius:12px;animation:pulse 1.5s ease-in-out infinite"></div><div style="height:120px;background:#e2e8f0;border-radius:12px;animation:pulse 1.5s ease-in-out infinite;animation-delay:0.2s"></div><div style="height:120px;background:#e2e8f0;border-radius:12px;animation:pulse 1.5s ease-in-out infinite;animation-delay:0.4s"></div></div><style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style></div>';
+
+      var root=ReactDOM.createRoot(rootEl);
+      root.render(React.createElement(EB,null,React.createElement(SafeApp)));
+
+      /* Final diagnostic check — if still showing skeleton after 4s, something is really wrong */
       setTimeout(function(){
         var el=document.getElementById('root');
-        if(el && el.innerHTML.trim()==='' ){
+        if(!el) return;
+        var html=el.innerHTML;
+        if(html.indexOf('app-wrapper-init')!==-1 || html.trim()===''){
           var diag=[];
-          diag.push('React loaded: '+(typeof React!=='undefined'));
-          diag.push('ReactDOM loaded: '+(typeof ReactDOM!=='undefined'));
-          diag.push('Babel loaded: '+(typeof Babel!=='undefined'));
-          diag.push('Errors captured: '+window.__errs.length);
-          if(window.__errs.length>0) diag.push('First error: '+window.__errs[0].message);
-          var diagText=diag.join('\\n');
-          showErr('The generated component rendered nothing (returned null or empty).\\n\\nDiagnostics:\\n'+diagText+'\\n\\nTip: make sure the default export always returns visible JSX.');
-          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'White screen - component rendered empty',diagnostics:diagText}},'*')}catch(x){}
+          diag.push('React: '+(typeof React!=='undefined'));
+          diag.push('Babel: '+(typeof Babel!=='undefined'));
+          diag.push('Errors: '+window.__errs.length);
+          if(window.__errs.length>0) diag.push('First: '+window.__errs[0].message);
+          showErr('Component failed to render after 4 seconds.\\n\\n'+diag.join('\\n')+'\\n\\nThe component may be returning null or waiting for data that never arrives.');
+          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:'Component failed to render after 4s'}},'*')}catch(x){}
         }
-      },2000);
+      },4000);
     }catch(err){
       showErr(err.message,err.stack);
-      /* Error diagnostic — non-sensitive, srcdoc same-origin */
       try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:err.message}},'*')}catch(x){}
     }
   }

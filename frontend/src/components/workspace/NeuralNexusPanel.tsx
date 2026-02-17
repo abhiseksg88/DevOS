@@ -282,11 +282,17 @@ export function NeuralNexusPanel({
       setState(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load Neural Nexus";
-      const isNetworkError = msg.includes("Cannot reach backend") ||
-                             msg.includes("Backend API unreachable") ||
-                             msg.includes("CORS") ||
-                             msg.includes("Failed to fetch") ||
-                             msg.includes("NetworkError");
+      const lower = msg.toLowerCase();
+      const isNetworkError = lower.includes("cannot reach") ||
+                             lower.includes("unreachable") ||
+                             lower.includes("cors") ||
+                             lower.includes("failed to fetch") ||
+                             lower.includes("networkerror") ||
+                             lower.includes("network") ||
+                             lower.includes("econnrefused") ||
+                             lower.includes("load failed") ||
+                             lower.includes("fetch") ||
+                             lower.includes("api_url");
       setError(isNetworkError ? "__NOT_CONNECTED__" : msg);
     } finally {
       setLoading(false);
