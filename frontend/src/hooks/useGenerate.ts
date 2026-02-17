@@ -398,11 +398,24 @@ export function useGenerate() {
         message: "Analyzing requirements...",
       });
 
+      // Flatten the tree so we can look up existing file content for EDIT operations.
+      // existingFiles is a nested FileNode[] tree; .find() alone only checks the top level.
+      const flatExisting = flattenForContext(existingFiles);
+
       try {
-        const analyzeResp = await fetch("/api/swarm/analyze", {
+        // Filter out default placeholder files so Claude generates fresh ===FILE=== blocks
+        // instead of trying to ===EDIT=== the "Welcome to Vedaa" skeleton.
+        const contextFiles = flatExisting.filter(
+          (f) => !f.content.includes("// Your generated code will appear here")
+        );
+
+        const response = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, existingFiles: flatFiles }),
+          body: JSON.stringify({
+            prompt,
+            existingFiles: contextFiles,
+          }),
           signal: controller.signal,
         });
 
@@ -439,37 +452,93 @@ export function useGenerate() {
         });
       }
 
-      // ---------------------------------------------------------------
-      // STAGE 2: Coder (Claude Sonnet) — generate code
-      // ---------------------------------------------------------------
-      const coderId = crypto.randomUUID();
-      addPipelineEvent({
-        id: coderId,
-        agent: "coder",
-        model: "claude-sonnet",
-        status: "running",
-        message: "Generating code...",
-      });
+        const decoder = new TextDecoder();
+        let fullText = "";
+        let lastParsedCount = 0;
+        let buffer = "";
+        let wasTruncated = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete lines from buffer
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? ""; // keep incomplete line in buffer
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const event = JSON.parse(jsonStr);
+              if (event.type === "text") {
+                fullText += event.content;
+                setState((prev) => ({ ...prev, streamedText: fullText }));
+
+                // Check for newly completed files
+                const parsed = parseFiles(fullText);
+                if (parsed.length > lastParsedCount) {
+                  for (let i = lastParsedCount; i < parsed.length; i++) {
+                    const file = parsed[i];
+                    // Handle edit operations (search/replace)
+                    if (file.content.startsWith("__EDIT_OPERATIONS__")) {
+                      try {
+                        const edits = JSON.parse(file.content.slice("__EDIT_OPERATIONS__".length));
+                        // Find existing content from the flattened file tree
+                        const existing = flatExisting.find((f) => f.path === file.path);
+                        if (existing?.content) {
+                          const updated = applyEdits(existing.content, edits);
+                          onFileGenerated(file.path, updated);
+                        }
+                      } catch {
+                        // Fallback — treat as regular file
+                        onFileGenerated(file.path, file.content);
+                      }
+                    } else {
+                      onFileGenerated(file.path, file.content);
+                    }
+                  }
+                  lastParsedCount = parsed.length;
+                  setState((prev) => ({ ...prev, files: parsed }));
+                }
+              } else if (event.type === "warning" && event.warning === "truncated") {
+                wasTruncated = true;
+              } else if (event.type === "error") {
+                const errMsg = event.error || "Generation error";
+                setState((prev) => ({ ...prev, error: errMsg }));
+                return { files: [], error: errMsg };
+              }
+            } catch {
+              // skip malformed JSON
+            }
+          }
+        }
 
       const coderStart = Date.now();
       let result: GenerateResult;
 
-      try {
-        result = await streamGenerate(
-          prompt,
-          flatFiles,
-          chatHistory,
-          prd,
-          undefined,
-          onFileGenerated,
-          (text, files) => {
-            setState((prev) => ({ ...prev, streamedText: text, files }));
-          },
-          controller.signal,
-        );
-      } catch (err) {
-        if ((err as Error).name === "AbortError") {
-          return { files: [], error: null };
+        // Final parse for any remaining files
+        const finalFiles = parseFiles(fullText);
+        if (finalFiles.length > lastParsedCount) {
+          for (let i = lastParsedCount; i < finalFiles.length; i++) {
+            const file = finalFiles[i];
+            if (file.content.startsWith("__EDIT_OPERATIONS__")) {
+              try {
+                const edits = JSON.parse(file.content.slice("__EDIT_OPERATIONS__".length));
+                const existing = flatExisting.find((f) => f.path === file.path);
+                if (existing?.content) {
+                  onFileGenerated(file.path, applyEdits(existing.content, edits));
+                }
+              } catch {
+                onFileGenerated(file.path, file.content);
+              }
+            } else {
+              onFileGenerated(file.path, file.content);
+            }
+          }
         }
         const errMsg = err instanceof Error ? err.message : "Generation failed";
         setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
