@@ -161,6 +161,14 @@ export function Workspace({ projectId }: { projectId: string }) {
   // Ref to track last prompt for saving with generation
   const lastPromptRef = useRef<string>("");
 
+  // Refs for in-place message updates (fixes stuck "Coding" spinner)
+  const generatingMsgIdRef = useRef<string | null>(null);
+  const fixMsgIdRef = useRef<string | null>(null);
+
+  const updateMessageById = useCallback((id: string, updates: Partial<ChatMessage>) => {
+    setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
+  }, []);
+
   // -------------------------------------------------------------------------
   // Auto-fix loop: preview errors → fix agent → apply → re-render
   // -------------------------------------------------------------------------
@@ -183,7 +191,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
     }, []),
-    // onFixStart
+    // onFixStart — store ID so onFixEnd can update in-place
     useCallback(() => {
       seqRef.current += 1;
       setGenerationEvents((prev) => [
@@ -198,10 +206,12 @@ export function Workspace({ projectId }: { projectId: string }) {
           created_at: new Date().toISOString(),
         },
       ]);
+      const fixId = crypto.randomUUID();
+      fixMsgIdRef.current = fixId;
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: fixId,
           role: "assistant",
           content: "Detected preview errors — auto-fixing...",
           timestamp: Date.now(),
@@ -209,7 +219,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
     }, []),
-    // onFixEnd
+    // onFixEnd — update the existing fix message in-place
     useCallback((success: boolean, iteration: number) => {
       seqRef.current += 1;
       if (success) {
@@ -228,28 +238,23 @@ export function Workspace({ projectId }: { projectId: string }) {
             created_at: new Date().toISOString(),
           },
         ]);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `Auto-fix applied successfully. Check the preview.`,
-            timestamp: Date.now(),
+        if (fixMsgIdRef.current) {
+          updateMessageById(fixMsgIdRef.current, {
+            content: "Auto-fix applied successfully. Check the preview.",
             status: "succeeded",
-          },
-        ]);
-      } else if (iteration >= 3) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
+          });
+          fixMsgIdRef.current = null;
+        }
+      } else if (iteration >= 5) {
+        if (fixMsgIdRef.current) {
+          updateMessageById(fixMsgIdRef.current, {
             content: `Auto-fix couldn't resolve all errors after ${iteration} attempts. You can describe the issue and I'll try a different approach.`,
-            timestamp: Date.now(),
-          },
-        ]);
+            status: "failed",
+          });
+          fixMsgIdRef.current = null;
+        }
       }
-    }, []),
+    }, [updateMessageById]),
   );
 
   // Queue errors that arrive during generation — re-fire after generation completes
@@ -542,6 +547,28 @@ export function Workspace({ projectId }: { projectId: string }) {
     setGenerationEvents((prev) => [...prev, ...converted]);
   }, [generator.pipelineEvents]);
 
+  // Sync chat message status badge with pipeline stages in real-time
+  useEffect(() => {
+    if (!generator.isGenerating || !generatingMsgIdRef.current) return;
+
+    const activeEvent = [...generator.pipelineEvents].reverse().find(
+      (e) => e.status === "running"
+    );
+    if (!activeEvent) return;
+
+    const stageMap: Record<string, { status: "planning" | "coding" | "reviewing"; content: string }> = {
+      analyzer: { status: "planning", content: "Analyzing requirements..." },
+      coder:    { status: "coding", content: "Generating code with Claude..." },
+      reviewer: { status: "reviewing", content: "Reviewing code quality..." },
+      fixer:    { status: "coding", content: "Applying review fixes..." },
+    };
+
+    const stage = stageMap[activeEvent.agent];
+    if (stage) {
+      updateMessageById(generatingMsgIdRef.current, stage);
+    }
+  }, [generator.pipelineEvents, generator.isGenerating, updateMessageById]);
+
   // When generation completes, switch to preview and save code
   useEffect(() => {
     if (!generator.isGenerating && generator.files.length > 0 && generator.files.length !== lastSavedCountRef.current) {
@@ -609,13 +636,15 @@ export function Workspace({ projectId }: { projectId: string }) {
       ]);
       seqRef.current = 1;
 
-      // Show "generating" message
+      // Show "generating" message — store ID for in-place updates
+      const genMsgId = crypto.randomUUID();
+      generatingMsgIdRef.current = genMsgId;
       const generatingMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: genMsgId,
         role: "assistant",
-        content: "Running AI pipeline: Analyzer (DeepSeek) → Coder (Claude Sonnet) → Reviewer (Claude Haiku)...",
+        content: "Analyzing requirements...",
         timestamp: Date.now(),
-        status: "coding",
+        status: "planning",
       };
       setMessages((prev) => [...prev, generatingMsg]);
       persistence.saveMessage('assistant', generatingMsg.content);
@@ -633,26 +662,26 @@ export function Workspace({ projectId }: { projectId: string }) {
         addFileToTree(path, fileContent);
       }, history.length > 1 ? history.slice(0, -1) : undefined);
 
-      // Use the returned result (not stale closure state)
+      // Update the existing generating message in-place (no more stuck spinners)
       if (result.error) {
-        const errorMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Error: ${result.error}`,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
-        persistence.saveMessage('assistant', errorMsg.content);
+        if (generatingMsgIdRef.current) {
+          updateMessageById(generatingMsgIdRef.current, {
+            content: `Error: ${result.error}`,
+            status: "failed",
+          });
+          generatingMsgIdRef.current = null;
+        }
+        persistence.saveMessage('assistant', `Error: ${result.error}`);
       } else {
-        const successMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the **Preview** tab to see your app, or the **Code** tab to inspect the files.`,
-          timestamp: Date.now(),
-          status: "succeeded",
-        };
-        setMessages((prev) => [...prev, successMsg]);
-        persistence.saveMessage('assistant', successMsg.content);
+        const successContent = `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the **Preview** tab to see your app, or the **Code** tab to inspect the files.`;
+        if (generatingMsgIdRef.current) {
+          updateMessageById(generatingMsgIdRef.current, {
+            content: successContent,
+            status: "succeeded",
+          });
+          generatingMsgIdRef.current = null;
+        }
+        persistence.saveMessage('assistant', successContent);
 
         // Auto-switch to preview
         if (result.files.length > 0) {
@@ -660,7 +689,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         }
       }
     },
-    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext, nexusContext]
+    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext, nexusContext, updateMessageById]
   );
 
   if (loading) {
