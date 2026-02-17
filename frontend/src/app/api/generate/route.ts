@@ -237,10 +237,27 @@ Code architecture:
 - Do NOT import from third-party packages (no lucide-react, no framer-motion, etc.) — use inline SVG icons or emoji instead
 - Export the main page component as the default export
 
-CRITICAL rendering rule:
-- The default export component in page.tsx MUST always return visible JSX on the FIRST render
-- Do NOT return null, undefined, or an empty fragment from the default export
-- If you need loading states, render a loading UI (skeleton/spinner) — NEVER return null
+CRITICAL rendering rule — ZERO-NULL POLICY (violating this causes a blank white screen):
+- The default export in page.tsx and EVERY component MUST return visible JSX on the FIRST render — ALWAYS
+- NEVER write \`return null\`, \`return undefined\`, or \`return <></>\` anywhere in any component
+- NEVER use loading guards like \`if (loading) return null\` or \`if (!data) return null\`
+- Initialize ALL state with inline mock data so components render immediately:
+
+FORBIDDEN (causes blank screen):
+  const [items, setItems] = useState([]);          // ❌ empty = renders nothing
+  useEffect(() => { setItems(mockData); }, []);     // ❌ data arrives AFTER first render
+  if (items.length === 0) return null;              // ❌ BLANK SCREEN
+
+CORRECT (renders instantly):
+  const [items, setItems] = useState([              // ✅ inline initial data
+    { id: 1, name: "Wireless Headphones", price: 79.99 },
+    { id: 2, name: "Smart Watch", price: 199.99 },
+    { id: 3, name: "Laptop Stand", price: 49.99 },
+  ]);
+  // No useEffect needed — component renders immediately with data
+
+- If you MUST use useEffect for a timer/animation, STILL render the full UI on first render
+- Every component must return a \`<div>\` (or other element) with visible content — no exceptions
 
 Interactivity:
 - You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext
