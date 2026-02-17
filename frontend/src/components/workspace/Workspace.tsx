@@ -787,6 +787,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                 <PreviewPane
                   url={deployedUrl}
                   files={fileTree}
+                  isGenerating={generator.isGenerating}
                   onError={(errorMsg) => {
                     // Auto-suggest fix if not already generating
                     if (!generator.isGenerating && errorMsg) {
