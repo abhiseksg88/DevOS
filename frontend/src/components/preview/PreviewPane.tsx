@@ -335,7 +335,8 @@ ${cleanCSS}
             if(r.error.message.indexOf('does not exist')!==-1||r.error.code==='42P01'){
               console.error('[Preview DB] TABLE MISSING — attempting auto-creation via /api/db-setup...');
               try{
-                var setupResp=await fetch('/api/db-setup',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+                var _origin=(window.location.origin&&window.location.origin!=='null')?window.location.origin:(window.parent?window.parent.location.origin:'');
+                var setupResp=await fetch(_origin+'/api/db-setup',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
                 var setupResult=await setupResp.json();
                 if(setupResult.success){
                   console.log('[Preview DB] Auto-creation:',setupResult.message);
@@ -1040,8 +1041,7 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
       );
     }
     return null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, refreshKey, contentHash, userToken]);
+  }, [files, refreshKey, contentHash, userToken, tenantId, projectId]);
 
   // Listen for error messages from the preview iframe
   useEffect(() => {
