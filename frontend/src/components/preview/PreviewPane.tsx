@@ -292,20 +292,37 @@ ${cleanCSS}
       }catch(err){console.error('[Preview] Failed to load '+mod+':',err.message);return {}}
     }
 
-    /* unknown module — Proxy returns placeholder components (icons, UI libs, etc.) */
+    /* unknown module — Proxy returns stubs that work as BOTH components AND data.
+       This prevents "Cannot read properties of undefined (reading 'filter')" when
+       page.tsx imports data from a truncated/missing data.ts or types.ts file. */
     console.warn('[Preview] Module not available: '+mod);
     try{
+      function _mkStub(isDef){
+        var fn=isDef
+          ? function(){return React.createElement('div')}
+          : function(props){
+              return React.createElement('span',{
+                style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:(props&&props.size)||20,height:(props&&props.size)||20,opacity:0.35},
+                className:(props&&props.className)||''
+              },'\\u25A1');
+            };
+        /* Array-like methods so data imports degrade to empty arrays instead of crashing */
+        fn.filter=function(){return []};fn.map=function(){return []};fn.find=function(){return undefined};
+        fn.forEach=function(){};fn.reduce=function(_,i){return i};fn.some=function(){return false};
+        fn.every=function(){return true};fn.includes=function(){return false};fn.flat=function(){return []};
+        fn.flatMap=function(){return []};fn.slice=function(){return []};fn.sort=function(){return []};
+        fn.concat=function(){return []};fn.length=0;fn.join=function(){return ''};
+        fn.indexOf=function(){return -1};fn.splice=function(){return []};fn.push=function(){};
+        fn.pop=function(){};fn.shift=function(){};fn.unshift=function(){};
+        try{fn[Symbol.iterator]=function(){return{next:function(){return{done:true}}}};}catch(x){}
+        return fn;
+      }
       return new Proxy({},{
         get:function(_,p){
           if(p==='__esModule') return false;
-          if(p==='default') return function(){return React.createElement('div')};
+          if(p==='default') return _mkStub(true);
           if(typeof p==='symbol') return undefined;
-          return function(props){
-            return React.createElement('span',{
-              style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:(props&&props.size)||20,height:(props&&props.size)||20,opacity:0.35},
-              className:(props&&props.className)||''
-            },'\\u25A1');
-          };
+          return _mkStub(false);
         }
       });
     }catch(e){return {}}
@@ -619,17 +636,31 @@ ${cleanCSS}
 
     console.warn('Module not available: '+mod);
     try{
+      function _mkStub(isDef){
+        var fn=isDef
+          ? function(){return React.createElement('div')}
+          : function(props){
+              return React.createElement('span',{
+                style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:(props&&props.size)||20,height:(props&&props.size)||20,opacity:0.35},
+                className:(props&&props.className)||''
+              },'\\u25A1');
+            };
+        fn.filter=function(){return []};fn.map=function(){return []};fn.find=function(){return undefined};
+        fn.forEach=function(){};fn.reduce=function(_,i){return i};fn.some=function(){return false};
+        fn.every=function(){return true};fn.includes=function(){return false};fn.flat=function(){return []};
+        fn.flatMap=function(){return []};fn.slice=function(){return []};fn.sort=function(){return []};
+        fn.concat=function(){return []};fn.length=0;fn.join=function(){return ''};
+        fn.indexOf=function(){return -1};fn.splice=function(){return []};fn.push=function(){};
+        fn.pop=function(){};fn.shift=function(){};fn.unshift=function(){};
+        try{fn[Symbol.iterator]=function(){return{next:function(){return{done:true}}}};}catch(x){}
+        return fn;
+      }
       return new Proxy({},{
         get:function(_,p){
           if(p==='__esModule') return false;
-          if(p==='default') return function(){return React.createElement('div')};
+          if(p==='default') return _mkStub(true);
           if(typeof p==='symbol') return undefined;
-          return function(props){
-            return React.createElement('span',{
-              style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:(props&&props.size)||20,height:(props&&props.size)||20,opacity:0.35},
-              className:(props&&props.className)||''
-            },'\\u25A1');
-          };
+          return _mkStub(false);
         }
       });
     }catch(e){return {}}
