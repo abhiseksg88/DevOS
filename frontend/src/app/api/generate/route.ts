@@ -549,20 +549,10 @@ export async function POST(req: NextRequest) {
   // Select system prompt: update mode when modifying existing project, initial for greenfield
   const systemPrompt = hasExistingProject ? UPDATE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT;
 
-  // Assistant prefill: forces Claude to START in ===FILE: format AND teaches it
-  // the closing delimiter by including one COMPLETE file (globals.css) first.
-  // This is critical — without seeing ===END_FILE=== in its own output, Claude
-  // often forgets to close file blocks, causing "could not be parsed" errors.
-  const PREFILL_NEW = `===FILE: src/app/globals.css===
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-===END_FILE===
-
-===FILE: src/app/page.tsx===
-`;
-  const PREFILL_UPDATE = "===FILE: ";
-  const PREFILL = hasExistingProject ? PREFILL_UPDATE : PREFILL_NEW;
+  // Assistant prefill: forces Claude to START in ===FILE=== format.
+  // Kept minimal to avoid SSE encoding issues with multiline content.
+  // The client-side auto-close handles the missing ===END_FILE=== case.
+  const PREFILL = "===FILE: src/app/page.tsx===\n";
 
   // Build PRD block if provided by the Analyzer agent
   let prdBlock = "";
