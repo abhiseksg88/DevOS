@@ -237,13 +237,23 @@ export function useGenerate() {
 
       setState({ isGenerating: true, streamedText: "", files: [], error: null });
 
+      // Flatten the tree so we can look up existing file content for EDIT operations.
+      // existingFiles is a nested FileNode[] tree; .find() alone only checks the top level.
+      const flatExisting = flattenForContext(existingFiles);
+
       try {
+        // Filter out default placeholder files so Claude generates fresh ===FILE=== blocks
+        // instead of trying to ===EDIT=== the "Welcome to Vedaa" skeleton.
+        const contextFiles = flatExisting.filter(
+          (f) => !f.content.includes("// Your generated code will appear here")
+        );
+
         const response = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             prompt,
-            existingFiles: flattenForContext(existingFiles),
+            existingFiles: contextFiles,
           }),
           signal: controller.signal,
         });
@@ -302,10 +312,8 @@ export function useGenerate() {
                     if (file.content.startsWith("__EDIT_OPERATIONS__")) {
                       try {
                         const edits = JSON.parse(file.content.slice("__EDIT_OPERATIONS__".length));
-                        // Find existing content from the existing files passed to generate
-                        const existing = existingFiles.find(
-                          (f) => f.type === "file" && f.path === file.path
-                        );
+                        // Find existing content from the flattened file tree
+                        const existing = flatExisting.find((f) => f.path === file.path);
                         if (existing?.content) {
                           const updated = applyEdits(existing.content, edits);
                           onFileGenerated(file.path, updated);
@@ -354,9 +362,7 @@ export function useGenerate() {
             if (file.content.startsWith("__EDIT_OPERATIONS__")) {
               try {
                 const edits = JSON.parse(file.content.slice("__EDIT_OPERATIONS__".length));
-                const existing = existingFiles.find(
-                  (f) => f.type === "file" && f.path === file.path
-                );
+                const existing = flatExisting.find((f) => f.path === file.path);
                 if (existing?.content) {
                   onFileGenerated(file.path, applyEdits(existing.content, edits));
                 }
