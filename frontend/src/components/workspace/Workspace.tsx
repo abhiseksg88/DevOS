@@ -788,6 +788,9 @@ export function Workspace({ projectId }: { projectId: string }) {
                   url={deployedUrl}
                   files={fileTree}
                   isGenerating={generator.isGenerating}
+                  tenantId={resolvedTenantId}
+                  projectId={projectId}
+                  userToken={token}
                   onError={(errorMsg) => {
                     // Auto-suggest fix if not already generating
                     if (!generator.isGenerating && errorMsg) {

@@ -31,6 +31,9 @@ interface PreviewPaneProps {
   files?: FileNode[];
   onError?: (errorMessage: string) => void;
   isGenerating?: boolean;
+  tenantId?: string;
+  projectId?: string;
+  userToken?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,22 +233,85 @@ ${cleanCSS}
      Prevents "X.filter is not a function" crashes when generated apps
      call window.supabase before the client is initialized. */
   (function(){
-    function _chain(ops){
+    function _chain(ops,isSingle){
       var b={};
-      'select,insert,update,delete,upsert,eq,neq,gt,gte,lt,lte,like,ilike,is,in,contains,containedBy,order,limit,range,single,maybeSingle,not,or,filter,match,textSearch'.split(',').forEach(function(m){
-        b[m]=function(){var a=Array.prototype.slice.call(arguments);ops.push({m:m,a:a});return _chain(ops)};
+      'select,insert,update,delete,upsert,eq,neq,gt,gte,lt,lte,like,ilike,is,in,contains,containedBy,order,limit,range,not,or,filter,match,textSearch'.split(',').forEach(function(m){
+        b[m]=function(){var a=Array.prototype.slice.call(arguments);ops.push({m:m,a:a});return _chain(ops,isSingle)};
       });
+      /* Track .single()/.maybeSingle() so we don't normalize object responses */
+      b.single=function(){ops.push({m:'single',a:[]});return _chain(ops,true)};
+      b.maybeSingle=function(){ops.push({m:'maybeSingle',a:[]});return _chain(ops,true)};
       b.then=function(res,rej){
         return window.__sb_promise.then(function(client){
-          if(!client) return {data:[],error:{message:'Database connection unavailable'}};
+          if(!client) return {data:isSingle?null:[],error:{message:'Database connection unavailable'}};
           try{var r=client;for(var i=0;i<ops.length;i++) r=r[ops[i].m].apply(r,ops[i].a);return r;}
-          catch(e){return {data:[],error:{message:e.message}}}
-        }).then(res,rej);
+          catch(e){return {data:isSingle?null:[],error:{message:e.message}}}
+        }).then(function(result){
+          /* Normalize: {data:null} → {data:[]} for list queries (not .single()) */
+          if(result&&result.data===null&&!isSingle){
+            result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
+          }
+          return res?res(result):result;
+        },rej);
       };
       return b;
     }
-    window.supabase={from:function(t){return _chain([{m:'from',a:[t]}])}};
+    window.supabase={from:function(t){return _chain([{m:'from',a:[t]}],false)}};
   })();
+
+  /* --- Supabase response normalizer ---
+     Wraps supabase.from() so that ALL query responses have data guaranteed
+     to be an array (never null). This prevents the #1 generated-app crash:
+     "cases.filter is not a function" caused by data being null or the
+     response object being used directly without destructuring.
+
+     How it works:
+     - Intercepts .from() to return a Proxy wrapping the PostgREST builder
+     - Every chainable method (.select, .eq, etc.) returns a fresh Proxy
+     - .single()/.maybeSingle() set a flag so we DON'T normalize those
+     - .then() (called by await) normalizes the response:
+       {data: null} → {data: []}  for list queries
+       No change for .single() queries
+  */
+  function __wrapSB(client){
+    if(!client||!client.from) return client;
+    var _origFrom=client.from.bind(client);
+    client.from=function(table){
+      return __wrapChain(_origFrom(table),false);
+    };
+    return client;
+  }
+  function __wrapChain(builder,isSingle){
+    if(!builder||typeof builder!=='object') return builder;
+    return new Proxy(builder,{
+      get:function(target,prop){
+        if(prop==='then'){
+          var origThen=target.then;
+          if(typeof origThen!=='function') return origThen;
+          return function(onRes,onRej){
+            return origThen.call(target,function(result){
+              if(result&&result.data===null&&!isSingle){
+                result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
+              }
+              return onRes?onRes(result):result;
+            },onRej);
+          };
+        }
+        var val=target[prop];
+        if(typeof val==='function'){
+          return function(){
+            var next=val.apply(target,arguments);
+            var nextSingle=isSingle||(prop==='single')||(prop==='maybeSingle');
+            if(next&&typeof next==='object'&&typeof next.then==='function'){
+              return __wrapChain(next,nextSingle);
+            }
+            return next;
+          };
+        }
+        return val;
+      }
+    });
+  }
 
   window.addEventListener('message',function(e){
     if(e.data&&e.data.type==='SUPABASE_INIT'){
@@ -254,11 +320,19 @@ ${cleanCSS}
           console.error('[Preview] Supabase SDK not loaded');
           return;
         }
-        window.supabase=supabase.createClient(e.data.url,e.data.anonKey);
+        var opts={};
+        if(e.data.token){
+          opts.global={headers:{Authorization:'Bearer '+e.data.token}};
+        }
+        var _client=supabase.createClient(e.data.url,e.data.anonKey,opts);
+        window.supabase=__wrapSB(_client);
+        window.__VEDAA_TENANT_ID=e.data.tenantId||'';
+        window.__VEDAA_PROJECT_ID=e.data.projectId||'';
+        window.__VEDAA_APP_INSTANCE_ID=e.data.projectId||'preview';
         window.__supabase_ready=true;
-        window.__sb_resolve(window.supabase);
+        window.__sb_resolve(_client);
         window.dispatchEvent(new Event('supabase:ready'));
-        console.log('[Preview] Supabase initialized:',e.data.url);
+        console.log('[Preview] Supabase initialized (authenticated):',e.data.url);
       }catch(err){
         console.error('[Preview] Failed to initialize Supabase:',err);
       }
@@ -522,6 +596,8 @@ export function buildDeployDocument(
   supabaseUrl: string,
   supabaseAnonKey: string,
   appTitle: string = "App",
+  tenantId: string = "",
+  projectId: string = "",
 ): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
@@ -609,9 +685,55 @@ ${cleanCSS}
   /* --- Initialize Supabase directly --- */
   window.__supabase_ready=false;
   window.supabase=null;
+  window.__VEDAA_TENANT_ID="${tenantId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
+  window.__VEDAA_PROJECT_ID="${projectId.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
+  window.__VEDAA_APP_INSTANCE_ID="${(projectId || "deployed").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
+  /* --- Supabase response normalizer (same as preview) ---
+     Wraps .from() chains so that {data:null} → {data:[]} for list queries.
+     This prevents "X.filter is not a function" when Supabase returns null data. */
+  function __wrapSB(client){
+    if(!client||!client.from) return client;
+    var _origFrom=client.from.bind(client);
+    client.from=function(table){
+      return __wrapChain(_origFrom(table),false);
+    };
+    return client;
+  }
+  function __wrapChain(builder,isSingle){
+    if(!builder||typeof builder!=='object') return builder;
+    return new Proxy(builder,{
+      get:function(target,prop){
+        if(prop==='then'){
+          var origThen=target.then;
+          if(typeof origThen!=='function') return origThen;
+          return function(onRes,onRej){
+            return origThen.call(target,function(result){
+              if(result&&result.data===null&&!isSingle){
+                result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
+              }
+              return onRes?onRes(result):result;
+            },onRej);
+          };
+        }
+        var val=target[prop];
+        if(typeof val==='function'){
+          return function(){
+            var next=val.apply(target,arguments);
+            var nextSingle=isSingle||(prop==='single')||(prop==='maybeSingle');
+            if(next&&typeof next==='object'&&typeof next.then==='function'){
+              return __wrapChain(next,nextSingle);
+            }
+            return next;
+          };
+        }
+        return val;
+      }
+    });
+  }
+
   try{
     if(typeof supabase!=='undefined'&&supabase.createClient){
-      window.supabase=supabase.createClient("${safeSupabaseUrl}","${safeAnonKey}");
+      window.supabase=__wrapSB(supabase.createClient("${safeSupabaseUrl}","${safeAnonKey}"));
       window.__supabase_ready=true;
     }
   }catch(err){console.error('Failed to init Supabase:',err)}
@@ -763,7 +885,7 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files, onError, isGenerating }: PreviewPaneProps) {
+export function PreviewPane({ url, files, onError, isGenerating, tenantId, projectId, userToken }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
@@ -821,30 +943,26 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
 
           const credentials = await response.json();
 
+          // Build payload with auth context for CRUD operations
+          const payload = {
+            type: "SUPABASE_INIT",
+            url: credentials.url,
+            anonKey: credentials.anonKey,
+            token: userToken || "",
+            tenantId: tenantId || "",
+            projectId: projectId || "",
+          };
+
           // Send credentials only to our own iframes, using specific origin
           const iframes = document.getElementsByTagName("iframe");
           const targetOrigin = window.location.origin;
           for (let i = 0; i < iframes.length; i++) {
             try {
-              iframes[i].contentWindow?.postMessage(
-                {
-                  type: "SUPABASE_INIT",
-                  url: credentials.url,
-                  anonKey: credentials.anonKey,
-                },
-                targetOrigin
-              );
+              iframes[i].contentWindow?.postMessage(payload, targetOrigin);
             } catch {
               // srcdoc iframes have null origin, retry with *
               try {
-                iframes[i].contentWindow?.postMessage(
-                  {
-                    type: "SUPABASE_INIT",
-                    url: credentials.url,
-                    anonKey: credentials.anonKey,
-                  },
-                  "*"
-                );
+                iframes[i].contentWindow?.postMessage(payload, "*");
               } catch {
                 // silently ignore
               }
@@ -858,7 +976,7 @@ export function PreviewPane({ url, files, onError, isGenerating }: PreviewPanePr
 
     window.addEventListener("message", handleCredentialRequest);
     return () => window.removeEventListener("message", handleCredentialRequest);
-  }, []);
+  }, [userToken, tenantId, projectId]);
 
   // Clear errors on new content / refresh
   useEffect(() => {

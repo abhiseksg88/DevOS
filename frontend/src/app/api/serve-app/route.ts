@@ -96,7 +96,7 @@ function toBase64(str: string): string {
 // Build self-contained HTML (server-side version of buildDeployDocument)
 // ---------------------------------------------------------------------------
 
-function buildAppHTML(files: FileNode[], appTitle: string): string {
+function buildAppHTML(files: FileNode[], appTitle: string, projectId?: string, tenantId?: string): string {
   const allFiles = flattenFiles(files);
   const css = collectCSS(allFiles);
   const mainCode = findMainFile(allFiles);
@@ -156,9 +156,55 @@ ${cleanCSS}
 (function(){
   window.__supabase_ready=false;
   window.supabase=null;
+  window.__VEDAA_TENANT_ID="${(tenantId || "").replace(/"/g, '\\"')}";
+  window.__VEDAA_PROJECT_ID="${(projectId || "").replace(/"/g, '\\"')}";
+  window.__VEDAA_APP_INSTANCE_ID="${(projectId || "deployed").replace(/"/g, '\\"')}";
+  /* --- Supabase response normalizer ---
+     Wraps .from() chains so that {data:null} → {data:[]} for list queries.
+     This prevents "X.filter is not a function" when Supabase returns null data. */
+  function __wrapSB(client){
+    if(!client||!client.from) return client;
+    var _origFrom=client.from.bind(client);
+    client.from=function(table){
+      return __wrapChain(_origFrom(table),false);
+    };
+    return client;
+  }
+  function __wrapChain(builder,isSingle){
+    if(!builder||typeof builder!=='object') return builder;
+    return new Proxy(builder,{
+      get:function(target,prop){
+        if(prop==='then'){
+          var origThen=target.then;
+          if(typeof origThen!=='function') return origThen;
+          return function(onRes,onRej){
+            return origThen.call(target,function(result){
+              if(result&&result.data===null&&!isSingle){
+                result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
+              }
+              return onRes?onRes(result):result;
+            },onRej);
+          };
+        }
+        var val=target[prop];
+        if(typeof val==='function'){
+          return function(){
+            var next=val.apply(target,arguments);
+            var nextSingle=isSingle||(prop==='single')||(prop==='maybeSingle');
+            if(next&&typeof next==='object'&&typeof next.then==='function'){
+              return __wrapChain(next,nextSingle);
+            }
+            return next;
+          };
+        }
+        return val;
+      }
+    });
+  }
+
   try{
     if(typeof supabase!=='undefined'&&supabase.createClient){
-      window.supabase=supabase.createClient("${supabaseUrl}","${supabaseAnonKey}");
+      window.supabase=__wrapSB(supabase.createClient("${supabaseUrl}","${supabaseAnonKey}"));
       window.__supabase_ready=true;
     }
   }catch(err){console.error('Failed to init Supabase:',err)}
@@ -281,7 +327,7 @@ export async function GET(req: NextRequest) {
   // Fetch project by slug
   const { data: project, error } = await supabase
     .from("projects")
-    .select("id, name, slug, code_files, deployment_status")
+    .select("id, name, slug, code_files, deployment_status, tenant_id")
     .eq("slug", slug)
     .single();
 
@@ -322,7 +368,7 @@ export async function GET(req: NextRequest) {
 
   // Build self-contained HTML
   const fileTree = codeMapToTree(codeFiles);
-  const html = buildAppHTML(fileTree, project.name || "App");
+  const html = buildAppHTML(fileTree, project.name || "App", project.id, project.tenant_id);
 
   return new NextResponse(html, {
     status: 200,

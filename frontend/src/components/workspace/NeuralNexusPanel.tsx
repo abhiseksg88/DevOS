@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Brain,
   X,
@@ -273,6 +273,9 @@ export function NeuralNexusPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const retryCountRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const loadState = useCallback(async () => {
     if (!token || !tenantId || !projectId) return;
     setLoading(true);
@@ -280,6 +283,13 @@ export function NeuralNexusPanel({
     try {
       const data = await api.nexus.getState(token, tenantId, projectId);
       setState(data);
+      retryCountRef.current = 0; // Reset on success
+      // Show warning from backend if nexus tables are missing
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const warning = (data as any)?._warning;
+      if (typeof warning === "string") {
+        setError(warning);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load Neural Nexus";
       const lower = msg.toLowerCase();
@@ -294,13 +304,28 @@ export function NeuralNexusPanel({
                              lower.includes("fetch") ||
                              lower.includes("api_url");
       setError(isNetworkError ? "__NOT_CONNECTED__" : msg);
+
+      // Auto-retry with exponential backoff (max 3 retries)
+      if (isNetworkError && retryCountRef.current < 3) {
+        retryCountRef.current += 1;
+        const delay = Math.pow(2, retryCountRef.current) * 2000; // 4s, 8s, 16s
+        retryTimerRef.current = setTimeout(() => {
+          loadState();
+        }, delay);
+      }
     } finally {
       setLoading(false);
     }
   }, [token, tenantId, projectId]);
 
   useEffect(() => {
-    if (open) loadState();
+    if (open) {
+      retryCountRef.current = 0;
+      loadState();
+    }
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, [open, loadState]);
 
   if (!open) return null;
@@ -356,12 +381,23 @@ export function NeuralNexusPanel({
                 <span className="text-sm font-medium text-slate-300">
                   Backend Not Connected
                 </span>
+                {retryCountRef.current > 0 && retryCountRef.current < 3 && (
+                  <span className="text-2xs text-slate-600 ml-auto">
+                    Retrying ({retryCountRef.current}/3)...
+                  </span>
+                )}
               </div>
-              <p className="text-xs text-slate-500 leading-relaxed mb-3">
+              <p className="text-xs text-slate-500 leading-relaxed mb-2">
                 Neural Nexus requires the FastAPI backend to be running.
                 It will learn your preferences, track project health, and make every
                 generation smarter over time.
               </p>
+              <div className="mb-3 p-2 bg-surface-3/50 rounded-lg">
+                <p className="text-2xs text-slate-500 mb-1">Current API URL:</p>
+                <code className="text-2xs text-amber-400 font-mono break-all">
+                  {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000 (default)"}
+                </code>
+              </div>
               <div className="space-y-2 text-2xs text-slate-600">
                 <p className="font-medium text-slate-400">To enable Neural Nexus:</p>
                 <ol className="list-decimal list-inside space-y-1">
@@ -371,10 +407,11 @@ export function NeuralNexusPanel({
                 </ol>
               </div>
               <button
-                onClick={loadState}
-                className="mt-3 text-xs text-brand-400 hover:text-brand-300 font-medium transition-colors"
+                onClick={() => { retryCountRef.current = 0; loadState(); }}
+                disabled={loading}
+                className="mt-3 text-xs text-brand-400 hover:text-brand-300 font-medium transition-colors disabled:opacity-50"
               >
-                Retry Connection
+                {loading ? "Connecting..." : "Retry Connection"}
               </button>
             </div>
           )}

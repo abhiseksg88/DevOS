@@ -157,8 +157,25 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "service": "vedaa-api"}
+async def health(settings: Settings = Depends(get_settings)):
+    result: dict = {"status": "ok", "service": "vedaa-api"}
+    # Test database connectivity
+    try:
+        from supabase import create_client
+        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        db.table("tenants").select("id").limit(1).execute()
+        result["database"] = "connected"
+    except Exception as e:
+        result["database"] = f"error: {str(e)[:100]}"
+    # Check if nexus tables exist
+    try:
+        from supabase import create_client
+        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        db.table("user_persona").select("id").limit(1).execute()
+        result["nexus_tables"] = "available"
+    except Exception:
+        result["nexus_tables"] = "missing — run migration 008_neural_nexus.sql"
+    return result
 
 
 @app.get("/health/publish")
@@ -1584,9 +1601,38 @@ async def get_nexus_state(
     settings: Settings = Depends(get_settings),
 ):
     """Get the full Neural Nexus state for the dashboard."""
-    from ..nexus.engine import NexusEngine
-    nexus = NexusEngine(settings)
-    return nexus.get_full_state(tenant_id, project_id, user.id)
+    try:
+        from ..nexus.engine import NexusEngine
+        nexus = NexusEngine(settings)
+        return nexus.get_full_state(tenant_id, project_id, user.id)
+    except Exception as e:
+        import logging
+        logging.getLogger("vedaa.nexus").warning("Nexus state load failed: %s", e)
+        # Return a valid empty state so the panel renders instead of crashing
+        return {
+            "user_persona": {
+                "preferences": {},
+                "expertise": {},
+                "history": [],
+                "stats": {
+                    "total_prompts": 0,
+                    "total_accepted": 0,
+                    "total_rejected": 0,
+                    "acceptance_rate": 0.0,
+                },
+            },
+            "project_state": {
+                "file_graph": {},
+                "dependency_graph": {},
+                "tech_debt": [],
+                "health_score": 100,
+                "last_analyzed_at": None,
+            },
+            "business_logic": [],
+            "recent_feedback": [],
+            "agent_activity": [],
+            "_warning": f"Neural Nexus tables may not be initialized: {str(e)}",
+        }
 
 
 @app.get("/tenants/{tenant_id}/projects/{project_id}/nexus/persona")
@@ -1596,20 +1642,23 @@ async def get_persona(
     settings: Settings = Depends(get_settings),
 ):
     """Get user persona."""
-    from ..nexus.engine import NexusEngine
-    nexus = NexusEngine(settings)
-    persona = nexus._get_or_create_persona(tenant_id, user.id)
-    return {
-        "preferences": persona.get("preferences", {}),
-        "expertise": persona.get("expertise", {}),
-        "history": persona.get("history", [])[-10:],
-        "stats": {
-            "total_prompts": persona.get("total_prompts", 0),
-            "total_accepted": persona.get("total_accepted", 0),
-            "total_rejected": persona.get("total_rejected", 0),
-            "acceptance_rate": float(persona.get("acceptance_rate", 0)),
-        },
-    }
+    try:
+        from ..nexus.engine import NexusEngine
+        nexus = NexusEngine(settings)
+        persona = nexus._get_or_create_persona(tenant_id, user.id)
+        return {
+            "preferences": persona.get("preferences", {}),
+            "expertise": persona.get("expertise", {}),
+            "history": persona.get("history", [])[-10:],
+            "stats": {
+                "total_prompts": persona.get("total_prompts", 0),
+                "total_accepted": persona.get("total_accepted", 0),
+                "total_rejected": persona.get("total_rejected", 0),
+                "acceptance_rate": float(persona.get("acceptance_rate", 0)),
+            },
+        }
+    except Exception:
+        return {"preferences": {}, "expertise": {}, "history": [], "stats": {"total_prompts": 0, "total_accepted": 0, "total_rejected": 0, "acceptance_rate": 0.0}}
 
 
 @app.patch("/tenants/{tenant_id}/projects/{project_id}/nexus/persona")

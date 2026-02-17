@@ -120,13 +120,20 @@ DATABASE & PERSISTENCE — UNIVERSAL TABLE STRATEGY
 
 A global Supabase client is available at `window.supabase`.
 
+DATABASE PRIORITY RULE — CRITICAL:
+If the app involves CREATING, READING, UPDATING, or DELETING data (e.g. todo lists,
+case management, CRM, inventory, notes, contacts, trackers, planners, boards, tickets,
+or ANY app where users add/edit/remove items), you MUST implement REAL Supabase CRUD
+using the patterns below. NEVER use in-memory state or hardcoded mock arrays for
+user data in these apps. The app MUST persist data to the database.
+
 DATABASE SCHEMA (single universal table):
 The `app_data` table stores all application data with this structure:
 {
   id: UUID (auto-generated),
-  tenant_id: UUID (managed automatically by RLS),
-  project_id: UUID (managed automatically),
-  app_instance_id: TEXT (session identifier),
+  tenant_id: UUID (use window.__VEDAA_TENANT_ID),
+  project_id: UUID (use window.__VEDAA_PROJECT_ID),
+  app_instance_id: TEXT (use window.__VEDAA_APP_INSTANCE_ID),
   collection: TEXT (e.g., "meals", "todos", "contacts"),
   record_id: TEXT (user-facing ID, typically UUID),
   data: JSONB (flexible schema per collection),
@@ -142,6 +149,9 @@ CRUD PATTERNS (use these exact patterns):
 const { data, error } = await window.supabase
   .from('app_data')
   .insert({
+    tenant_id: window.__VEDAA_TENANT_ID,
+    project_id: window.__VEDAA_PROJECT_ID,
+    app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
     collection: 'meals',
     record_id: crypto.randomUUID(),
     data: { name: 'Breakfast', date: '2025-02-15', items: [] }
@@ -163,6 +173,7 @@ const { data, error } = await window.supabase
   .from('app_data')
   .select('*')
   .eq('collection', 'meals')
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
   .order('created_at', { ascending: false })
   .limit(100);
 
@@ -184,6 +195,7 @@ const { data, error } = await window.supabase
   })
   .eq('collection', 'meals')
   .eq('record_id', mealId)
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
   .eq('version', currentVersion)
   .select()
   .single();
@@ -207,7 +219,8 @@ const { error } = await window.supabase
   .from('app_data')
   .delete()
   .eq('collection', 'meals')
-  .eq('record_id', mealId);
+  .eq('record_id', mealId)
+  .eq('project_id', window.__VEDAA_PROJECT_ID);
 
 if (error) {
   console.error('Delete failed:', error.message);
@@ -229,6 +242,8 @@ MANDATORY PATTERNS:
 9. ✅ NEVER mock data with hardcoded arrays
 10. ✅ NEVER skip error handling
 11. ✅ ALWAYS use (data || []) when setting array state from query results (data can be null)
+12. ✅ ALWAYS include tenant_id, project_id, and app_instance_id in INSERT operations using window.__VEDAA_TENANT_ID, window.__VEDAA_PROJECT_ID, window.__VEDAA_APP_INSTANCE_ID
+13. ✅ ALWAYS filter by project_id in READ, UPDATE, and DELETE operations using .eq('project_id', window.__VEDAA_PROJECT_ID)
 
 COMPLETE EXAMPLE (Meal Planner with CRUD):
 ```jsx
@@ -254,6 +269,7 @@ export default function MealPlanner() {
         .from('app_data')
         .select('*')
         .eq('collection', 'meals')
+        .eq('project_id', window.__VEDAA_PROJECT_ID)
         .order('created_at', { ascending: false });
 
       if (err) throw err;
@@ -272,6 +288,9 @@ export default function MealPlanner() {
       const { data, error: err } = await window.supabase
         .from('app_data')
         .insert({
+          tenant_id: window.__VEDAA_TENANT_ID,
+          project_id: window.__VEDAA_PROJECT_ID,
+          app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
           collection: 'meals',
           record_id: crypto.randomUUID(),
           data: { name: newMealName, date: new Date().toISOString().split('T')[0], items: [] }
@@ -294,7 +313,8 @@ export default function MealPlanner() {
         .from('app_data')
         .delete()
         .eq('collection', 'meals')
-        .eq('record_id', id);
+        .eq('record_id', id)
+        .eq('project_id', window.__VEDAA_PROJECT_ID);
 
       if (err) throw err;
       setMeals(meals.filter(m => m.id !== id));
@@ -416,6 +436,8 @@ DATABASE-SPECIFIC CHECKS:
 9. ⚠️  Empty states handled (show message when data.length === 0)
 10. ⚠️  Loading UI shown while fetching data
 11. ✅ Array state uses (data || []) guard — setCases(data) is UNSAFE, setCases((data || []).map(...)) is correct
+12. ✅ INSERT operations include tenant_id, project_id, app_instance_id from window.__VEDAA_* globals
+13. ✅ READ/UPDATE/DELETE filter by project_id using .eq('project_id', window.__VEDAA_PROJECT_ID)
 
 CRITICAL DATABASE VIOLATIONS (auto-reject):
 - Using localStorage instead of window.supabase
@@ -424,6 +446,8 @@ CRITICAL DATABASE VIOLATIONS (auto-reject):
 - Collection names with spaces or special characters
 - Hardcoded/mocked data instead of real database fetch
 - Setting array state directly from data without null guard (must use data || [])
+- INSERT without tenant_id/project_id/app_instance_id from window.__VEDAA_* globals → REJECT
+- READ/UPDATE/DELETE without project_id filter → REJECT
 
 STRUCTURAL CHECKS (from refactored architecture):
 11. No file exceeds 120 LOC (CRITICAL if violated)

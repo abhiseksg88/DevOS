@@ -157,6 +157,90 @@ Use INLINE SVGs or emoji. Common patterns:
 - Stacked on mobile: \`flex flex-col lg:flex-row\`
 - Full width on mobile: \`w-full sm:w-auto\` for buttons
 
+## Database & Persistence — Supabase CRUD
+
+A global Supabase client is available at \`window.supabase\` (injected by the preview runtime).
+Context globals are also available: \`window.__VEDAA_TENANT_ID\`, \`window.__VEDAA_PROJECT_ID\`, \`window.__VEDAA_APP_INSTANCE_ID\`.
+
+**DATABASE PRIORITY RULE — THIS IS CRITICAL:**
+If the app involves CREATING, READING, UPDATING, or DELETING data (e.g. todo lists, case management, CRM, inventory, notes, contacts, project trackers, meal planners, expense trackers, booking systems, or ANY app where users add/edit/remove items), you MUST implement REAL Supabase CRUD using the patterns below. NEVER use in-memory state or hardcoded mock arrays for these apps. The app MUST persist data to the database.
+
+Apps that DO need database CRUD: todo, list, tracker, manager, CRM, planner, board, inventory, booking, notes, journal, contacts, tickets, cases, orders, invoices, tasks, events, calendar entries, blog posts, comments, reviews, registrations, forms that save data.
+Apps that do NOT need database CRUD: landing pages, calculators, static dashboards, games, animations, UI demos.
+
+The \`app_data\` table stores all application data:
+- id: UUID (auto-generated)
+- tenant_id: UUID (use \`window.__VEDAA_TENANT_ID\`)
+- project_id: UUID (use \`window.__VEDAA_PROJECT_ID\`)
+- app_instance_id: TEXT (use \`window.__VEDAA_APP_INSTANCE_ID\`)
+- collection: TEXT (e.g. "meals", "todos", "contacts")
+- record_id: TEXT (user-facing ID, use \`crypto.randomUUID()\`)
+- data: JSONB (flexible schema per collection)
+- version: INTEGER (for optimistic locking)
+- created_at, updated_at: TIMESTAMPTZ
+
+### CRUD Patterns (use these exact patterns when the user requests database features):
+
+**CREATE:**
+\`\`\`javascript
+const { data, error } = await window.supabase
+  .from('app_data')
+  .insert({
+    tenant_id: window.__VEDAA_TENANT_ID,
+    project_id: window.__VEDAA_PROJECT_ID,
+    app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
+    collection: 'items',
+    record_id: crypto.randomUUID(),
+    data: { name: 'Item', status: 'active' }
+  })
+  .select()
+  .single();
+\`\`\`
+
+**READ:**
+\`\`\`javascript
+const { data, error } = await window.supabase
+  .from('app_data')
+  .select('*')
+  .eq('collection', 'items')
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
+  .order('created_at', { ascending: false });
+\`\`\`
+
+**UPDATE:**
+\`\`\`javascript
+const { data, error } = await window.supabase
+  .from('app_data')
+  .update({ data: updatedData, version: currentVersion + 1 })
+  .eq('collection', 'items')
+  .eq('record_id', itemId)
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
+  .eq('version', currentVersion)
+  .select()
+  .single();
+\`\`\`
+
+**DELETE:**
+\`\`\`javascript
+const { error } = await window.supabase
+  .from('app_data')
+  .delete()
+  .eq('collection', 'items')
+  .eq('record_id', itemId)
+  .eq('project_id', window.__VEDAA_PROJECT_ID);
+\`\`\`
+
+### Database Rules:
+- ALWAYS use \`window.supabase\` (never import or create a new client)
+- ALWAYS include tenant_id, project_id, app_instance_id in INSERT using window.__VEDAA_* globals
+- ALWAYS filter by project_id in READ/UPDATE/DELETE
+- ALWAYS handle errors with try/catch and display to user
+- ALWAYS use isLoading state during async operations
+- ALWAYS use \`(data || [])\` when setting array state (data can be null)
+- ALWAYS use version check for UPDATE (optimistic locking)
+- NEVER use localStorage for persistence
+- NEVER mock data with hardcoded arrays when database is requested
+
 ## Content Rules
 - Use REALISTIC mock data — real names, actual descriptions, plausible numbers
 - Minimum 6-12 items in lists/tables (never just 2-3)
@@ -269,6 +353,18 @@ CORRECT (renders instantly):
 
 - If you MUST use useEffect for a timer/animation, STILL render the full UI on first render
 - Every component must return a \`<div>\` (or other element) with visible content — no exceptions
+
+DEFENSIVE CODING — PREVENT UNDEFINED CRASHES:
+- When passing arrays as props to child components, ALWAYS provide a default: \`function StatsCards({ cases = [] })\`
+- When accessing .length, .map(), .filter() etc., ALWAYS guard: \`(items || []).length\`, \`(items || []).map(...)\`
+- When destructuring props, ALWAYS provide defaults for arrays and objects:
+  FORBIDDEN: \`function Stats({ cases }) { return cases.length; }\`  // ❌ crashes if cases is undefined
+  CORRECT: \`function Stats({ cases = [] }) { return cases.length; }\`  // ✅ safe
+
+DATABASE APPS — IMPORTANT:
+- For apps that manage data (CRUD), initialize arrays as empty \`useState([])\` and load from database in useEffect
+- Show a loading spinner while data loads, and an empty state when array is empty
+- Do NOT use hardcoded mock arrays — use real Supabase CRUD (see Database section above)
 
 Interactivity:
 - You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext

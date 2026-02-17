@@ -156,7 +156,7 @@ export function useAutoFix(
         .map((e, i) => `${i + 1}. ${e}`)
         .join("\n");
 
-      const prompt = `Fix these runtime errors from the preview render:\n\n${errorList}\n\nThis is auto-fix iteration ${iteration}/${MAX_ITERATIONS}. Fix ALL the errors.`;
+      const prompt = `Fix these runtime errors from the preview render:\n\n${errorList}\n\nThis is auto-fix iteration ${iteration}/${MAX_ITERATIONS}. Fix ALL the errors.\n\nCOMMON FIXES:\n- "Cannot read properties of undefined (reading 'length')" or ".map()" → The component receives an undefined prop. Add default values: function Component({ items = [] }) or use (items || []).length\n- "Cannot read properties of undefined (reading 'X')" → Add optional chaining: obj?.X or provide default objects in destructuring\n- "X is not a function" → A module/import is missing. Check if the function is defined and exported correctly\n- All array props MUST have defaults: { cases = [], items = [], data = [] }\n- All data from database queries must use (data || []) guard before .map(), .filter(), .length\n\nIMPORTANT: Output COMPLETE fixed files using ===FILE: path=== format. Do not output partial snippets.`;
 
       const response = await fetch("/api/generate", {
         method: "POST",
