@@ -225,6 +225,39 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
     const safePath = sanitizePath(pathMatch[2].trim());
     if (safePath) files.push({ path: safePath, content: codeMatch[1].trimEnd() });
   }
+  if (files.length > 0) return files;
+
+  // Format 5 (LAST RESORT): Extract the largest code block as page.tsx.
+  // If Claude completely ignored the ===FILE=== format but still wrote valid React code,
+  // grab the biggest code block (must be >200 chars and look like React/JSX).
+  const allCodeBlocks: { content: string; lang: string }[] = [];
+  const anyCodeBlock = /```(\w*)\n([\s\S]*?)```/g;
+  while ((match = anyCodeBlock.exec(cleanText)) !== null) {
+    const content = match[2].trimEnd();
+    if (content.length > 200) {
+      allCodeBlocks.push({ content, lang: match[1] || "" });
+    }
+  }
+  if (allCodeBlocks.length > 0) {
+    // Sort by size (largest first) — the biggest block is likely the main page
+    allCodeBlocks.sort((a, b) => b.content.length - a.content.length);
+    const biggest = allCodeBlocks[0];
+    // Sanity check: must look like React code (has export, function, or return with JSX)
+    const looksLikeReact = /(?:export\s+default|function\s+\w+|return\s*\()/s.test(biggest.content);
+    if (looksLikeReact) {
+      console.warn('[parseFiles] LAST RESORT: Extracting largest code block as page.tsx (' + biggest.content.length + ' chars)');
+      files.push({ path: "src/app/page.tsx", content: biggest.content });
+      // Try to extract additional smaller blocks as components
+      for (let i = 1; i < allCodeBlocks.length && i < 5; i++) {
+        const block = allCodeBlocks[i];
+        const exportMatch = block.content.match(/export\s+default\s+function\s+(\w+)/);
+        if (exportMatch) {
+          const compName = exportMatch[1];
+          files.push({ path: `src/components/${compName}.tsx`, content: block.content });
+        }
+      }
+    }
+  }
 
   return files;
 }

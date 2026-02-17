@@ -549,6 +549,12 @@ export async function POST(req: NextRequest) {
   // Select system prompt: update mode when modifying existing project, initial for greenfield
   const systemPrompt = hasExistingProject ? UPDATE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT;
 
+  // Assistant prefill: forces Claude to START in ===FILE: format (no preamble text)
+  // This is the #1 fix for "could not be parsed into files" errors.
+  // For new projects: always start with page.tsx (the entry point)
+  // For updates: use generic prefix so Claude fills in the appropriate file path
+  const PREFILL = hasExistingProject ? "===FILE: " : "===FILE: src/app/page.tsx===\n";
+
   // Build PRD block if provided by the Analyzer agent
   let prdBlock = "";
   if (prd && typeof prd === "object") {
@@ -590,25 +596,34 @@ Follow this build plan precisely. Implement exactly the components, changes, and
           model: "claude-sonnet-4-5-20250929",
           max_tokens: hasExistingProject ? 32768 : 64000,
           system: systemPrompt,
-          messages: chatHistory && chatHistory.length > 0
-            ? [
-                // Use conversation history for iterative chat
-                ...chatHistory.map((m: { role: string; content: string }) => ({
-                  role: m.role as "user" | "assistant",
-                  content: m.content,
-                })),
-                // Append current prompt with existing project context
-                ...(prompt ? [{
-                  role: "user" as const,
-                  content: buildUserMessage(prompt),
-                }] : []),
-              ]
-            : [
-                {
-                  role: "user" as const,
-                  content: buildUserMessage(prompt),
-                },
-              ],
+          messages: (() => {
+            const msgs: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+            if (chatHistory && chatHistory.length > 0) {
+              // Filter chat history: only include user messages.
+              // Assistant messages like "Done! Generated 3 files" teach Claude to
+              // respond conversationally instead of using ===FILE=== format.
+              for (const m of chatHistory) {
+                if (m.role === "user" && m.content) {
+                  msgs.push({ role: "user", content: m.content });
+                  // Add a minimal assistant acknowledgment to maintain turn alternation
+                  msgs.push({ role: "assistant", content: "(implemented)" });
+                }
+              }
+            }
+
+            // Add current user prompt
+            if (prompt) {
+              msgs.push({ role: "user", content: buildUserMessage(prompt) });
+            }
+
+            // Assistant prefill: forces Claude to START outputting in ===FILE=== format.
+            // This eliminates preamble text ("Here's the code:", "I'll create...", etc.)
+            // that causes the "could not be parsed into files" error.
+            msgs.push({ role: "assistant", content: PREFILL });
+
+            return msgs;
+          })(),
           stream: true,
         }),
       }
@@ -654,6 +669,13 @@ Follow this build plan precisely. Implement exactly the components, changes, and
     async start(controller) {
       const reader = anthropicResponse.body!.getReader();
       let buffer = "";
+
+      // Inject the prefill content as the first SSE event.
+      // The API response does NOT include the prefill — only new tokens.
+      // Without this, the client would see "content after prefill" but not
+      // the ===FILE: src/app/page.tsx===\n prefix, breaking the parser.
+      const prefillEvent = JSON.stringify({ type: "text", content: PREFILL });
+      controller.enqueue(encoder.encode(`data: ${prefillEvent}\n\n`));
 
       try {
         while (true) {
