@@ -1,17 +1,18 @@
-import Anthropic from "@anthropic-ai/sdk";
+/**
+ * Code generation API route using Anthropic Claude.
+ *
+ * Uses the standard Node.js serverless runtime (NOT Edge) so that Netlify
+ * "Secret" environment variables are accessible. We call the Anthropic REST
+ * API directly instead of importing the SDK to keep the bundle small and
+ * cold-starts fast.
+ */
+
 import { NextRequest } from "next/server";
 
-// Allow long-running streaming generation (5 minutes)
-export const maxDuration = 300;
-
 // ---------------------------------------------------------------------------
-// System prompt — the single most important piece for output quality.
-// This is what makes the difference between "generic" and "Lovable-quality".
+// Shared coding rules & output format (used by both initial and update prompts)
 // ---------------------------------------------------------------------------
-const SYSTEM_PROMPT = `You are Vedaa, an elite full-stack developer and UI/UX designer. You create production-grade React apps that look stunning and work perfectly.
-
-## Output Format
-Respond with ONLY code files. No explanations, no markdown outside files. Use this exact format:
+const FILE_FORMAT = `You MUST respond with ONLY code files in the following exact format. No explanations before or after the files.
 
 ===FILE: path/to/file.tsx===
 (file content)
@@ -217,98 +218,81 @@ The parser will fail and the user will see an error.
 (complete file content)
 ===END_FILE===
 
-### For EXISTING files (provided in context):
-===EDIT: path/to/existing_file.tsx===
-<<<SEARCH
-(exact existing code to find — include 2-3 lines of surrounding context)
->>>REPLACE
-(new code to replace it with)
-===END_EDIT===
+Do NOT include any explanation text outside of ===FILE: ... === blocks.`;
 
-Multiple changes to the same file = multiple ===EDIT=== blocks.
+const BASE_RULES = `Rules:
+- Use React with TypeScript and Tailwind CSS for styling
+- The main entry point MUST be "src/app/page.tsx" with a default export function component
+- Use modern, clean, responsive design with Tailwind utility classes
+- Use className (React) not class
+- Make it visually impressive with gradients, shadows, proper spacing
+- Include ALL necessary files (page.tsx, components, globals.css)
+- CSS file should be "src/app/globals.css"
 
-### Rules:
-1. SEARCH text must match the existing code EXACTLY including whitespace and indentation.
-2. Include 2-3 surrounding context lines so the match is unique.
-3. NEVER put the entire file content in a SEARCH block — only the changing section.
-4. Keep each SEARCH block under 20 lines. Split larger changes into multiple SEARCH/REPLACE pairs.
-5. The ONLY exception for using ===FILE=== on an existing path: the file is very short
-   (under 30 lines) AND you are rewriting it entirely.
-6. For brand new files that don't exist yet, use ===FILE: path===.`;
+Code architecture:
+- CRITICAL: In page.tsx, define ALL helper component functions (Header, Hero, Footer, etc.) directly in the same file ABOVE the default export. The page MUST be fully self-contained.
+- You MAY import from "react" (e.g. import { useState, useEffect } from "react"). React hooks ARE supported.
+- Do NOT import from next/image, next/link, next/router, or any Next.js packages
+- Do NOT import from third-party packages (no lucide-react, no framer-motion, etc.) — use inline SVG icons or emoji instead
+- Do NOT import local component files — define everything inline in page.tsx
+- You may create separate component files for code organization, but page.tsx must NOT depend on them
+- Export the main page component as the default export
 
-// ---------------------------------------------------------------------------
-// Fix agent system prompt — targeted error resolution
-// ---------------------------------------------------------------------------
-const FIX_SYSTEM_PROMPT = `You are a React debugging specialist. You receive runtime errors from a preview render and the source code that caused them.
-
-Your job: generate the MINIMUM fix needed. Do NOT rewrite the entire file.
-
-## Output Format — Use SEARCH & REPLACE for targeted fixes:
-
-===EDIT: path/to/file.tsx===
-<<<SEARCH
-const broken = something.undefined.value;
->>>REPLACE
-const broken = something?.undefined?.value ?? "default";
-===END_EDIT===
-
-For each file, use ===EDIT=== with <<<SEARCH and >>>REPLACE blocks.
-The SEARCH text must match the existing code EXACTLY.
-Include 2-3 context lines around the bug for unique matching.
-
-Do NOT use ===FILE: path=== for existing files — always use ===EDIT=== with SEARCH/REPLACE.
-Only use ===FILE=== if creating a brand new file that doesn't exist yet.
-
-Common fixes:
-- Null/undefined: add optional chaining (?.) or default values (?? [])
-- Missing state: add useState with proper initial value
-- Event handler: bind correctly, prevent default where needed
-- Rendering: guard .map() calls with Array.isArray or ?. or ?? []
-- Import: remove broken imports, inline the code instead
-- TypeScript: fix type errors with proper typing or 'as' assertions
-- Hook rules: ensure hooks are called at top level, not conditionally
-- Key prop: add unique key to .map() rendered elements
-
-Rules:
-- Use SEARCH/REPLACE blocks — do NOT rewrite entire files
-- Fix ALL errors mentioned, not just the first one
-- Preserve all existing functionality — don't remove features to fix errors
-- No explanations outside of EDIT/FILE blocks`;
+Interactivity:
+- You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext
+- You CAN use event handlers: onClick, onChange, onSubmit, etc.
+- You CAN use conditional rendering, .map(), ternaries — all standard React patterns work
+- Make components interactive and functional where appropriate`;
 
 // ---------------------------------------------------------------------------
-// Smart model routing — Haiku for small edits, Sonnet for everything else
+// INITIAL prompt — used when no existing project files exist (greenfield build)
 // ---------------------------------------------------------------------------
-function selectModel(prompt: string, hasExistingFiles: boolean): { model: string; maxTokens: number } {
-  const lower = prompt.toLowerCase().trim();
-  const wordCount = lower.split(/\s+/).length;
+const INITIAL_SYSTEM_PROMPT = `You are an expert full-stack developer. The user will describe an app or feature they want built.
 
-  // Quick edits → Haiku (fast, cheap)
-  const isQuickEdit =
-    hasExistingFiles &&
-    wordCount <= 20 &&
-    (
-      /^(make|change|set|update|fix|adjust|move|swap|remove|delete|hide|show)\b/.test(lower) ||
-      /\b(color|colour|font|size|text|spacing|padding|margin|border|background|bg)\b/.test(lower) ||
-      /\b(bigger|smaller|larger|wider|narrower|taller|shorter|bold|italic)\b/.test(lower)
-    );
+${FILE_FORMAT}
 
-  if (isQuickEdit) {
-    return { model: "claude-haiku-4-5-20251001", maxTokens: 4096 };
+${BASE_RULES}`;
+
+// ---------------------------------------------------------------------------
+// UPDATE prompt — used when modifying an existing project
+// ---------------------------------------------------------------------------
+const UPDATE_SYSTEM_PROMPT = `You are an expert full-stack developer maintaining an EXISTING React application. The user has a working app and wants to ADD FEATURES, FIX BUGS, or MAKE CHANGES.
+
+CRITICAL — UPDATING EXISTING CODE:
+1. The user message contains an <existing-project> block with the current codebase. READ AND UNDERSTAND IT FIRST before writing any code.
+2. ONLY output files that NEED TO CHANGE or are NEW. Do NOT regenerate files that remain unchanged. This saves tokens and avoids overwriting working code.
+3. When modifying a file, output the COMPLETE updated file content (not a partial diff or snippet).
+4. MAINTAIN CONSISTENCY with the existing code:
+   - Same naming conventions, variable patterns, and code style
+   - Same Tailwind classes, color scheme, spacing, and design language
+   - Same component structure and state management approach
+5. INTEGRATE with existing features:
+   - If the app has navigation (tabs, sidebar, menu), ADD new items to it — do NOT create separate navigation
+   - If the app has shared state (useState at top level), extend it — do NOT create parallel state
+   - If the app has a data model (arrays, objects), follow the same patterns
+6. PRESERVE all existing functionality — do NOT break or remove features the user did not ask to change.
+7. If adding a new "page" or "view", use the existing navigation/tab/routing pattern to make it accessible.
+
+${FILE_FORMAT}
+
+${BASE_RULES}`;
+
+// Simple in-memory rate limiter: 10 requests per minute per IP
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = 10;
+const RATE_WINDOW = 60_000; // 1 minute
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW });
+    return true;
   }
-
-  // New app generation needs more output room (multiple files, full content)
-  // Editing existing files needs less (SEARCH/REPLACE blocks are compact)
-  const maxTokens = hasExistingFiles ? 16384 : 32768;
-
-  return { model: "claude-sonnet-4-5-20250929", maxTokens };
+  if (entry.count >= RATE_LIMIT) return false;
+  entry.count++;
+  return true;
 }
-
-// ---------------------------------------------------------------------------
-// Rate limiter
-// ---------------------------------------------------------------------------
-const MAX_PROMPT_LENGTH = 50_000;
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
 
 const requestLog = new Map<string, number[]>();
 
@@ -335,18 +319,19 @@ setInterval(() => {
 // POST /api/generate — main generation endpoint
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
-  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  // Rate limiting
+  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   if (!checkRateLimit(clientIp)) {
     return new Response(
-      JSON.stringify({ error: "Rate limit exceeded. Try again in a minute." }),
-      { status: 429, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ error: "Rate limit exceeded. Please wait a moment before trying again." }),
+      { status: 429, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  const { prompt, existingFiles, mode } = await req.json();
+  const { prompt, existingFiles, messages: chatHistory, prd } = await req.json();
 
-  if (!prompt || typeof prompt !== "string") {
-    return new Response(JSON.stringify({ error: "prompt is required" }), {
+  if ((!prompt || typeof prompt !== "string") && (!chatHistory || !Array.isArray(chatHistory))) {
+    return new Response(JSON.stringify({ error: "prompt or messages is required" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -364,160 +349,215 @@ export async function POST(req: NextRequest) {
     console.error("[generate] ANTHROPIC_API_KEY is not set in environment variables");
     return new Response(
       JSON.stringify({
-        error: "ANTHROPIC_API_KEY not configured. Please add it to your Netlify environment variables (Site settings → Environment variables).",
+        error:
+          "ANTHROPIC_API_KEY is not set. Add it to your Netlify environment variables (Site settings > Environment variables). Make sure it is NOT marked as 'Secret' — Netlify Edge/serverless functions need it as a 'General' variable.",
       }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  const client = new Anthropic({ apiKey });
+  // Build structured context from existing project files
+  let existingProjectBlock = "";
+  let hasExistingProject = false;
 
-  // Pick the right system prompt and model
-  const isFix = mode === "fix";
-  const systemPrompt = isFix ? FIX_SYSTEM_PROMPT : SYSTEM_PROMPT;
-  const hasExisting = existingFiles && Array.isArray(existingFiles) && existingFiles.length > 0;
-  const { model, maxTokens } = isFix
-    ? { model: "claude-sonnet-4-5-20250929", maxTokens: 8192 }
-    : selectModel(prompt, !!hasExisting);
-
-  // Build context from existing files with token budgeting and relevance scoring
-  let context = "";
   if (existingFiles && Array.isArray(existingFiles)) {
-    const validFiles = existingFiles
-      .slice(0, 20)
-      .filter((f: { content?: string }) => f.content) as { path: string; content: string }[];
-
-    // Score files by relevance to the prompt
-    const promptLower = prompt.toLowerCase();
-    const promptWords = new Set(promptLower.split(/\s+/).filter((w: string) => w.length > 3));
-    const scored = validFiles.map((f) => {
-      let score = 0;
-      const pathLower = f.path.toLowerCase();
-      const fileName = f.path.split("/").pop() ?? "";
-      // File explicitly mentioned in prompt
-      if (promptLower.includes(pathLower) || promptLower.includes(fileName.replace(/\.\w+$/, ""))) score += 10;
-      // page.tsx is almost always relevant
-      if (pathLower.endsWith("page.tsx")) score += 5;
-      // globals.css relevant for style changes
-      if (pathLower.endsWith("globals.css") && /\b(style|color|font|theme|dark|light|css|design|look)\b/.test(promptLower)) score += 5;
-      // Keyword overlap with first 2000 chars of content
-      const contentSnippet = f.content.toLowerCase().slice(0, 2000);
-      for (const word of promptWords) {
-        if (contentSnippet.includes(word)) score += 1;
-      }
-      return { ...f, score };
-    }).sort((a, b) => b.score - a.score);
-
-    // Token budget: ~6000 tokens ≈ 24000 chars for file context
-    const MAX_CONTEXT_CHARS = 24000;
-    let usedChars = 0;
-    const includedFiles: { path: string; content: string }[] = [];
-    const stubFiles: string[] = [];
-
-    for (const f of scored) {
-      if (usedChars + f.content.length <= MAX_CONTEXT_CHARS) {
-        includedFiles.push({ path: f.path, content: f.content });
-        usedChars += f.content.length;
-      } else {
-        // Try to fit a truncated version if budget allows
-        const remaining = MAX_CONTEXT_CHARS - usedChars;
-        if (remaining > 800) {
-          includedFiles.push({
-            path: f.path,
-            content: f.content.slice(0, remaining) + "\n// ... (file truncated for context limit) ...",
-          });
-          usedChars = MAX_CONTEXT_CHARS;
-        } else {
-          stubFiles.push(f.path);
-        }
-      }
-    }
-
-    if (includedFiles.length > 0) {
-      const existingPaths = includedFiles.map((f) => f.path);
-      const pathList = existingPaths.map((p) => `  - ${p}`).join("\n");
-      const fileContents = includedFiles
-        .map((f) => `--- ${f.path} ---\n${f.content}`)
-        .join("\n\n");
-
-      let stubSection = "";
-      if (stubFiles.length > 0) {
-        stubSection = `\n\n## Other project files (not shown — do NOT modify unless asked):\n${stubFiles.map((p) => `  - ${p}`).join("\n")}`;
-      }
-
-      if (isFix) {
-        context = `\n\n## EXISTING FILES — Use ===EDIT=== with SEARCH/REPLACE for fixes\n${pathList}\n\n## File Contents\n${fileContents}${stubSection}`;
-      } else {
-        context = `\n\n## EXISTING FILES — Use ===EDIT=== for these (NOT ===FILE===)\n${pathList}\n\n## File Contents\n${fileContents}${stubSection}`;
+    const validFiles = existingFiles.filter(
+      (f: { path?: string; content?: string }) =>
+        f.path && f.content && f.content.trim().length > 0
+    );
+    if (validFiles.length > 0) {
+      // Only switch to update mode if there's real generated content (not placeholder)
+      const hasRealContent = validFiles.some(
+        (f: { path: string; content: string }) =>
+          f.path === "src/app/page.tsx" &&
+          !f.content.includes("Your generated code will appear here")
+      );
+      if (hasRealContent) {
+        hasExistingProject = true;
+        const fileSummary = validFiles
+          .map((f: { path: string }) => `  - ${f.path}`)
+          .join("\n");
+        const fileContents = validFiles
+          .map(
+            (f: { path: string; content: string }) =>
+              `--- ${f.path} ---\n${f.content}`
+          )
+          .join("\n\n");
+        existingProjectBlock = `<existing-project>\n<file-list>\n${fileSummary}\n</file-list>\n\n<file-contents>\n${fileContents}\n</file-contents>\n</existing-project>`;
       }
     }
   }
 
-  // Stream the response
+  // Select system prompt: update mode when modifying existing project, initial for greenfield
+  const systemPrompt = hasExistingProject ? UPDATE_SYSTEM_PROMPT : INITIAL_SYSTEM_PROMPT;
+
+  // Build PRD block if provided by the Analyzer agent
+  let prdBlock = "";
+  if (prd && typeof prd === "object") {
+    prdBlock = `<build-plan>
+${JSON.stringify(prd, null, 2)}
+</build-plan>
+
+Follow this build plan precisely. Implement exactly the components, changes, and integration described above.
+`;
+  }
+
+  // Build the user message with structured context for updates
+  function buildUserMessage(userPrompt: string): string {
+    if (!hasExistingProject && !prdBlock) return userPrompt;
+    const parts: string[] = [];
+    if (existingProjectBlock) parts.push(existingProjectBlock);
+    if (prdBlock) parts.push(prdBlock);
+    parts.push(`User request: ${userPrompt}`);
+    if (hasExistingProject) {
+      parts.push("Remember: Only output files that need to change or are new. Do not regenerate unchanged files.");
+    }
+    return parts.join("\n\n");
+  }
+
+  // Call Anthropic REST API directly (no SDK — smaller bundle, faster cold start)
+  let anthropicResponse: Response;
+  try {
+    anthropicResponse = await fetch(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 16384,
+          system: systemPrompt,
+          messages: chatHistory && chatHistory.length > 0
+            ? [
+                // Use conversation history for iterative chat
+                ...chatHistory.map((m: { role: string; content: string }) => ({
+                  role: m.role as "user" | "assistant",
+                  content: m.content,
+                })),
+                // Append current prompt with existing project context
+                ...(prompt ? [{
+                  role: "user" as const,
+                  content: buildUserMessage(prompt),
+                }] : []),
+              ]
+            : [
+                {
+                  role: "user" as const,
+                  content: buildUserMessage(prompt),
+                },
+              ],
+          stream: true,
+        }),
+      }
+    );
+  } catch (fetchErr) {
+    const msg =
+      fetchErr instanceof Error ? fetchErr.message : "Network error";
+    return new Response(
+      JSON.stringify({
+        error: `Failed to reach Anthropic API: ${msg}`,
+      }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  if (!anthropicResponse.ok) {
+    const errBody = await anthropicResponse.text();
+    let errorMessage = `Anthropic API error (${anthropicResponse.status})`;
+    try {
+      const parsed = JSON.parse(errBody);
+      errorMessage = parsed.error?.message || errorMessage;
+    } catch {
+      // use default message
+    }
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (!anthropicResponse.body) {
+    return new Response(
+      JSON.stringify({ error: "No response stream from Anthropic" }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // Transform the Anthropic SSE stream into our own SSE stream for the client
   const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (obj: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-      };
+      const reader = anthropicResponse.body!.getReader();
+      let buffer = "";
 
       try {
-        // Send model info as first event
-        send({ type: "meta", model });
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        console.log(`[generate] Calling Anthropic API with model=${model}, maxTokens=${maxTokens}`);
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
 
-        // Extended output: if maxTokens > 16384, we need the output-128k beta header
-        const createParams = {
-          model,
-          max_tokens: maxTokens,
-          system: systemPrompt,
-          messages: [
-            {
-              role: "user" as const,
-              content: prompt + context,
-            },
-          ],
-          stream: true as const,
-        };
-        const requestOptions = maxTokens > 16384
-          ? { headers: { "anthropic-beta": "output-128k-2025-02-19" } }
-          : undefined;
-        const response = await client.messages.create(createParams, requestOptions);
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === "[DONE]" || !jsonStr) continue;
 
-        let charCount = 0;
-        let stopReason = "end_turn";
-        for await (const event of response) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            charCount += event.delta.text.length;
-            send({ type: "text", content: event.delta.text });
-          }
-          // Capture stop reason to detect output truncation
-          if (event.type === "message_delta") {
-            const delta = event.delta as unknown as { stop_reason?: string };
-            if (delta.stop_reason) {
-              stopReason = delta.stop_reason;
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (
+                event.type === "content_block_delta" &&
+                event.delta?.type === "text_delta"
+              ) {
+                const data = JSON.stringify({
+                  type: "text",
+                  content: event.delta.text,
+                });
+                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              } else if (event.type === "message_delta" && event.delta?.stop_reason) {
+                // Forward stop_reason so client knows if response was truncated
+                const stopData = JSON.stringify({
+                  type: "stop",
+                  stop_reason: event.delta.stop_reason,
+                });
+                controller.enqueue(encoder.encode(`data: ${stopData}\n\n`));
+              } else if (event.type === "message_stop") {
+                // Stream complete
+              } else if (event.type === "error") {
+                const errData = JSON.stringify({
+                  type: "error",
+                  error: event.error?.message || "Anthropic stream error",
+                });
+                controller.enqueue(encoder.encode(`data: ${errData}\n\n`));
+              }
+            } catch {
+              // skip malformed JSON lines
             }
           }
         }
 
-        console.log(`[generate] Stream complete — ${charCount} chars, stop_reason=${stopReason}`);
-
-        // Alert the frontend if the response was truncated
-        if (stopReason === "max_tokens") {
-          console.warn(`[generate] Response TRUNCATED at ${charCount} chars — model hit max_tokens limit`);
-          send({ type: "warning", warning: "truncated", charCount });
-        }
-
-        send({ type: "done" });
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "done" })}\n\n`
+          )
+        );
         controller.close();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
-        console.error(`[generate] Error: ${message}`);
-        send({ type: "error", error: message });
+        const message =
+          err instanceof Error ? err.message : "Stream error";
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ type: "error", error: message })}\n\n`
+          )
+        );
         controller.close();
       }
     },

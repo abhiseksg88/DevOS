@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildDeployDocument } from "@/components/preview/PreviewPane";
-import * as api from "@/lib/api";
 import type { FileNode, Project } from "@/types";
 
 type PublishState =
@@ -39,11 +38,6 @@ interface PublishButtonProps {
   onPublished?: (url: string) => void;
 }
 
-/** Max time to poll for deploy status before timing out (ms) */
-const POLL_TIMEOUT_MS = 120_000;
-/** Max HTML size we'll upload (10 MB) */
-const MAX_HTML_SIZE = 10 * 1024 * 1024;
-
 export function PublishButton({
   project,
   tenantId,
@@ -61,8 +55,6 @@ export function PublishButton({
   const [copied, setCopied] = useState(false);
   const [preflightStatus, setPreflightStatus] = useState<api.PublishHealth | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollStartRef = useRef<number>(0);
-  const retryCountRef = useRef(0);
 
   // Sync deployed URL from project
   useEffect(() => {
@@ -87,7 +79,6 @@ export function PublishButton({
 
   const pollStatus = useCallback(
     (deployId: string) => {
-      if (!project) return;
       setState("polling");
       pollStartRef.current = Date.now();
 
@@ -103,12 +94,11 @@ export function PublishButton({
         }
 
         try {
-          const status = await api.publish.status(
-            token,
-            tenantId,
-            project.id,
-            deployId,
+          const res = await fetch(
+            `/api/publish-status?deploy_id=${encodeURIComponent(deployId)}`
           );
+          if (!res.ok) throw new Error("Status check failed");
+          const status = await res.json();
 
           if (status.state === "ready") {
             stopPolling();
@@ -133,7 +123,7 @@ export function PublishButton({
         }
       }, 2500);
     },
-    [project, token, tenantId, stopPolling, onPublished],
+    [stopPolling, onPublished],
   );
 
   const handlePublish = useCallback(async () => {
@@ -142,132 +132,77 @@ export function PublishButton({
     setError(null);
     setWarning(null);
     setShowPanel(true);
-    setPreflightStatus(null);
-    retryCountRef.current = 0;
 
-    // ─── Step 0: Pre-flight health check ───────────────────────────
-    setState("preflight");
-    const health = await api.publish.health(token);
-    setPreflightStatus(health);
+    try {
+      // Step 1: Generate deployment HTML
+      setState("generating");
+      await new Promise((r) => setTimeout(r, 300)); // Brief visual feedback
 
-    if (!health.ready) {
-      // Config error — don't retry, show clear message
-      setState("error");
-      if (!health.netlify_configured) {
-        setError(
-          "Netlify is not configured. Set NETLIFY_TOKEN in your backend environment variables.",
-        );
-      } else if (!health.netlify_reachable) {
-        setError(
-          health.netlify_error ||
-            "Cannot reach Netlify API. Check your token is valid.",
-        );
-      } else {
-        setError("Publish infrastructure is not ready. Check backend configuration.");
-      }
-      return;
-    }
-
-    if (!health.supabase_configured) {
-      setWarning("Supabase credentials not configured — published app won't have database access.");
-    }
-
-    // ─── Step 1: Generate deployment HTML ──────────────────────────
-    const doPublish = async (): Promise<void> => {
+      // Fetch Supabase credentials for embedding
+      let supabaseUrl = "";
+      let supabaseAnonKey = "";
       try {
-        setState("generating");
-        await new Promise((r) => setTimeout(r, 200)); // Brief visual feedback
-
-        // Fetch Supabase credentials for embedding
-        let supabaseUrl = "";
-        let supabaseAnonKey = "";
-        try {
-          const response = await fetch("/api/preview-credentials");
-          if (response.ok) {
-            const creds = await response.json();
-            supabaseUrl = creds.url || "";
-            supabaseAnonKey = creds.anonKey || "";
-          }
-        } catch {
-          // Continue without Supabase credentials — user was already warned
+        const response = await fetch("/api/preview-credentials");
+        if (response.ok) {
+          const creds = await response.json();
+          supabaseUrl = creds.url || "";
+          supabaseAnonKey = creds.anonKey || "";
         }
-
-        if (!supabaseUrl && !supabaseAnonKey && !warning) {
-          setWarning("Supabase credentials unavailable — published app won't have database access.");
-        }
-
-        const html = buildDeployDocument(
-          fileTree,
-          supabaseUrl,
-          supabaseAnonKey,
-          project.name,
-        );
-
-        // ─── Validate generated HTML ─────────────────────────────
-        if (!html || html.trim().length < 50) {
-          setState("error");
-          setError("Generated HTML is empty or too small. Add some code to your project first.");
-          return;
-        }
-
-        if (html.length > MAX_HTML_SIZE) {
-          setState("error");
-          setError(
-            `Generated HTML is too large (${(html.length / 1024 / 1024).toFixed(1)} MB). ` +
-              "Reduce your code size and try again.",
-          );
-          return;
-        }
-
-        // ─── Step 2: Upload to backend ─────────────────────────────
-        setState("uploading");
-        const result = await api.publish.deploy(
-          token,
-          tenantId,
-          project.id,
-          html,
-        );
-
-        // ─── Step 3: Check result ──────────────────────────────────
-        if (result.status === "ready") {
-          setState("success");
-          setDeployedUrl(result.url);
-          onPublished?.(result.url);
-        } else {
-          // Still deploying — start polling with timeout guard
-          setState("deploying");
-          pollStatus(result.deploy_id);
-        }
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Publish failed";
-
-        // Don't retry on config/auth errors — only retry on transient failures
-        const isRetryable =
-          !message.includes("not configured") &&
-          !message.includes("503") &&
-          !message.includes("401") &&
-          !message.includes("403") &&
-          !message.includes("too large") &&
-          !message.includes("empty");
-
-        if (isRetryable && retryCountRef.current < 3) {
-          retryCountRef.current += 1;
-          setState("uploading");
-          setError(`Retrying (${retryCountRef.current}/3)...`);
-          await new Promise((r) =>
-            setTimeout(r, 2000 * retryCountRef.current),
-          );
-          return doPublish();
-        }
-
-        setState("error");
-        setError(message);
+      } catch {
+        // Continue without Supabase credentials
       }
-    };
 
-    await doPublish();
-  }, [project, token, tenantId, fileTree, warning, onPublished, pollStatus]);
+      const html = buildDeployDocument(
+        fileTree,
+        supabaseUrl,
+        supabaseAnonKey,
+        project.name,
+      );
+
+      // Step 2: Upload to Netlify via our API route
+      setState("uploading");
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          html,
+          projectId: project.id,
+          projectSlug: project.slug,
+          projectName: project.name,
+          tenantId,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || err.detail || `Publish failed (${res.status})`);
+      }
+
+      const result = await res.json();
+
+      // Step 3: Check result
+      if (result.status === "ready") {
+        setState("success");
+        const url = result.custom_domain
+          ? `https://${result.custom_domain}`
+          : result.url;
+        setDeployedUrl(url);
+        onPublished?.(url);
+      } else {
+        // Still deploying — start polling
+        setState("deploying");
+        pollStatus(result.deploy_id);
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Publish failed";
+      setState("error");
+      setError(message);
+    }
+  }, [project, token, tenantId, fileTree, onPublished, pollStatus]);
 
   const handleCopy = useCallback(() => {
     if (deployedUrl) {
@@ -346,7 +281,7 @@ export function PublishButton({
             <div className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-brand-400" />
               <span className="text-sm font-medium text-white">
-                Netlify Deploy
+                Deploy
               </span>
             </div>
             <button
@@ -384,9 +319,7 @@ export function PublishButton({
                   status={
                     state === "generating"
                       ? "active"
-                      : (["uploading", "deploying", "polling"] as string[]).includes(state)
-                        ? "done"
-                        : "pending"
+                      : "done"
                   }
                 />
                 <PublishStep
@@ -395,7 +328,7 @@ export function PublishButton({
                   status={
                     state === "uploading"
                       ? "active"
-                      : (["deploying", "polling"] as string[]).includes(state)
+                      : state === "deploying" || state === "polling"
                         ? "done"
                         : "pending"
                   }
@@ -436,7 +369,6 @@ export function PublishButton({
                 {/* Show custom domain if available */}
                 {project?.custom_domain && (
                   <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-lg p-2.5 border border-emerald-500/20">
-                    <Globe className="w-3 h-3 inline mr-1" />
                     Live at:{" "}
                     <span className="font-mono font-semibold">
                       {project.custom_domain}

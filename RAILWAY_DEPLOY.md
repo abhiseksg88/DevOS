@@ -30,6 +30,9 @@ Quick guide to deploy DevOS backend to Railway.
    NETLIFY_TEAM_SLUG=devos
    NETLIFY_SITE_PREFIX=devos
    NETLIFY_CUSTOM_DOMAIN=vedaa.io
+
+   # NOTE: On Netlify (frontend), use NF_ prefix instead (NF_TOKEN, NF_TEAM_SLUG, etc.)
+   # because Netlify reserves the NETLIFY_ prefix for its own use.
    PORT=8000
    ```
 

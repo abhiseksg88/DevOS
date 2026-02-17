@@ -54,7 +54,7 @@ export async function listProjects(tenantId: string): Promise<Project[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("projects")
-    .select("id, tenant_id, name, slug, description, status, stack, created_at, updated_at")
+    .select("id, tenant_id, name, slug, description, status, stack, created_at, updated_at, netlify_site_id, deployed_url, deployed_at, deployment_status, custom_domain")
     .eq("tenant_id", tenantId)
     .order("updated_at", { ascending: false });
 
@@ -86,7 +86,7 @@ export async function getProject(tenantId: string, projectId: string): Promise<P
   const supabase = createClient();
   const { data, error } = await supabase
     .from("projects")
-    .select("id, tenant_id, name, slug, description, status, stack, created_at, updated_at")
+    .select("id, tenant_id, name, slug, description, status, stack, created_at, updated_at, netlify_site_id, deployed_url, deployed_at, deployment_status, custom_domain")
     .eq("tenant_id", tenantId)
     .eq("id", projectId)
     .single();

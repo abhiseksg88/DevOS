@@ -9,17 +9,6 @@
   NODE_VERSION = "20"
   NPM_FLAGS = "--legacy-peer-deps"
 
-# Next.js plugin handles all routing automatically.
-# IMPORTANT: Do NOT add a [[redirects]] from="/*" rule — it breaks Next.js
-# SSR, API routes, middleware, and auth callbacks.
-
+# Next.js adapter — handles SSR, API routes, middleware, and image optimization
 [[plugins]]
   package = "@netlify/plugin-nextjs"
-
-# ---------------------------------------------------------------------------
-# Required environment variables (set in Netlify UI → Site settings → Environment variables):
-#   ANTHROPIC_API_KEY          — Required for AI code generation
-#   NEXT_PUBLIC_SUPABASE_URL   — Supabase project URL
-#   NEXT_PUBLIC_SUPABASE_ANON_KEY — Supabase anonymous key
-#   NEXT_PUBLIC_API_URL        — Backend API URL (e.g. https://your-backend.railway.app)
-# ---------------------------------------------------------------------------

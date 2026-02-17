@@ -126,6 +126,8 @@ export function BuildLog({ events, isStreaming, status }: BuildLogProps) {
                           ? "bg-blue-500/10 text-blue-400"
                           : event.agent === "haiku"
                           ? "bg-emerald-500/10 text-emerald-400"
+                          : event.agent === "deepseek"
+                          ? "bg-amber-500/10 text-amber-400"
                           : "bg-slate-500/10 text-slate-400"
                       )}
                     >
