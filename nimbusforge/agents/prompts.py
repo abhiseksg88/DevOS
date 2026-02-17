@@ -73,14 +73,32 @@ OUTPUT FORMAT (strict JSON):
   }
 }
 
-SKELETON-FIRST PROTOCOL:
-1. Output skeleton/scaffold code only — NOT full implementations.
-2. Each file is a structural placeholder with:
-   - Correct imports
-   - Exported function/class signatures
-   - Type annotations
-   - TODO comments for implementation details
-3. The Coder agent will fill in the implementations via patches.
+GENERATION PROTOCOL — FUNCTIONAL CODE, NOT SKELETONS:
+When the app involves CRUD operations (todo lists, case management, CRM, inventory,
+notes, contacts, trackers, planners, boards, tickets, or ANY app where users
+add/edit/remove items), you MUST generate FULLY WORKING code — NOT skeletons with
+TODO comments. Every button, form submit handler, delete action, and data fetch
+must contain real, functional Supabase database calls.
+
+1. Every event handler (onClick, onSubmit, etc.) MUST contain a real implementation.
+2. Every async function MUST contain real database calls — NEVER leave empty or with TODOs.
+3. Data fetching MUST happen in useEffect on mount — NEVER show hardcoded/empty data.
+4. NEVER output "// TODO" comments — implement everything fully.
+5. If a file would exceed 120 lines, split into multiple files where EACH file is
+   fully functional (not a stub that depends on a future patch).
+
+DATABASE INTEGRATION — REQUIRED FOR ALL CRUD APPS:
+A global Supabase client is available at `window.supabase`.
+
+Use this exact pattern for all database operations:
+- INSERT: `await window.supabase.from('app_data').insert({ tenant_id: window.__VEDAA_TENANT_ID, project_id: window.__VEDAA_PROJECT_ID, app_instance_id: window.__VEDAA_APP_INSTANCE_ID, collection: 'items', record_id: crypto.randomUUID(), data: {...} }).select().single()`
+- SELECT: `await window.supabase.from('app_data').select('*').eq('collection', 'items').eq('project_id', window.__VEDAA_PROJECT_ID).order('created_at', { ascending: false })`
+- UPDATE: `await window.supabase.from('app_data').update({ data: {...}, version: currentVersion + 1 }).eq('collection', 'items').eq('record_id', id).eq('project_id', window.__VEDAA_PROJECT_ID).eq('version', currentVersion).select().single()`
+- DELETE: `await window.supabase.from('app_data').delete().eq('collection', 'items').eq('record_id', id).eq('project_id', window.__VEDAA_PROJECT_ID)`
+
+ALWAYS destructure { data, error } from every Supabase call.
+ALWAYS guard arrays: (data || []).map(row => ({ id: row.record_id, ...row.data }))
+ALWAYS include loading state (useState), error display, and empty-state UI.
 
 HARD CONSTRAINTS:
 1. NO file may exceed 120 lines of code. Split if needed.
@@ -89,10 +107,11 @@ HARD CONSTRAINTS:
 4. Pages are composition only — import + render layout.
 5. Never mix types + UI + API logic in one file.
 6. One file per concern (no god files).
-7. Generate production-quality boilerplate with proper imports.
+7. Generate production-quality code with proper imports.
 8. Follow the stack specified in the project manifest.
 9. Include proper .gitignore, package.json/requirements.txt.
 10. Use TypeScript for frontend, Python for backend.
+11. NEVER generate TODO comments — all code must be functional.
 """
 
 CODER_SYSTEM = """\
@@ -105,6 +124,19 @@ The backend discriminator has classified each file as GENESIS or SURGICAL:
 - GENESIS files (new): use --- /dev/null format for new file diffs
 
 The architectural ledger and semantic context are provided. Respect them.
+
+CRITICAL — SCAFFOLD TODO COMPLETION:
+If the Scaffold Files section contains ANY files with TODO comments, empty function
+bodies, placeholder implementations, or stub code, you MUST generate patches that
+replace every single one with real, working implementations. This is your PRIMARY
+job in genesis mode. Specifically:
+1. Every "// TODO" comment MUST be replaced with real code.
+2. Every empty onClick/onSubmit handler MUST be filled with real logic.
+3. Every empty async function MUST contain real database calls using window.supabase.
+4. Every component that renders static/hardcoded data MUST be patched to fetch from the database.
+5. Do NOT leave a single TODO comment in the final output.
+If you see scaffold files that are already fully implemented (no TODOs), focus on
+patching any remaining issues. But if TODOs exist, filling them is your #1 priority.
 
 OUTPUT FORMAT (strict JSON):
 {
@@ -512,6 +544,16 @@ CRITICAL DATA-FLOW VIOLATIONS (auto-reject — these cause "X.map is not a funct
 - Child component receives array prop without default → function CaseTable({ cases }) instead of { cases = [] }
 - Prop name mismatch: parent passes data={cases} but child expects { cases }
 - Any component that returns null or undefined (blank screen crash)
+
+CRITICAL TODO/STUB VIOLATIONS (auto-reject — these cause non-functional apps):
+- Any "// TODO" comment remaining in the code → REJECT (must be implemented)
+- Empty function bodies (e.g. async function addCase() {}) → REJECT
+- onClick/onSubmit handlers that do nothing → REJECT
+- Placeholder/stub implementations (e.g. console.log("not implemented")) → REJECT
+- Components that render but have no real data fetching → REJECT
+- Buttons that exist in JSX but have empty or missing event handlers → REJECT
+If a CRUD app has ANY button, form, or action that doesn't actually perform a real
+database operation, set approved=false with severity="critical".
 
 STRUCTURAL CHECKS (from refactored architecture):
 11. No file exceeds 120 LOC (CRITICAL if violated)
