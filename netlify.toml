@@ -33,9 +33,5 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
 
-# SPA routing fallback for client-side navigation
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-  conditions = {Role = ["admin"]}
+# Note: No SPA fallback redirect needed — @netlify/plugin-nextjs handles
+# all SSR, ISR, and client-side routing automatically.
