@@ -18,16 +18,33 @@ const FILE_FORMAT = `You MUST respond with ONLY code files in the following exac
 (file content)
 ===END_FILE===
 
-## Architecture — MULTI-FILE IS THE DEFAULT
+## Architecture — FILE STRUCTURE RULES
 - Main entry: \`src/app/page.tsx\` with a default export React function component
-- ALWAYS split your code into multiple files. The system CRASHES if any single file exceeds 250 lines.
-  - \`src/app/page.tsx\` — main page: imports components, manages top-level state, renders layout (under 150 lines)
-  - \`src/components/[Name].tsx\` — one file per major UI section (table, form, modal, sidebar, chart, card grid)
-  - \`src/types.ts\` — shared TypeScript interfaces and types (if more than 2 interfaces)
-  - \`src/data.ts\` — mock data arrays and constants (if more than 10 items)
+
+### SINGLE-FILE CRUD RULE — CRITICAL (prevents "onSubmit is not a function"):
+For apps involving CRUD operations (todo list, case management, CRM, inventory, contacts, trackers, planners, boards, tickets, expense trackers, booking systems, notes, journal, tasks, events, or ANY app where users add/edit/remove items), you MUST put ALL code in a SINGLE \`src/app/page.tsx\` file:
+- State declarations (useState for items, loading, error, form inputs)
+- Database operations (load, add, update, delete) using \`window.supabase\`
+- Form handling (inline \`<form onSubmit={handler}>\` — handler is defined in SAME file)
+- Table/list rendering (inline, NOT a separate component)
+- Error and loading UI
+- page.tsx may be up to 300 lines for CRUD apps
+
+DO NOT split CRUD apps into separate component files. DO NOT create src/components/ for CRUD.
+DO NOT create src/types.ts or src/data.ts for CRUD apps.
+WHY: Multi-file CRUD apps fail because prop name mismatches between parent and child components cause "onSubmit is not a function" errors. Single-file eliminates this entirely.
+
+### MULTI-FILE RULE (for non-CRUD static apps only):
+For STATIC apps (landing pages, dashboards, calculators, UI demos) that do NOT need database CRUD:
+- Split code into multiple files. No single file should exceed 250 lines.
+  - \`src/app/page.tsx\` — main page: imports components, manages top-level state (under 150 lines)
+  - \`src/components/[Name].tsx\` — one file per major UI section
+  - \`src/types.ts\` — shared TypeScript interfaces and types
+  - \`src/data.ts\` — mock data arrays and constants
   - \`src/app/globals.css\` — custom CSS animations or base styles
-- Import components with: \`import ComponentName from "@/components/ComponentName"\` or \`import { Thing } from "@/types"\`
-- The ONLY exception: if the ENTIRE app is truly a single tiny widget under 150 lines total (e.g., "a counter", "a color picker")
+- Import components with: \`import ComponentName from "@/components/ComponentName"\`
+
+### General rules:
 - Use React + TypeScript + Tailwind CSS
 - Use \`className\` (not \`class\`)
 - You MAY import from "react" (useState, useEffect, useRef, useMemo, useCallback, useContext, useReducer)
@@ -35,7 +52,13 @@ const FILE_FORMAT = `You MUST respond with ONLY code files in the following exac
 - Do NOT import from external packages (no lucide-react, no framer-motion, no date-fns, etc.)
 - Each component file MUST have a default export: \`export default function ComponentName() { ... }\`
 
-### Example file structure for a meal tracker app (OUTPUT IN THIS ORDER):
+### Example: Single-file CRUD app (case management) — OUTPUT IN THIS ORDER:
+\`\`\`
+src/app/page.tsx          — EVERYTHING: state, CRUD functions, form, table, UI (up to 300 lines)
+src/app/globals.css       — optional CSS animations
+\`\`\`
+
+### Example: Multi-file static app (meal tracker landing page) — OUTPUT IN THIS ORDER:
 \`\`\`
 src/app/page.tsx          — OUTPUT FIRST! imports components, manages state, renders layout
 src/app/globals.css       — animations
@@ -327,8 +350,8 @@ const BASE_RULES = `Rules:
 - CSS file should be "src/app/globals.css"
 
 Code architecture:
-- Split code into multiple files as described in the Architecture section above
-- page.tsx should import components from @/components/ and keep under 150 lines
+- For CRUD apps: put ALL code in a single page.tsx (up to 300 lines). No separate component files.
+- For static apps: split into multiple files as described in the Architecture section above.
 - Each component file MUST have a default export function component
 - You MAY import from "react" (e.g. import { useState, useEffect } from "react"). React hooks ARE supported.
 - Do NOT import from next/image, next/link, next/router, or any Next.js packages
