@@ -197,7 +197,7 @@ const { data, error } = await window.supabase
   .single();
 \`\`\`
 
-**READ:**
+**READ (always destructure { data, error }, always guard with || []):**
 \`\`\`javascript
 const { data, error } = await window.supabase
   .from('app_data')
@@ -205,6 +205,9 @@ const { data, error } = await window.supabase
   .eq('collection', 'items')
   .eq('project_id', window.__VEDAA_PROJECT_ID)
   .order('created_at', { ascending: false });
+
+if (error) { setError(error.message); return; }
+setItems((data || []).map(row => ({ id: row.record_id, ...row.data, version: row.version })));
 \`\`\`
 
 **UPDATE:**
@@ -334,37 +337,60 @@ Code architecture:
 
 CRITICAL rendering rule — ZERO-NULL POLICY (violating this causes a blank white screen):
 - The default export in page.tsx and EVERY component MUST return visible JSX on the FIRST render — ALWAYS
-- NEVER write \`return null\`, \`return undefined\`, or \`return <></>\` anywhere in any component
-- NEVER use loading guards like \`if (loading) return null\` or \`if (!data) return null\`
-- Initialize ALL state with inline mock data so components render immediately:
-
-FORBIDDEN (causes blank screen):
-  const [items, setItems] = useState([]);          // ❌ empty = renders nothing
-  useEffect(() => { setItems(mockData); }, []);     // ❌ data arrives AFTER first render
-  if (items.length === 0) return null;              // ❌ BLANK SCREEN
-
-CORRECT (renders instantly):
-  const [items, setItems] = useState([              // ✅ inline initial data
-    { id: 1, name: "Wireless Headphones", price: 79.99 },
-    { id: 2, name: "Smart Watch", price: 199.99 },
-    { id: 3, name: "Laptop Stand", price: 49.99 },
-  ]);
-  // No useEffect needed — component renders immediately with data
-
-- If you MUST use useEffect for a timer/animation, STILL render the full UI on first render
+- NEVER write \`return null\`, \`return undefined\`, or \`return <></>\` from any component
 - Every component must return a \`<div>\` (or other element) with visible content — no exceptions
 
-DEFENSIVE CODING — PREVENT UNDEFINED CRASHES:
-- When passing arrays as props to child components, ALWAYS provide a default: \`function StatsCards({ cases = [] })\`
-- When accessing .length, .map(), .filter() etc., ALWAYS guard: \`(items || []).length\`, \`(items || []).map(...)\`
-- When destructuring props, ALWAYS provide defaults for arrays and objects:
-  FORBIDDEN: \`function Stats({ cases }) { return cases.length; }\`  // ❌ crashes if cases is undefined
-  CORRECT: \`function Stats({ cases = [] }) { return cases.length; }\`  // ✅ safe
+For STATIC apps (landing pages, calculators, UI demos — NO database):
+  Initialize state with inline mock data so components render immediately:
+  const [items, setItems] = useState([
+    { id: 1, name: "Wireless Headphones", price: 79.99 },
+    { id: 2, name: "Smart Watch", price: 199.99 },
+  ]);
 
-DATABASE APPS — IMPORTANT:
-- For apps that manage data (CRUD), initialize arrays as empty \`useState([])\` and load from database in useEffect
-- Show a loading spinner while data loads, and an empty state when array is empty
-- Do NOT use hardcoded mock arrays — use real Supabase CRUD (see Database section above)
+For DATABASE apps (CRUD — todo, case management, CRM, trackers, etc.):
+  Initialize arrays as empty and load from DB. Show a loading spinner, never return null:
+  const [items, setItems] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  // Then in JSX: isLoading ? <LoadingSpinner /> : items.length === 0 ? <EmptyState /> : <ItemList items={items} />
+  Do NOT use hardcoded mock arrays — use real Supabase CRUD (see Database section).
+
+SUPABASE RESPONSE SHAPE — CRITICAL (violating this causes "X.map is not a function"):
+Supabase queries return \`{ data, error }\`. You MUST destructure correctly:
+
+  FORBIDDEN — causes "cases.map is not a function":
+    const result = await window.supabase.from('app_data').select('*')...;
+    setCases(result);  // ❌ result is {data:[], error:null} — an OBJECT, not an array
+
+  FORBIDDEN — causes "cases.map is not a function":
+    const { data } = await window.supabase.from('app_data').select('*')...;
+    setCases(data);    // ❌ data can be null — null has no .map()
+
+  CORRECT — always safe:
+    const { data, error } = await window.supabase.from('app_data').select('*')...;
+    if (error) { setError(error.message); return; }
+    setCases((data || []).map(row => ({ id: row.record_id, ...row.data })));  // ✅ always an array
+
+COMPONENT WIRING — PARENT-TO-CHILD PROPS (violating this causes "Cannot read properties of undefined"):
+When a parent component passes data to child components, you MUST follow this pattern:
+
+  FORBIDDEN — causes "Cannot read properties of undefined (reading 'map')":
+    // Parent renders <CaseTable /> without passing the cases prop
+    // Child does: function CaseTable({ cases }) { return cases.map(...) }
+
+  FORBIDDEN — prop name mismatch:
+    // Parent: <CaseTable data={cases} />
+    // Child: function CaseTable({ cases }) { ... }  // receives undefined because prop is named "data"
+
+  CORRECT — explicit prop passing with defaults:
+    // Parent: <CaseTable cases={cases} onDelete={deleteCase} />
+    // Child: function CaseTable({ cases = [], onDelete }) { return cases.map(...) }
+
+  Rules:
+  1. Parent MUST explicitly pass ALL array/object props to children
+  2. Child MUST default every array prop to []: \`{ cases = [], items = [] }\`
+  3. Child MUST default every object prop to {}: \`{ user = {}, config = {} }\`
+  4. Prop names MUST match exactly between parent JSX and child destructuring
+  5. NEVER rely on a child reading state directly — always pass via props
 
 Interactivity:
 - You CAN use React hooks: useState, useEffect, useRef, useMemo, useCallback, useContext

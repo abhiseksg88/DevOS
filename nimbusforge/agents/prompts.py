@@ -233,7 +233,7 @@ if (error) {
 MANDATORY PATTERNS:
 1. ✅ ALWAYS use try/catch or error checks for all database operations
 2. ✅ ALWAYS use isLoading state (useState) during async operations
-3. ✅ ALWAYS display loading UI ("Loading..." or spinner) while fetching
+3. ✅ ALWAYS display loading UI ("Loading..." or spinner) while fetching — NEVER return null
 4. ✅ ALWAYS display error messages to the user (not just console.error)
 5. ✅ ALWAYS use collection names that are lowercase alphanumeric (no spaces)
 6. ✅ ALWAYS use window.supabase (never import or mock)
@@ -245,35 +245,72 @@ MANDATORY PATTERNS:
 12. ✅ ALWAYS include tenant_id, project_id, and app_instance_id in INSERT operations using window.__VEDAA_TENANT_ID, window.__VEDAA_PROJECT_ID, window.__VEDAA_APP_INSTANCE_ID
 13. ✅ ALWAYS filter by project_id in READ, UPDATE, and DELETE operations using .eq('project_id', window.__VEDAA_PROJECT_ID)
 
-COMPLETE EXAMPLE (Meal Planner with CRUD):
+SUPABASE RESPONSE SHAPE — CRITICAL (violating this causes "X.map is not a function"):
+Supabase queries return { data, error }. You MUST destructure correctly:
+
+  FORBIDDEN — causes "cases.map is not a function":
+    const result = await window.supabase.from('app_data').select('*')...;
+    setCases(result);   // ❌ result is {data:[], error:null} — an OBJECT, not array
+
+  FORBIDDEN — causes "cases.map is not a function":
+    const { data } = await window.supabase.from('app_data').select('*')...;
+    setCases(data);     // ❌ data can be null
+
+  CORRECT — always safe:
+    const { data, error } = await window.supabase.from('app_data').select('*')...;
+    if (error) { setError(error.message); return; }
+    setCases((data || []).map(row => ({ id: row.record_id, ...row.data })));
+
+COMPONENT WIRING — PARENT-TO-CHILD PROPS (violating this causes "Cannot read properties of undefined"):
+When passing data from parent to child components:
+
+  FORBIDDEN — crashes with "Cannot read properties of undefined (reading 'map')":
+    <CaseTable />  // ❌ no cases prop passed — child gets undefined
+
+  FORBIDDEN — prop name mismatch:
+    <CaseTable data={cases} />  // parent calls it "data"
+    function CaseTable({ cases }) { ... }  // child expects "cases" — gets undefined
+
+  CORRECT:
+    <CaseTable cases={cases} onDelete={deleteCase} />  // ✅ explicit prop
+    function CaseTable({ cases = [], onDelete }) { return cases.map(...) }  // ✅ default
+
+  Rules:
+  1. Parent MUST explicitly pass ALL array/object props
+  2. Child MUST default every array prop: { cases = [], items = [] }
+  3. Prop names MUST match exactly between parent and child
+  4. NEVER rely on child reading state directly — always pass via props
+
+COMPLETE EXAMPLE — MULTI-COMPONENT (Case Manager with parent→child wiring):
+
+File: src/app/page.tsx (parent — owns state, passes props to children)
 ```jsx
 'use client';
 import { useState, useEffect } from 'react';
+import CaseTable from '@/components/CaseTable';
+import AddCaseForm from '@/components/AddCaseForm';
 
-export default function MealPlanner() {
-  const [meals, setMeals] = useState([]);
+export default function CaseManager() {
+  const [cases, setCases] = useState([]);       // ← always [] never undefined
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [newMealName, setNewMealName] = useState('');
 
-  // Load meals on mount
-  useEffect(() => {
-    loadMeals();
-  }, []);
+  useEffect(() => { loadCases(); }, []);
 
-  async function loadMeals() {
+  async function loadCases() {
     setIsLoading(true);
     setError(null);
     try {
-      const { data, error: err } = await window.supabase
+      const { data, error: err } = await window.supabase  // ← MUST destructure { data, error }
         .from('app_data')
         .select('*')
-        .eq('collection', 'meals')
+        .eq('collection', 'cases')
         .eq('project_id', window.__VEDAA_PROJECT_ID)
         .order('created_at', { ascending: false });
 
       if (err) throw err;
-      setMeals((data || []).map(row => ({ id: row.record_id, ...row.data, version: row.version })));
+      // ← MUST use (data || []) — data can be null
+      setCases((data || []).map(row => ({ id: row.record_id, ...row.data, version: row.version })));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -281,8 +318,7 @@ export default function MealPlanner() {
     }
   }
 
-  async function createMeal() {
-    if (!newMealName.trim()) return;
+  async function addCase(title, priority) {
     setError(null);
     try {
       const { data, error: err } = await window.supabase
@@ -291,87 +327,107 @@ export default function MealPlanner() {
           tenant_id: window.__VEDAA_TENANT_ID,
           project_id: window.__VEDAA_PROJECT_ID,
           app_instance_id: window.__VEDAA_APP_INSTANCE_ID,
-          collection: 'meals',
+          collection: 'cases',
           record_id: crypto.randomUUID(),
-          data: { name: newMealName, date: new Date().toISOString().split('T')[0], items: [] }
+          data: { title, priority, status: 'open', createdAt: new Date().toISOString() }
         })
         .select()
         .single();
 
       if (err) throw err;
-      setMeals([{ id: data.record_id, ...data.data, version: data.version }, ...meals]);
-      setNewMealName('');
+      setCases(prev => [{ id: data.record_id, ...data.data, version: data.version }, ...prev]);
     } catch (e) {
       setError(e.message);
     }
   }
 
-  async function deleteMeal(id) {
+  async function deleteCase(id) {
     setError(null);
     try {
       const { error: err } = await window.supabase
         .from('app_data')
         .delete()
-        .eq('collection', 'meals')
+        .eq('collection', 'cases')
         .eq('record_id', id)
         .eq('project_id', window.__VEDAA_PROJECT_ID);
-
       if (err) throw err;
-      setMeals(meals.filter(m => m.id !== id));
+      setCases(prev => prev.filter(c => c.id !== id));
     } catch (e) {
       setError(e.message);
     }
   }
 
-  if (isLoading) return <div className="p-8 text-center">Loading meals...</div>;
-
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-6">Meal Planner</h1>
-
-      {error && (
-        <div className="mb-4 p-4 bg-red-100 text-red-700 rounded">
-          Error: {error}
-        </div>
-      )}
-
-      <div className="mb-6 flex gap-2">
-        <input
-          type="text"
-          value={newMealName}
-          onChange={(e) => setNewMealName(e.target.value)}
-          placeholder="Meal name"
-          className="flex-1 px-4 py-2 border rounded"
-        />
-        <button
-          onClick={createMeal}
-          className="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-        >
-          Add Meal
-        </button>
-      </div>
-
-      {meals.length === 0 ? (
-        <p className="text-gray-500 text-center py-8">No meals yet. Add your first meal above!</p>
+    <div className="p-8 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6">Case Manager</h1>
+      {error && <div className="mb-4 p-4 bg-red-100 text-red-700 rounded">Error: {error}</div>}
+      <AddCaseForm onAdd={addCase} />
+      {isLoading ? (
+        <div className="text-center py-8 text-gray-500">Loading cases...</div>
       ) : (
-        <ul className="space-y-2">
-          {meals.map((meal) => (
-            <li key={meal.id} className="flex justify-between items-center p-4 bg-white shadow rounded">
-              <span className="font-medium">{meal.name}</span>
-              <button
-                onClick={() => deleteMeal(meal.id)}
-                className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
-              >
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
+        <CaseTable cases={cases} onDelete={deleteCase} />
       )}
     </div>
   );
 }
 ```
+
+File: src/components/CaseTable.tsx (child — receives props, defaults arrays)
+```jsx
+export default function CaseTable({ cases = [], onDelete }) {
+  if (cases.length === 0) {
+    return <p className="text-gray-500 text-center py-8">No cases yet.</p>;
+  }
+  return (
+    <div className="space-y-2">
+      {cases.map((c) => (
+        <div key={c.id} className="flex justify-between items-center p-4 bg-white shadow rounded">
+          <div>
+            <span className="font-medium">{c.title}</span>
+            <span className="ml-2 text-sm text-gray-500">{c.priority}</span>
+          </div>
+          <button onClick={() => onDelete(c.id)} className="px-3 py-1 bg-red-500 text-white rounded text-sm">Delete</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+File: src/components/AddCaseForm.tsx (child — receives callback)
+```jsx
+import { useState } from 'react';
+export default function AddCaseForm({ onAdd }) {
+  const [title, setTitle] = useState('');
+  const [priority, setPriority] = useState('medium');
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    onAdd(title, priority);
+    setTitle('');
+  }
+  return (
+    <form onSubmit={handleSubmit} className="mb-6 flex gap-2">
+      <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Case title" className="flex-1 px-4 py-2 border rounded" />
+      <select value={priority} onChange={e => setPriority(e.target.value)} className="px-3 py-2 border rounded">
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+      <button type="submit" className="px-6 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Add Case</button>
+    </form>
+  );
+}
+```
+
+KEY PATTERNS demonstrated above:
+1. State lives in the PARENT (page.tsx) — initialized as [] not undefined
+2. ALWAYS destructure { data, error } from Supabase — NEVER setCases(result)
+3. ALWAYS guard: setCases((data || []).map(...)) — NEVER setCases(data)
+4. Parent passes array prop explicitly: <CaseTable cases={cases} onDelete={deleteCase} />
+5. Child defaults array props: function CaseTable({ cases = [], onDelete })
+6. Loading state renders visible JSX (not null) — loading spinner or text
+7. State updates use functional form: setCases(prev => [...prev, newItem])
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -448,6 +504,14 @@ CRITICAL DATABASE VIOLATIONS (auto-reject):
 - Setting array state directly from data without null guard (must use data || [])
 - INSERT without tenant_id/project_id/app_instance_id from window.__VEDAA_* globals → REJECT
 - READ/UPDATE/DELETE without project_id filter → REJECT
+
+CRITICAL DATA-FLOW VIOLATIONS (auto-reject — these cause "X.map is not a function"):
+- setCases(result) where result is the full Supabase response object → MUST destructure { data, error }
+- setCases(data) without null guard → MUST use (data || []).map(...)
+- Passing data to child component without explicit prop → <CaseTable /> without cases={cases}
+- Child component receives array prop without default → function CaseTable({ cases }) instead of { cases = [] }
+- Prop name mismatch: parent passes data={cases} but child expects { cases }
+- Any component that returns null or undefined (blank screen crash)
 
 STRUCTURAL CHECKS (from refactored architecture):
 11. No file exceeds 120 LOC (CRITICAL if violated)
