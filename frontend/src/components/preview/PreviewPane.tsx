@@ -251,6 +251,8 @@ ${cleanCSS}
           if(result&&result.data===null&&!isSingle){
             result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
           }
+          /* Enrich: add array methods to response so setCases(result) still works */
+          if(!isSingle&&typeof __enrichResult==='function') __enrichResult(result);
           return res?res(result):result;
         },rej);
       };
@@ -272,7 +274,25 @@ ${cleanCSS}
      - .then() (called by await) normalizes the response:
        {data: null} → {data: []}  for list queries
        No change for .single() queries
+     Additionally, for list queries the response object is enriched with array
+     methods (map, filter, etc.) that delegate to response.data. This handles
+     the case where generated code does setCases(result) without destructuring.
   */
+  var __arrayMethods='map,filter,find,findIndex,forEach,some,every,reduce,reduceRight,includes,indexOf,lastIndexOf,flat,flatMap,slice,sort,concat,join,splice,push,pop,shift,unshift,reverse,fill,copyWithin,entries,keys,values,at,toString'.split(',');
+  function __enrichResult(result){
+    if(!result||typeof result!=='object'||!Array.isArray(result.data)) return result;
+    var arr=result.data;
+    __arrayMethods.forEach(function(m){
+      if(typeof arr[m]==='function'&&!(m in result)){
+        result[m]=function(){return arr[m].apply(arr,arguments)};
+      }
+    });
+    if(!('length' in result)){
+      Object.defineProperty(result,'length',{get:function(){return arr.length},configurable:true,enumerable:false});
+    }
+    try{if(typeof Symbol!=='undefined'&&Symbol.iterator&&!(Symbol.iterator in result)){result[Symbol.iterator]=function(){return arr[Symbol.iterator]()};}}catch(x){}
+    return result;
+  }
   function __wrapSB(client){
     if(!client||!client.from) return client;
     var _origFrom=client.from.bind(client);
@@ -293,6 +313,7 @@ ${cleanCSS}
               if(result&&result.data===null&&!isSingle){
                 result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
               }
+              if(!isSingle) __enrichResult(result);
               return onRes?onRes(result):result;
             },onRej);
           };
@@ -690,7 +711,22 @@ ${cleanCSS}
   window.__VEDAA_APP_INSTANCE_ID="${(projectId || "deployed").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}";
   /* --- Supabase response normalizer (same as preview) ---
      Wraps .from() chains so that {data:null} → {data:[]} for list queries.
-     This prevents "X.filter is not a function" when Supabase returns null data. */
+     Also enriches response with array methods so setCases(result) still works. */
+  var __arrayMethods='map,filter,find,findIndex,forEach,some,every,reduce,reduceRight,includes,indexOf,lastIndexOf,flat,flatMap,slice,sort,concat,join,splice,push,pop,shift,unshift,reverse,fill,copyWithin,entries,keys,values,at,toString'.split(',');
+  function __enrichResult(result){
+    if(!result||typeof result!=='object'||!Array.isArray(result.data)) return result;
+    var arr=result.data;
+    __arrayMethods.forEach(function(m){
+      if(typeof arr[m]==='function'&&!(m in result)){
+        result[m]=function(){return arr[m].apply(arr,arguments)};
+      }
+    });
+    if(!('length' in result)){
+      Object.defineProperty(result,'length',{get:function(){return arr.length},configurable:true,enumerable:false});
+    }
+    try{if(typeof Symbol!=='undefined'&&Symbol.iterator&&!(Symbol.iterator in result)){result[Symbol.iterator]=function(){return arr[Symbol.iterator]()};}}catch(x){}
+    return result;
+  }
   function __wrapSB(client){
     if(!client||!client.from) return client;
     var _origFrom=client.from.bind(client);
@@ -711,6 +747,7 @@ ${cleanCSS}
               if(result&&result.data===null&&!isSingle){
                 result={data:[],error:result.error,count:result.count,status:result.status,statusText:result.statusText};
               }
+              if(!isSingle) __enrichResult(result);
               return onRes?onRes(result):result;
             },onRej);
           };
