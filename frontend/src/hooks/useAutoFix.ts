@@ -104,8 +104,8 @@ function parseFixFiles(text: string, existingFiles: FileNode[]): GeneratedFile[]
   return files;
 }
 
-const MAX_ITERATIONS = 3;
-const DEBOUNCE_MS = 1500; // Wait 1.5s for errors to settle
+const MAX_ITERATIONS = 5;
+const DEBOUNCE_MS = 1200; // Wait 1.2s for errors to settle
 
 /**
  * Auto-fix hook: captures preview errors, sends them to the fix agent,

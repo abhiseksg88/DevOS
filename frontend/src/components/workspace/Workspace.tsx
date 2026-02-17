@@ -257,6 +257,23 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const handlePreviewError = useCallback(
     (msg: string) => {
+      if (!msg) return;
+
+      // Add a visible message to chat (only first occurrence)
+      setMessages((prev) => {
+        const fixMsg = {
+          id: crypto.randomUUID(),
+          role: "system" as const,
+          content: autoFix.isFixing
+            ? `Auto-fixing: "${msg.slice(0, 120)}..."`
+            : `Preview error detected: "${msg.slice(0, 120)}". Auto-fix will attempt to resolve this.`,
+          timestamp: Date.now(),
+        };
+        if (prev.some((m) => m.content === fixMsg.content)) return prev;
+        return [...prev, fixMsg];
+      });
+
+      // Trigger auto-fix
       if (!generator.isGenerating && !autoFix.isFixing) {
         autoFix.reportError(msg);
       } else {
@@ -813,22 +830,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   tenantId={resolvedTenantId}
                   projectId={projectId}
                   userToken={token}
-                  onError={(errorMsg) => {
-                    // Auto-suggest fix if not already generating
-                    if (!generator.isGenerating && errorMsg) {
-                      const fixMsg: ChatMessage = {
-                        id: crypto.randomUUID(),
-                        role: "system",
-                        content: `Preview error detected: "${errorMsg}". Click "Fix Error" below or send a new prompt to fix it.`,
-                        timestamp: Date.now(),
-                      };
-                      setMessages((prev) => {
-                        // Avoid duplicate error messages
-                        if (prev.some((m) => m.content === fixMsg.content)) return prev;
-                        return [...prev, fixMsg];
-                      });
-                    }
-                  }}
+                  onError={handlePreviewError}
                 />
               )}
 

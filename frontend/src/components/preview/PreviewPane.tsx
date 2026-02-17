@@ -549,69 +549,68 @@ ${cleanCSS}
 
   /* ================================================================
      TRUNCATED CODE REPAIR — fixes code cut off by token limits.
-     When Babel fails on raw code, this attempts structural repair:
-     1. Close unclosed string literals (" ' \`)
-     2. Close unclosed JSX tags (</div>, />)
-     3. Balance braces/parens for function bodies
-     4. Add default export if missing
-     Called only as fallback when Babel.transform fails on raw code.
+     Strategy: find the last complete return statement and discard
+     everything after it, then close the function properly.
+     If no return found, use line-level truncation + brace balancing.
      ================================================================ */
   function repairTruncatedCode(src){
-    var repaired=src;
-    /* --- Step 1: Close unclosed strings --- */
-    var inSQ=false,inDQ=false,inTL=false;
-    for(var i=0;i<repaired.length;i++){
-      var ch=repaired[i],prev=i>0?repaired[i-1]:'';
-      if(prev==='\\\\') continue;
-      if(!inDQ&&!inTL&&ch==="'"&&prev!=='\\\\') inSQ=!inSQ;
-      else if(!inSQ&&!inTL&&ch==='"'&&prev!=='\\\\') inDQ=!inDQ;
-      else if(!inSQ&&!inDQ&&ch==='${'`'}') inTL=!inTL;
+    /* Strategy A: Find the last complete line that ends with ; or > or )
+       then discard everything after it and close the structure */
+    var lines=src.split('\\n');
+    var cutLine=-1;
+    for(var i=lines.length-1;i>=0;i--){
+      var trimmed=lines[i].trim();
+      /* A "safe" line ends with a complete statement or JSX close */
+      if(trimmed.length>0 && (
+        trimmed.endsWith(';') ||
+        trimmed.endsWith('>') ||
+        trimmed.endsWith('),') ||
+        trimmed.endsWith('},') ||
+        trimmed.endsWith('])') ||
+        trimmed.endsWith('/>') ||
+        trimmed==='}'||trimmed===');'||trimmed==='],'
+      )){
+        cutLine=i;
+        break;
+      }
     }
-    if(inDQ) repaired+='"';
-    if(inSQ) repaired+="'";
-    if(inTL) repaired+='${'`'}';
 
-    /* --- Step 2: Close unclosed JSX attribute/tag --- */
-    var lines=repaired.split('\\n');
-    var lastLines=lines.slice(-3).join(' ');
-    if(lastLines.match(/<\\w[^>]*$/)){
-      repaired+=' />';
+    var repaired;
+    if(cutLine>0 && cutLine<lines.length-1){
+      /* Cut at the last safe line */
+      repaired=lines.slice(0,cutLine+1).join('\\n');
+      console.log('[Preview] repairTruncatedCode: cut at line',cutLine+1,'(removed',lines.length-cutLine-1,'broken lines)');
+    }else{
+      repaired=src;
     }
 
-    /* --- Step 3: Balance braces and parens --- */
-    var braces=0,parens=0,brackets=0;
-    inSQ=false;inDQ=false;inTL=false;
-    var inLineComment=false,inBlockComment=false;
+    /* Balance braces/parens/brackets (simple counter, skip strings) */
+    var braces=0,parens=0,brackets=0,inStr=false,strCh='';
     for(var j=0;j<repaired.length;j++){
-      var c=repaired[j],p=j>0?repaired[j-1]:'',n=j<repaired.length-1?repaired[j+1]:'';
-      if(inLineComment){if(c==='\\n')inLineComment=false;continue;}
-      if(inBlockComment){if(c==='*'&&n==='/')inBlockComment=false;continue;}
-      if(!inSQ&&!inDQ&&!inTL&&c==='/'&&n==='/')inLineComment=true;
-      if(!inSQ&&!inDQ&&!inTL&&c==='/'&&n==='*')inBlockComment=true;
-      if(p==='\\\\') continue;
-      if(!inDQ&&!inTL&&c==="'"&&!inLineComment&&!inBlockComment) inSQ=!inSQ;
-      else if(!inSQ&&!inTL&&c==='"'&&!inLineComment&&!inBlockComment) inDQ=!inDQ;
-      else if(!inSQ&&!inDQ&&c==='${'`'}'&&!inLineComment&&!inBlockComment) inTL=!inTL;
-      if(inSQ||inDQ||inTL||inLineComment||inBlockComment) continue;
+      var c=repaired[j];
+      if(inStr){if(c===strCh&&repaired[j-1]!=='\\\\')inStr=false;continue;}
+      if(c==='"'||c==="'"||c==='${'`'}'){inStr=true;strCh=c;continue;}
       if(c==='{')braces++;else if(c==='}')braces--;
       if(c==='(')parens++;else if(c===')')parens--;
       if(c==='[')brackets++;else if(c===']')brackets--;
     }
-    while(brackets>0){repaired+=']';brackets--;}
-    while(parens>0){repaired+=')';parens--;}
-    /* Close JSX return before closing function braces */
-    if(braces>1){
-      repaired+='\\n      </div>';
-    }
-    while(braces>0){repaired+='\\n}';braces--;}
 
-    /* --- Step 4: Ensure default export --- */
+    /* Close any open structures */
+    var suffix='';
+    if(brackets>0) suffix+='\\n'.repeat(1)+']'.repeat(brackets);
+    if(parens>0) suffix+='\\n'.repeat(1)+')'.repeat(parens);
+    /* For JSX: close with </div> for each extra brace level above 1 (the function body) */
+    if(braces>2) suffix+='\\n'+'</div>\\n'.repeat(braces-2);
+    while(braces>0){suffix+='\\n}';braces--;}
+    repaired+=suffix;
+
+    /* Ensure default export */
     if(repaired.indexOf('export default')===-1){
-      var fnMatch=repaired.match(/(?:^|\\n)\\s*function\\s+(\\w+)/);
+      var fnMatch=repaired.match(/function\\s+(\\w+)/);
       if(fnMatch) repaired+='\\nexport default '+fnMatch[1]+';';
     }
 
-    console.log('[Preview] repairTruncatedCode applied — added',repaired.length-src.length,'chars');
+    console.log('[Preview] repairTruncatedCode: added',repaired.length-src.length,'chars of closing structure');
     return repaired;
   }
 
