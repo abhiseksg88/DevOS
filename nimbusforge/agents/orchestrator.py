@@ -133,8 +133,6 @@ def _ensure_app_data_table(db, settings: Settings) -> bool:
 
         try:
             import httpx
-            # Use Supabase's PostgREST SQL execution via the /rest/v1/rpc endpoint
-            # The service-role key bypasses RLS and has DDL permissions
             url = settings.supabase_url.rstrip("/")
             headers = {
                 "apikey": settings.supabase_service_role_key,
@@ -143,29 +141,79 @@ def _ensure_app_data_table(db, settings: Settings) -> bool:
                 "Prefer": "return=minimal",
             }
 
-            # Try to create via the Supabase SQL query endpoint (Management API)
-            # For hosted Supabase, the SQL endpoint is at the project URL
-            # For self-hosted, we try the PostgREST RPC approach
-            resp = httpx.post(
-                f"{url}/rest/v1/rpc/",
-                json={"query": create_sql},
-                headers=headers,
-                timeout=30,
+            # ----- Approach 1: Direct PostgreSQL connection (most reliable) -----
+            db_url = getattr(settings, 'database_url', None) or getattr(settings, 'supabase_db_url', None)
+            if db_url:
+                try:
+                    import psycopg2
+                    conn = psycopg2.connect(db_url)
+                    conn.autocommit = True
+                    with conn.cursor() as cur:
+                        cur.execute(create_sql)
+                    conn.close()
+                    _tbl_logger.info("app_data table auto-created via direct DB connection.")
+                    return True
+                except ImportError:
+                    _tbl_logger.info("psycopg2 not installed, trying HTTP approach...")
+                except Exception as pg_err:
+                    _tbl_logger.warning("Direct DB creation failed: %s, trying HTTP...", pg_err)
+
+            # ----- Approach 2: Supabase SQL HTTP API (/pg/query for self-hosted) -----
+            for endpoint in [
+                f"{url}/rest/v1/rpc/exec_sql",         # Custom RPC function if available
+                f"{url}/pg/query",                       # Self-hosted Supabase pgMeta
+            ]:
+                try:
+                    resp = httpx.post(
+                        endpoint,
+                        json={"query": create_sql},
+                        headers=headers,
+                        timeout=30,
+                    )
+                    if resp.status_code < 400:
+                        _tbl_logger.info("app_data table auto-created via %s.", endpoint)
+                        return True
+                except Exception:
+                    continue
+
+            # ----- Approach 3: Execute each statement via PostgREST RPC -----
+            # Create a minimal table without the complex DDL
+            simple_sql = (
+                "CREATE TABLE IF NOT EXISTS app_data ("
+                "id UUID PRIMARY KEY DEFAULT gen_random_uuid(),"
+                "tenant_id UUID NOT NULL,"
+                "project_id UUID NOT NULL,"
+                "app_instance_id TEXT NOT NULL DEFAULT '',"
+                "collection TEXT NOT NULL,"
+                "record_id TEXT NOT NULL,"
+                "data JSONB NOT NULL DEFAULT '{}'::jsonb,"
+                "version INTEGER NOT NULL DEFAULT 1,"
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+                "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+                "UNIQUE(project_id, app_instance_id, collection, record_id)"
+                ");"
             )
-
-            if resp.status_code >= 400:
-                # Fallback: the RPC endpoint may not exist.
-                # Log the SQL for manual execution.
-                _tbl_logger.warning(
-                    "Auto-creation failed (status %d). Please run the migration manually:\n"
-                    "  supabase db push\n"
-                    "  OR paste supabase/migrations/004_app_data_table.sql into the SQL editor.",
-                    resp.status_code,
+            # Use the Supabase dashboard SQL endpoint if available
+            try:
+                resp = httpx.post(
+                    f"{url}/rest/v1/rpc/exec_sql",
+                    json={"sql": simple_sql},
+                    headers=headers,
+                    timeout=30,
                 )
-                return False
+                if resp.status_code < 400:
+                    _tbl_logger.info("app_data table created via exec_sql RPC.")
+                    return True
+            except Exception:
+                pass
 
-            _tbl_logger.info("app_data table auto-created successfully.")
-            return True
+            _tbl_logger.warning(
+                "Auto-creation failed. Please run the migration manually:\n"
+                "  supabase db push\n"
+                "  OR paste supabase/migrations/004_app_data_table.sql into the SQL editor.\n"
+                "  OR set DATABASE_URL in env for direct connection.",
+            )
+            return False
         except Exception as create_err:
             _tbl_logger.warning(
                 "Could not auto-create app_data table: %s\n"
