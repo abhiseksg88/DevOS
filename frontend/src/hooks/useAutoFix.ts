@@ -176,18 +176,42 @@ export function useAutoFix(
         e.includes("Unexpected end of input")
       );
 
+      // Escalating simplification pressure — each iteration demands shorter code
+      let simplificationDirective = "";
+      if (iteration >= 4) {
+        simplificationDirective = `\n\nCRITICAL — ATTEMPT ${iteration}/${MAX_ITERATIONS}: Previous fixes were ALSO truncated. You MUST:\n- Strip the UI to ABSOLUTE MINIMUM: one form + one list/table, no extra styling\n- Target UNDER 80 lines total. Remove ALL decorative elements.\n- Use plain <input>, <button>, <table> with minimal Tailwind\n- NO gradients, shadows, cards, modals, tabs — just raw functional UI\n- Working code > pretty code. Ship it ugly but complete.`;
+      } else if (iteration >= 3) {
+        simplificationDirective = `\n\nWARNING — ATTEMPT ${iteration}: Previous fix was STILL too long and got truncated. SIMPLIFY AGGRESSIVELY:\n- Target UNDER 120 lines. Remove decorative UI (gradients, shadows, complex layouts)\n- Use simple <table> instead of cards. Use emoji instead of SVG icons.\n- Combine related state. Remove optional features (search, filter, sort).`;
+      } else if (iteration >= 2) {
+        simplificationDirective = `\n\nNOTE — ATTEMPT ${iteration}: The previous fix also failed (likely truncated). Keep the file UNDER 180 lines. Simplify the UI — remove non-essential visual polish.`;
+      }
+
       const syntaxFixGuidance = isSyntaxError
-        ? `\n\nSYNTAX ERROR DETECTED — This is likely caused by TRUNCATED code (the file was cut off mid-line by token limits). You MUST:\n1. Output the COMPLETE file from start to finish — do NOT skip or abbreviate any section\n2. Make sure EVERY string literal is closed, EVERY JSX tag is closed, EVERY function body has its closing brace\n3. If the file is too long (>250 lines), SIMPLIFY the UI to fit. Remove decorative elements, reduce table columns, simplify forms. Working > pretty.\n4. Keep the file under 250 lines to avoid truncation. This is more important than visual polish.`
-        : "";
+        ? `\n\nSYNTAX ERROR DETECTED — This is likely caused by TRUNCATED code (the file was cut off mid-line by token limits). You MUST:\n1. Output the COMPLETE file from start to finish — do NOT skip or abbreviate any section\n2. Make sure EVERY string literal is closed, EVERY JSX tag is closed, EVERY function body has its closing brace\n3. If the file is too long, SIMPLIFY the UI to fit. Remove decorative elements, reduce table columns, simplify forms. Working > pretty.${simplificationDirective}`
+        : simplificationDirective;
 
       const prompt = `Fix these preview errors:\n\n${errorList}\n\nThis is auto-fix iteration ${iteration}/${MAX_ITERATIONS}. Fix ALL the errors.${syntaxFixGuidance}\n\nCOMMON FIXES:\n- "Unterminated string constant" or "Unexpected token" → CODE WAS TRUNCATED. Regenerate the COMPLETE file, keeping it under 250 lines. Simplify UI if needed.\n- "onSubmit is not a function" or "onAdd is not a function" → PROP NAME MISMATCH. MERGE all components into a single page.tsx file.\n- "Cannot read properties of undefined" → Add optional chaining: obj?.X or default values: { items = [] }\n- "X is not a function" → MERGE components into a single file.\n- All array props MUST have defaults: { cases = [], items = [], data = [] }\n- All data from queries must use (data || []) guard before .map(), .filter(), .length\n\nSINGLE-FILE CRUD RULE: Put ALL CRUD code in page.tsx — state, database calls, form, table. No separate components.\n\nDATABASE: Use window.supabase.from('app_data') for CRUD. Include tenant_id: window.__VEDAA_TENANT_ID, project_id: window.__VEDAA_PROJECT_ID, app_instance_id: window.__VEDAA_APP_INSTANCE_ID in INSERT. Filter by .eq('project_id', window.__VEDAA_PROJECT_ID) in READ/UPDATE/DELETE.\n\nIMPORTANT: Output COMPLETE fixed files using ===FILE: path=== format. Every file MUST end with ===END_FILE===. Do not output partial snippets.`;
+
+      // For syntax/truncation errors on iteration 2+, send only the broken file
+      // to minimize input tokens and maximize output budget
+      let contextFiles = flattenForContext(fileTreeRef.current);
+      if (isSyntaxError && iteration >= 2) {
+        const errorPath = errors[0]?.match(/\/?([\w/.]+\.tsx?):/)?.[1];
+        const normalizedPath = errorPath
+          ? (errorPath.startsWith("src/") ? errorPath : `src/app/${errorPath}`)
+          : "src/app/page.tsx";
+        const filtered = contextFiles.filter(
+          f => f.path === normalizedPath || f.path === "src/app/page.tsx"
+        );
+        if (filtered.length > 0) contextFiles = filtered;
+      }
 
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          existingFiles: flattenForContext(fileTreeRef.current),
+          existingFiles: contextFiles,
           mode: "fix",
         }),
         signal: controller.signal,

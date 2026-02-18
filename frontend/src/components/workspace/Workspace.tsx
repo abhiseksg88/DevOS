@@ -191,7 +191,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
     }, []),
-    // onFixStart — store ID so onFixEnd can update in-place
+    // onFixStart — update existing message or create new one (avoids duplicates)
     useCallback(() => {
       seqRef.current += 1;
       setGenerationEvents((prev) => [
@@ -206,19 +206,27 @@ export function Workspace({ projectId }: { projectId: string }) {
           created_at: new Date().toISOString(),
         },
       ]);
-      const fixId = crypto.randomUUID();
-      fixMsgIdRef.current = fixId;
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: fixId,
-          role: "assistant",
-          content: "Detected preview errors — auto-fixing...",
-          timestamp: Date.now(),
+      // On subsequent iterations, update the existing message instead of creating a new one
+      if (fixMsgIdRef.current) {
+        updateMessageById(fixMsgIdRef.current, {
+          content: "Retrying auto-fix...",
           status: "coding",
-        },
-      ]);
-    }, []),
+        });
+      } else {
+        const fixId = crypto.randomUUID();
+        fixMsgIdRef.current = fixId;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: fixId,
+            role: "assistant",
+            content: "Detected preview errors — auto-fixing...",
+            timestamp: Date.now(),
+            status: "coding",
+          },
+        ]);
+      }
+    }, [updateMessageById]),
     // onFixEnd — update the existing fix message in-place
     useCallback((success: boolean, iteration: number) => {
       seqRef.current += 1;
@@ -240,10 +248,11 @@ export function Workspace({ projectId }: { projectId: string }) {
         ]);
         if (fixMsgIdRef.current) {
           updateMessageById(fixMsgIdRef.current, {
-            content: "Auto-fix applied successfully. Check the preview.",
+            content: `Auto-fix applied (iteration ${iteration}). Verifying preview...`,
             status: "succeeded",
           });
-          fixMsgIdRef.current = null;
+          // Don't null fixMsgIdRef — if new errors appear, onFixStart will
+          // update this same message instead of creating a duplicate
         }
       } else if (iteration >= 5) {
         if (fixMsgIdRef.current) {
@@ -252,6 +261,14 @@ export function Workspace({ projectId }: { projectId: string }) {
             status: "failed",
           });
           fixMsgIdRef.current = null;
+        }
+      } else {
+        // Intermediate failure — update message but keep ref for next iteration
+        if (fixMsgIdRef.current) {
+          updateMessageById(fixMsgIdRef.current, {
+            content: `Auto-fix iteration ${iteration} didn't produce fixes — retrying...`,
+            status: "coding",
+          });
         }
       }
     }, [updateMessageById]),
@@ -264,25 +281,26 @@ export function Workspace({ projectId }: { projectId: string }) {
     (msg: string) => {
       if (!msg) return;
 
-      // Add a visible message to chat (only first occurrence)
-      setMessages((prev) => {
-        const fixMsg = {
-          id: crypto.randomUUID(),
-          role: "system" as const,
-          content: autoFix.isFixing
-            ? `Auto-fixing: "${msg.slice(0, 120)}..."`
-            : `Preview error detected: "${msg.slice(0, 120)}". Auto-fix will attempt to resolve this.`,
-          timestamp: Date.now(),
-        };
-        if (prev.some((m) => m.content === fixMsg.content)) return prev;
-        return [...prev, fixMsg];
-      });
+      // Only add a system message on the FIRST error of a fix cycle
+      // (avoids flooding chat with duplicate error messages during iterations)
+      if (!fixMsgIdRef.current && !autoFix.isFixing) {
+        setMessages((prev) => {
+          const fixMsg = {
+            id: crypto.randomUUID(),
+            role: "system" as const,
+            content: `Preview error detected: "${msg.slice(0, 120)}". Auto-fix will attempt to resolve this.`,
+            timestamp: Date.now(),
+          };
+          if (prev.some((m) => m.content === fixMsg.content)) return prev;
+          return [...prev, fixMsg];
+        });
+      }
 
       // Trigger auto-fix
       if (!generator.isGenerating && !autoFix.isFixing) {
         autoFix.reportError(msg);
       } else {
-        // Queue errors that arrive while generating — they'll be re-fired below
+        // Queue errors that arrive while generating/fixing — they'll be re-fired below
         if (!pendingErrorsRef.current.includes(msg)) {
           pendingErrorsRef.current.push(msg);
         }
@@ -602,8 +620,9 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const handleSendMessage = useCallback(
     async (content: string) => {
-      // Reset auto-fix counter on new user prompt
+      // Reset auto-fix counter and message ref on new user prompt
       autoFix.reset();
+      fixMsgIdRef.current = null;
 
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),

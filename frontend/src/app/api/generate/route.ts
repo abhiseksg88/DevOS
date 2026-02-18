@@ -440,7 +440,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { prompt, existingFiles, messages: chatHistory, prd } = await req.json();
+  const { prompt, existingFiles, messages: chatHistory, prd, mode } = await req.json();
 
   if ((!prompt || typeof prompt !== "string") && (!chatHistory || !Array.isArray(chatHistory))) {
     return new Response(JSON.stringify({ error: "prompt or messages is required" }), {
@@ -550,7 +550,7 @@ Follow this build plan precisely. Implement exactly the components, changes, and
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5-20250929",
-          max_tokens: hasExistingProject ? 32768 : 64000,
+          max_tokens: mode === "fix" ? 64000 : (hasExistingProject ? 32768 : 64000),
           system: systemPrompt,
           messages: (() => {
             const msgs: Array<{ role: "user" | "assistant"; content: string }> = [];
