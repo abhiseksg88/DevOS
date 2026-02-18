@@ -188,6 +188,11 @@ export function Workspace({ projectId }: { projectId: string }) {
   const generatingMsgIdRef = useRef<string | null>(null);
   const fixMsgIdRef = useRef<string | null>(null);
 
+  // Ref to always access the latest handleSendMessage (avoids stale closure in useEffect)
+  const handleSendMessageRef = useRef<(content: string) => void>(() => {});
+  // Track whether the initial URL prompt has been processed (prevents double-fire in Strict Mode)
+  const initialPromptProcessed = useRef(false);
+
   const updateMessageById = useCallback((id: string, updates: Partial<ChatMessage>) => {
     setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
   }, []);
@@ -747,6 +752,9 @@ export function Workspace({ projectId }: { projectId: string }) {
     [generator, fileTree, persistence, autoFix, updateMessageById, messages],
   );
 
+  // Keep ref in sync so the initial-prompt useEffect always calls the latest version
+  handleSendMessageRef.current = handleSendMessage;
+
   // ---------------------------------------------------------------
   // handleDirectBuild — Fallback when analyzer fails
   // ---------------------------------------------------------------
@@ -950,22 +958,37 @@ export function Workspace({ projectId }: { projectId: string }) {
   function handleChatSubmit() {
     const trimmed = chatValue.trim();
     if (!trimmed || isDisabled) return;
-    handleSendMessage(trimmed);
     setChatValue("");
+    handleSendMessage(trimmed).catch((err) => {
+      console.error("[Workspace] handleSendMessage failed:", err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "system",
+          content: `Something went wrong: ${err instanceof Error ? err.message : "Unknown error"}. Please try again.`,
+          timestamp: Date.now(),
+        },
+      ]);
+    });
   }
 
   // Handle initial prompt from URL params
+  // Uses a ref to always call the latest handleSendMessage (avoids stale closure)
+  // and a processed flag to prevent double-fire in React Strict Mode
   useEffect(() => {
+    if (initialPromptProcessed.current) return;
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const prompt = params.get("prompt");
     if (prompt && messages.length === 0 && !generator.isGenerating && !generator.isAnalyzing) {
+      initialPromptProcessed.current = true;
       // Clean up URL
       const url = new URL(window.location.href);
       url.searchParams.delete("prompt");
       window.history.replaceState({}, "", url.toString());
-      // Send the prompt
-      handleSendMessage(prompt);
+      // Send the prompt via ref to avoid stale closure
+      handleSendMessageRef.current(prompt);
     }
   }, [messages.length, generator.isGenerating, generator.isAnalyzing]);
 

@@ -29,6 +29,7 @@ export default function DashboardPage() {
   const [showNewTenant, setShowNewTenant] = useState(false);
   const [promptValue, setPromptValue] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -62,6 +63,7 @@ export default function DashboardPage() {
   async function handlePromptSubmit() {
     if (!promptValue.trim() || !activeTenant || creatingProject) return;
     setCreatingProject(true);
+    setPromptError(null);
 
     try {
       // Create a new project from the prompt
@@ -84,6 +86,7 @@ export default function DashboardPage() {
       router.push(`/project/${p.id}?tenant=${activeTenant.id}&prompt=${encodeURIComponent(promptValue.trim())}`);
     } catch (err) {
       console.error("Failed to create project:", err);
+      setPromptError(err instanceof Error ? err.message : "Failed to create project. Please try again.");
       setCreatingProject(false);
     }
   }
@@ -227,6 +230,11 @@ export default function DashboardPage() {
               )}
             </button>
           </div>
+          {promptError && (
+            <p className="mt-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 w-full">
+              {promptError}
+            </p>
+          )}
         </div>
 
         {/* Suggestion cards */}
