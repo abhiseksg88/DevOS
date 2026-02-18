@@ -5,12 +5,98 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @layer base {
+  /* ================================================================
+     Theme System — CSS Custom Properties
+     Light theme = :root (default)
+     Dark theme  = .dark class on <html>
+     ================================================================ */
+
+  :root {
+    /* Surface hierarchy — clean whites & zinc grays */
+    --surface-0: 255 255 255;     /* #ffffff — main background */
+    --surface-1: 250 250 250;     /* #fafafa — panel backgrounds */
+    --surface-2: 244 244 245;     /* #f4f4f5 — cards, inputs */
+    --surface-3: 228 228 231;     /* #e4e4e7 — borders, dividers */
+    --surface-4: 212 212 216;     /* #d4d4d8 — hover borders */
+
+    /* Semantic foreground */
+    --foreground: 9 9 11;          /* #09090b — primary text */
+    --foreground-secondary: 63 63 70; /* #3f3f46 — secondary text */
+
+    /* Border */
+    --border-default: 228 228 231; /* #e4e4e7 */
+    --border-hover: 212 212 216;   /* #d4d4d8 */
+
+    /* Slate text scale — inverted for light theme readability */
+    --slate-100: 15 23 42;        /* very dark — primary text */
+    --slate-200: 30 41 59;        /* dark — body text */
+    --slate-300: 51 65 85;        /* medium-dark — secondary text */
+    --slate-400: 71 85 105;       /* medium — muted labels */
+    --slate-500: 100 116 139;     /* medium — subdued text */
+    --slate-600: 148 163 184;     /* light — faint text */
+    --slate-700: 203 213 225;     /* very light — decorative */
+
+    /* Glass / overlay */
+    --glass-bg: 250 250 250;
+    --glass-border-opacity: 0.08;
+    --overlay-bg: 0 0 0;
+    --overlay-opacity: 0.3;
+
+    /* Scrollbar */
+    --scrollbar-thumb: 212 212 216;
+    --scrollbar-hover: 161 161 170;
+
+    /* Glow (reduced in light mode) */
+    --glow-opacity: 0.08;
+    --glow-strong-opacity: 0.15;
+  }
+
+  .dark {
+    /* Surface hierarchy — deep blue-blacks */
+    --surface-0: 10 10 15;        /* #0a0a0f */
+    --surface-1: 18 18 26;        /* #12121a */
+    --surface-2: 26 26 37;        /* #1a1a25 */
+    --surface-3: 34 34 48;        /* #222230 */
+    --surface-4: 42 42 58;        /* #2a2a3a */
+
+    /* Semantic foreground */
+    --foreground: 248 250 252;     /* #f8fafc — near-white */
+    --foreground-secondary: 148 163 184; /* #94a3b8 */
+
+    /* Border */
+    --border-default: 42 42 58;    /* #2a2a3a */
+    --border-hover: 58 58 74;      /* #3a3a4a */
+
+    /* Slate text scale — original Tailwind slate values */
+    --slate-100: 241 245 249;     /* #f1f5f9 */
+    --slate-200: 226 232 240;     /* #e2e8f0 */
+    --slate-300: 203 213 225;     /* #cbd5e1 */
+    --slate-400: 148 163 184;     /* #94a3b8 */
+    --slate-500: 100 116 139;     /* #64748b */
+    --slate-600: 71 85 105;       /* #475569 */
+    --slate-700: 51 65 85;        /* #334155 */
+
+    /* Glass / overlay */
+    --glass-bg: 18 18 26;
+    --glass-border-opacity: 0.06;
+    --overlay-bg: 0 0 0;
+    --overlay-opacity: 0.6;
+
+    /* Scrollbar */
+    --scrollbar-thumb: 42 42 58;
+    --scrollbar-hover: 71 85 105;
+
+    /* Glow */
+    --glow-opacity: 0.15;
+    --glow-strong-opacity: 0.3;
+  }
+
   * {
     @apply border-border;
   }
 
   body {
-    @apply bg-surface-0 text-slate-100 antialiased;
+    @apply bg-surface-0 text-foreground antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
@@ -23,34 +109,46 @@
     @apply bg-transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-surface-4 rounded-full;
+    background-color: rgb(var(--scrollbar-thumb));
+    border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-600;
+    background-color: rgb(var(--scrollbar-hover));
   }
 }
 
 @layer components {
   .glass {
-    @apply bg-surface-1/80 backdrop-blur-xl border border-white/[0.06];
+    background-color: rgb(var(--glass-bg) / 0.8);
+    backdrop-filter: blur(24px);
+    border: 1px solid rgb(255 255 255 / var(--glass-border-opacity));
   }
 
   .glass-hover {
-    @apply hover:bg-surface-2/80 hover:border-white/[0.1] transition-all duration-200;
+    @apply transition-all duration-200;
+  }
+  .glass-hover:hover {
+    background-color: rgb(var(--surface-2) / 0.8);
+    border-color: rgb(255 255 255 / calc(var(--glass-border-opacity) + 0.04));
   }
 
   .glow-brand {
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.15),
-                0 0 60px rgba(139, 92, 246, 0.05);
+    box-shadow: 0 0 20px rgba(139, 92, 246, var(--glow-opacity)),
+                0 0 60px rgba(139, 92, 246, calc(var(--glow-opacity) / 3));
   }
 
   .glow-brand-strong {
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.3),
-                0 0 60px rgba(139, 92, 246, 0.1);
+    box-shadow: 0 0 20px rgba(139, 92, 246, var(--glow-strong-opacity)),
+                0 0 60px rgba(139, 92, 246, calc(var(--glow-strong-opacity) / 3));
   }
 
   .gradient-text {
     @apply bg-gradient-to-r from-brand-400 via-brand-300 to-violet-300 bg-clip-text text-transparent;
+  }
+
+  /* Light mode gradient text uses darker brand tones */
+  :root:not(.dark) .gradient-text {
+    @apply from-brand-600 via-brand-500 to-violet-500;
   }
 
   .gradient-border {
@@ -70,11 +168,21 @@
     pointer-events: none;
   }
 
+  /* Light mode gradient border uses softer tones */
+  :root:not(.dark) .gradient-border::before {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(139, 92, 246, 0.02));
+  }
+
   /* Resizable panel handle */
   [data-panel-group-direction="horizontal"] > [data-resize-handle-active] {
     @apply bg-brand-500/50;
   }
   [data-panel-group-direction="horizontal"] > [data-resize-handle] {
     @apply w-[3px] bg-transparent hover:bg-brand-500/30 transition-colors duration-150;
+  }
+
+  /* Light mode: subtle shadow instead of heavy glow for cards */
+  :root:not(.dark) .glass {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
   }
 }

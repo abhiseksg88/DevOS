@@ -44,7 +44,7 @@ export function PromptInput({ onSubmit, disabled, placeholder }: PromptInputProp
           placeholder={placeholder || (disabled ? "Building..." : "Describe what you want to build...")}
           disabled={disabled}
           rows={1}
-          className="flex-1 bg-transparent text-white text-sm placeholder:text-slate-600 px-4 py-3 resize-none focus:outline-none disabled:opacity-50 max-h-[150px]"
+          className="flex-1 bg-transparent text-foreground text-sm placeholder:text-slate-600 px-4 py-3 resize-none focus:outline-none disabled:opacity-50 max-h-[150px]"
         />
         <button
           onClick={handleSubmit}

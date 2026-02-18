@@ -83,7 +83,7 @@ export function PlanCard({ prd, status, onApprove, onModify, onReject, disabled 
               <Brain className="w-4 h-4" />
             )}
           </div>
-          <span className="text-sm font-semibold text-white">
+          <span className="text-sm font-semibold text-foreground">
             {isDone ? "Plan Completed" : isBuilding ? "Building..." : "Build Plan"}
           </span>
         </div>

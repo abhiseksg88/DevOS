@@ -141,16 +141,16 @@ export function TableViewer({ projectId, tenantId }: TableViewerProps) {
               setSelectedCollection(null);
               setRows([]);
             }}
-            className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1 rounded-md text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
           <Table2 className="w-4 h-4 text-brand-400" />
-          <span className="text-sm font-medium text-white">{selectedCollection}</span>
+          <span className="text-sm font-medium text-foreground">{selectedCollection}</span>
           <span className="text-xs text-slate-500 ml-auto">{rows.length} rows</span>
           <button
             onClick={() => fetchRows(selectedCollection)}
-            className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1.5 rounded-md text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
@@ -207,11 +207,11 @@ export function TableViewer({ projectId, tenantId }: TableViewerProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-surface-3">
         <div className="flex items-center gap-2">
           <Table2 className="w-4 h-4 text-brand-400" />
-          <span className="text-sm font-medium text-white">Data Collections</span>
+          <span className="text-sm font-medium text-foreground">Data Collections</span>
         </div>
         <button
           onClick={fetchCollections}
-          className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+          className="p-1.5 rounded-md text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
         >
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
@@ -244,7 +244,7 @@ export function TableViewer({ projectId, tenantId }: TableViewerProps) {
                   <Table2 className="w-4 h-4 text-brand-400" />
                 </div>
                 <div>
-                  <span className="text-sm font-medium text-white">{collection}</span>
+                  <span className="text-sm font-medium text-foreground">{collection}</span>
                   <span className="text-xs text-slate-500 ml-2">{count} rows</span>
                 </div>
               </div>

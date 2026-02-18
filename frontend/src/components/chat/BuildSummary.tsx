@@ -24,7 +24,7 @@ export function BuildSummary({ files, stages, onOpenPreview, onOpenCode }: Build
           <div className="w-7 h-7 rounded-lg bg-emerald-500/20 flex items-center justify-center">
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
-          <span className="text-sm font-semibold text-white">Build Complete</span>
+          <span className="text-sm font-semibold text-foreground">Build Complete</span>
         </div>
         <div className="flex items-center gap-2 text-2xs text-slate-500">
           {totalLatency > 0 && <span>{(totalLatency / 1000).toFixed(1)}s</span>}

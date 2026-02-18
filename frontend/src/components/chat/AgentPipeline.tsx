@@ -81,7 +81,7 @@ export function AgentPipeline({ stages, compact }: AgentPipelineProps) {
                     "font-medium text-center truncate w-full",
                     compact ? "text-2xs" : "text-xs",
                     stage.status === "done" && "text-emerald-400",
-                    stage.status === "active" && "text-white",
+                    stage.status === "active" && "text-foreground",
                     stage.status === "error" && "text-red-400",
                     (stage.status === "pending" || stage.status === "skipped") && "text-slate-600",
                   )}

@@ -286,7 +286,7 @@ export function PublishButton({
           <div className="flex items-center justify-between px-4 py-3 border-b border-surface-3">
             <div className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-brand-400" />
-              <span className="text-sm font-medium text-white">
+              <span className="text-sm font-medium text-foreground">
                 Deploy
               </span>
             </div>
@@ -297,7 +297,7 @@ export function PublishButton({
                   setState("idle");
                 }
               }}
-              className="p-1 rounded-md text-slate-500 hover:text-white hover:bg-surface-2 transition-all"
+              className="p-1 rounded-md text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -389,7 +389,7 @@ export function PublishButton({
                   </span>
                   <button
                     onClick={handleCopy}
-                    className="p-1 rounded text-slate-500 hover:text-white transition-all shrink-0"
+                    className="p-1 rounded text-slate-500 hover:text-foreground transition-all shrink-0"
                     title="Copy URL"
                   >
                     {copied ? (
@@ -534,7 +534,7 @@ function PublishStep({
         className={cn(
           "text-xs font-medium transition-all",
           status === "done" && "text-emerald-400",
-          status === "active" && "text-white",
+          status === "active" && "text-foreground",
           status === "pending" && "text-slate-600",
         )}
       >

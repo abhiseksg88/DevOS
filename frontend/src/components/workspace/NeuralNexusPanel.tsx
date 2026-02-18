@@ -75,7 +75,7 @@ function StatCard({
   label,
   value,
   sub,
-  color = "text-white",
+  color = "text-foreground",
 }: {
   label: string;
   value: string | number;
@@ -354,13 +354,13 @@ export function NeuralNexusPanel({
               <Brain className="w-4 h-4 text-brand-400" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-white">Neural Nexus</h2>
+              <h2 className="text-sm font-semibold text-foreground">Neural Nexus</h2>
               <p className="text-2xs text-slate-500">The Brain — Shared State Engine</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-surface-3 transition-all"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-3 transition-all"
           >
             <X className="w-4 h-4" />
           </button>

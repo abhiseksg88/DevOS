@@ -112,7 +112,7 @@ function WelcomeMessage({ onSuggestionClick }: { onSuggestionClick: (text: strin
       <div className="w-14 h-14 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mx-auto mb-5 glow-brand">
         <Sparkles className="w-7 h-7 text-brand-400" />
       </div>
-      <h2 className="text-lg font-semibold text-white mb-2">What do you want to build?</h2>
+      <h2 className="text-lg font-semibold text-foreground mb-2">What do you want to build?</h2>
       <p className="text-sm text-slate-500 max-w-xs mx-auto leading-relaxed">
         Describe your app and our AI agents will plan, code, review, and deploy it for you.
       </p>

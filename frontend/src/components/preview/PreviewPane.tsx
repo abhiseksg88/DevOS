@@ -1214,7 +1214,7 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
         <div className="w-16 h-16 rounded-2xl bg-surface-2 border border-surface-3 flex items-center justify-center mb-5">
           <Globe className="w-8 h-8 text-slate-600" />
         </div>
-        <h3 className="text-white font-medium mb-2">No Preview Available</h3>
+        <h3 className="text-foreground font-medium mb-2">No Preview Available</h3>
         <p className="text-slate-500 text-sm text-center max-w-xs leading-relaxed">
           Send a prompt to the AI agent to generate your app. Once built, a live
           preview will appear here.
@@ -1241,7 +1241,7 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
               className={cn(
                 "p-1.5 rounded-md transition-all",
                 viewport === key
-                  ? "bg-surface-3 text-white"
+                  ? "bg-surface-3 text-foreground"
                   : "text-slate-600 hover:text-slate-300 hover:bg-surface-2"
               )}
             >
@@ -1282,7 +1282,7 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
         <div className="flex items-center gap-1">
           <button
             onClick={() => setRefreshKey((k) => k + 1)}
-            className="p-1.5 rounded-md text-slate-600 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1.5 rounded-md text-slate-600 hover:text-foreground hover:bg-surface-2 transition-all"
             title="Refresh"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -1292,7 +1292,7 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-1.5 rounded-md text-slate-600 hover:text-white hover:bg-surface-2 transition-all"
+              className="p-1.5 rounded-md text-slate-600 hover:text-foreground hover:bg-surface-2 transition-all"
               title="Open in new tab"
             >
               <ExternalLink className="w-3.5 h-3.5" />

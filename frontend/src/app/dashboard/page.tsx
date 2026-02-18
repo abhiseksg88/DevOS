@@ -71,7 +71,7 @@ export default function DashboardPage() {
         <div className="w-20 h-20 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-6">
           <AlertTriangle className="w-10 h-10 text-red-400" />
         </div>
-        <h1 className="text-2xl font-bold text-white mb-3">Database Setup Required</h1>
+        <h1 className="text-2xl font-bold text-foreground mb-3">Database Setup Required</h1>
         <p className="text-slate-400 text-center max-w-lg mb-4">{error}</p>
         <div className="text-left bg-surface-2 border border-surface-3 rounded-xl p-4 max-w-lg w-full">
           <p className="text-sm text-slate-300 mb-2 font-medium">Run these SQL files in your Supabase Dashboard &gt; SQL Editor:</p>
@@ -98,7 +98,7 @@ export default function DashboardPage() {
         <div className="w-20 h-20 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mb-6 glow-brand">
           <Zap className="w-10 h-10 text-brand-400" />
         </div>
-        <h1 className="text-3xl font-bold text-white mb-3">Welcome to Vedaa.io</h1>
+        <h1 className="text-3xl font-bold text-foreground mb-3">Welcome to Vedaa.io</h1>
         <p className="text-slate-400 text-center max-w-md mb-8">
           Create your first organization to start building AI-powered applications.
         </p>
@@ -136,7 +136,7 @@ export default function DashboardPage() {
               const t = tenants.find((x) => x.id === e.target.value);
               if (t) handleSelectTenant(t);
             }}
-            className="bg-surface-2 border border-surface-4 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500"
+            className="bg-surface-2 border border-surface-4 text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500"
           >
             {tenants.map((t) => (
               <option key={t.id} value={t.id}>
@@ -178,7 +178,7 @@ export default function DashboardPage() {
                 </div>
                 <ArrowRight className="w-4 h-4 text-slate-600 group-hover:text-brand-400 transition-colors" />
               </div>
-              <h3 className="text-white font-semibold mb-1">{project.name}</h3>
+              <h3 className="text-foreground font-semibold mb-1">{project.name}</h3>
               <p className="text-slate-500 text-sm line-clamp-2 mb-4">
                 {project.description || "No description"}
               </p>
@@ -352,7 +352,7 @@ function Modal({ onClose, title, children }: { onClose: () => void; title: strin
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-md mx-4 p-6 rounded-2xl bg-surface-1 border border-surface-3 shadow-2xl animate-slide-up">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <h3 className="text-lg font-semibold text-foreground">{title}</h3>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-3 text-slate-400 transition-all">
             <X className="w-5 h-5" />
           </button>
@@ -385,7 +385,7 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
-        className="w-full px-4 py-3 rounded-xl bg-surface-2 border border-surface-4 text-white placeholder:text-slate-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 transition-all"
+        className="w-full px-4 py-3 rounded-xl bg-surface-2 border border-surface-4 text-foreground placeholder:text-slate-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 transition-all"
       />
     </div>
   );

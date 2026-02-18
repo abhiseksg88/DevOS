@@ -75,7 +75,7 @@ function TreeNode({
         className={cn(
           "w-full flex items-center gap-1.5 py-[3px] pr-3 text-xs transition-colors group",
           isActive
-            ? "bg-brand-500/10 text-white"
+            ? "bg-brand-500/10 text-foreground"
             : "text-slate-400 hover:text-slate-200 hover:bg-surface-2"
         )}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}

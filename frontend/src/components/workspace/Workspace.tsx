@@ -24,6 +24,8 @@ import {
   History,
   Loader2,
   Brain,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -31,6 +33,7 @@ import { PublishButton } from "@/components/workspace/PublishButton";
 import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
 import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
 import { VersionHistory } from "@/components/workspace/VersionHistory";
+import { useTheme } from "@/components/ThemeProvider";
 
 type RightTab = "code" | "preview" | "console" | "infra" | "history";
 
@@ -111,6 +114,7 @@ function updateInTree(nodes: FileNode[], path: string, content: string): FileNod
 
 export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
   const { project, loading, userId, tenantId: resolvedTenantId, token } = useProject(projectId);
   const generator = useGenerate();
   const persistence = useCodePersistence(projectId, userId);
@@ -958,7 +962,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/dashboard")}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -967,7 +971,7 @@ export function Workspace({ projectId }: { projectId: string }) {
             <div className="w-6 h-6 rounded-md bg-brand-500 flex items-center justify-center">
               <Zap className="w-3 h-3 text-white" />
             </div>
-            <span className="text-sm font-medium text-white">
+            <span className="text-sm font-medium text-foreground">
               {project?.name ?? "Project"}
             </span>
           </div>
@@ -1007,17 +1011,24 @@ export function Workspace({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowNexus(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-purple-500/30 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-foreground hover:border-purple-500/30 transition-all"
           >
             <Brain className="w-3 h-3" />
             Neural Nexus
           </button>
           <button
             onClick={() => setShowIntegrations(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-brand-500/30 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-foreground hover:border-brand-500/30 transition-all"
           >
             <Zap className="w-3 h-3" />
             Integrations
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 border border-transparent hover:border-surface-3 transition-all"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
           <PublishButton
             project={project}
@@ -1069,7 +1080,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   className={cn(
                     "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
                     rightTab === key
-                      ? "bg-surface-3 text-white"
+                      ? "bg-surface-3 text-foreground"
                       : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
                   )}
                 >
