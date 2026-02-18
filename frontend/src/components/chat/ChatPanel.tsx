@@ -9,11 +9,28 @@ import { Sparkles } from "lucide-react";
 interface ChatPanelProps {
   messages: ChatMessage[];
   onSendMessage: (content: string) => void;
+  onApprovePlan: () => void;
+  onModifyPlan: (notes: string) => void;
+  onRejectPlan: () => void;
+  onOpenPreview: () => void;
+  onOpenCode: () => void;
   isStreaming: boolean;
+  isAnalyzing: boolean;
   buildEvents: BuildEvent[];
 }
 
-export function ChatPanel({ messages, onSendMessage, isStreaming, buildEvents }: ChatPanelProps) {
+export function ChatPanel({
+  messages,
+  onSendMessage,
+  onApprovePlan,
+  onModifyPlan,
+  onRejectPlan,
+  onOpenPreview,
+  onOpenCode,
+  isStreaming,
+  isAnalyzing,
+  buildEvents,
+}: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showWelcome, setShowWelcome] = useState(true);
 
@@ -37,16 +54,24 @@ export function ChatPanel({ messages, onSendMessage, isStreaming, buildEvents }:
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {showWelcome && <WelcomeMessage />}
+        {showWelcome && <WelcomeMessage onSuggestionClick={onSendMessage} />}
 
         {messages.map((msg) => (
-          <ChatMessageBubble key={msg.id} message={msg} />
+          <ChatMessageBubble
+            key={msg.id}
+            message={msg}
+            onApprovePlan={onApprovePlan}
+            onModifyPlan={onModifyPlan}
+            onRejectPlan={onRejectPlan}
+            onOpenPreview={onOpenPreview}
+            onOpenCode={onOpenCode}
+          />
         ))}
 
-        {/* Live build events inline */}
-        {isStreaming && buildEvents.length > 0 && (
+        {/* Streaming indicator — only show during build (not analyze) when no pipeline message exists */}
+        {isStreaming && !messages.some(m => m.type === "pipeline") && buildEvents.length > 0 && (
           <div className="space-y-1 animate-fade-in">
-            {buildEvents.slice(-8).map((event, i) => (
+            {buildEvents.slice(-5).map((event, i) => (
               <div
                 key={i}
                 className="flex items-start gap-2 text-xs text-slate-500 animate-slide-up"
@@ -66,12 +91,22 @@ export function ChatPanel({ messages, onSendMessage, isStreaming, buildEvents }:
       </div>
 
       {/* Input */}
-      <PromptInput onSubmit={onSendMessage} disabled={isStreaming} />
+      <PromptInput
+        onSubmit={onSendMessage}
+        disabled={isStreaming || isAnalyzing}
+        placeholder={
+          isAnalyzing
+            ? "Analyzing your request..."
+            : isStreaming
+            ? "Generating..."
+            : "Describe what you want to build..."
+        }
+      />
     </div>
   );
 }
 
-function WelcomeMessage() {
+function WelcomeMessage({ onSuggestionClick }: { onSuggestionClick: (text: string) => void }) {
   return (
     <div className="text-center py-12 animate-fade-in">
       <div className="w-14 h-14 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mx-auto mb-5 glow-brand">
@@ -85,14 +120,15 @@ function WelcomeMessage() {
         {[
           "A SaaS dashboard with auth and billing",
           "A landing page with hero, features, and CTA",
-          "A REST API with CRUD endpoints",
+          "A task management app with database",
         ].map((suggestion) => (
-          <div
+          <button
             key={suggestion}
-            className="text-xs text-slate-600 px-3 py-2 rounded-lg bg-surface-2/50 border border-surface-3 cursor-default"
+            onClick={() => onSuggestionClick(suggestion)}
+            className="block w-full text-left text-xs text-slate-500 hover:text-slate-300 px-3 py-2 rounded-lg bg-surface-2/50 border border-surface-3 hover:border-brand-500/30 hover:bg-surface-2 cursor-pointer transition-all"
           >
             {suggestion}
-          </div>
+          </button>
         ))}
       </div>
     </div>

@@ -156,6 +156,15 @@ export interface IntegrationContext {
   }>;
 }
 
+/** Pipeline event for rich message rendering (mirrors useGenerate.PipelineEvent) */
+export interface ChatPipelineStage {
+  key: string;
+  label: string;
+  agent: string;
+  status: "pending" | "active" | "done" | "error" | "skipped";
+  meta?: { latency_ms?: number; cost_usd?: number };
+}
+
 /** Chat message in the workspace */
 export interface ChatMessage {
   id: string;
@@ -164,6 +173,16 @@ export interface ChatMessage {
   timestamp: number;
   buildId?: string;
   status?: BuildStatus;
+  /** Rich message discriminator */
+  type?: "text" | "plan" | "pipeline" | "summary";
+  /** PRD from Analyzer (for type="plan") */
+  prd?: Record<string, unknown>;
+  /** Plan review status (for type="plan") */
+  planStatus?: "pending" | "approved" | "modified" | "building" | "completed";
+  /** Generated files list (for type="summary") */
+  buildFiles?: Array<{ path: string }>;
+  /** Pipeline stages (for type="pipeline") */
+  pipelineStages?: ChatPipelineStage[];
 }
 
 /** File node in the editor tree */

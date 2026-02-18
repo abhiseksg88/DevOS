@@ -29,12 +29,23 @@ export interface PipelineEvent {
   };
 }
 
+export interface AnalyzeResult {
+  prd: Record<string, unknown> | null;
+  error: string | null;
+  meta?: PipelineEvent["meta"];
+}
+
+type PipelinePhase = "idle" | "analyzing" | "awaiting_approval" | "building" | "reviewing" | "fixing" | "done" | "error";
+
 interface GenerateState {
   isGenerating: boolean;
+  isAnalyzing: boolean;
   streamedText: string;
   files: GeneratedFile[];
   error: string | null;
   pipelineEvents: PipelineEvent[];
+  currentPrd: Record<string, unknown> | null;
+  pipelinePhase: PipelinePhase;
 }
 
 /**
@@ -503,10 +514,13 @@ ${renders.join("\n")}
 export function useGenerate() {
   const [state, setState] = useState<GenerateState>({
     isGenerating: false,
+    isAnalyzing: false,
     streamedText: "",
     files: [],
     error: null,
     pipelineEvents: [],
+    currentPrd: null,
+    pipelinePhase: "idle",
   });
   const abortRef = useRef<AbortController | null>(null);
 
@@ -526,37 +540,35 @@ export function useGenerate() {
     }));
   }, []);
 
-  const generate = useCallback(
+  // -----------------------------------------------------------------
+  // analyze() — Run ONLY the Analyzer stage. Returns PRD for user review.
+  // -----------------------------------------------------------------
+  const analyze = useCallback(
     async (
       prompt: string,
       existingFiles: FileNode[],
-      onFileGenerated: (path: string, content: string) => void,
       chatHistory?: Array<{ role: string; content: string }>
-    ): Promise<GenerateResult> => {
+    ): Promise<AnalyzeResult> => {
+      void chatHistory; // reserved for future use
+
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
-      setState({
-        isGenerating: true,
-        streamedText: "",
-        files: [],
+      setState((prev) => ({
+        ...prev,
+        isAnalyzing: true,
         error: null,
         pipelineEvents: [],
-      });
+        currentPrd: null,
+        pipelinePhase: "analyzing",
+      }));
 
-      // Flatten the tree so we can look up existing file content for EDIT operations
-      // and filter out default placeholder files.
       const flatFiles = flattenForContext(existingFiles);
       const contextFiles = flatFiles.filter(
         (f) => !f.content.includes("// Your generated code will appear here")
       );
 
-      let prd: Record<string, unknown> | undefined;
-
-      // ---------------------------------------------------------------
-      // STAGE 1: Analyzer (DeepSeek) — generate PRD
-      // ---------------------------------------------------------------
       const analyzeId = crypto.randomUUID();
       addPipelineEvent({
         id: analyzeId,
@@ -576,12 +588,12 @@ export function useGenerate() {
 
         if (analyzeResp.ok) {
           const analyzeData = await analyzeResp.json();
-          prd = analyzeData.prd;
+          const prd = analyzeData.prd;
           const meta = analyzeData.meta;
           const summary = prd?.summary || "Analysis complete";
           const components = (prd?.new_components as Array<{ name: string }>) || [];
           const detail = components.length > 0
-            ? `Components: ${components.map((c) => c.name).join(", ")}`
+            ? `Components: ${components.map((c: { name: string }) => c.name).join(", ")}`
             : undefined;
 
           updatePipelineEvent(analyzeId, {
@@ -590,25 +602,77 @@ export function useGenerate() {
             detail,
             meta,
           });
+
+          setState((prev) => ({
+            ...prev,
+            isAnalyzing: false,
+            currentPrd: prd,
+            pipelinePhase: "awaiting_approval",
+          }));
+
+          return { prd, error: null, meta };
         } else {
           updatePipelineEvent(analyzeId, {
             status: "skipped",
-            message: "Analyzer unavailable, proceeding with direct generation",
+            message: "Analyzer unavailable",
           });
+          setState((prev) => ({
+            ...prev,
+            isAnalyzing: false,
+            pipelinePhase: "error",
+          }));
+          return { prd: null, error: "Analyzer unavailable" };
         }
       } catch (err) {
         if ((err as Error).name === "AbortError") {
-          return { files: [], error: null };
+          setState((prev) => ({ ...prev, isAnalyzing: false, pipelinePhase: "idle" }));
+          return { prd: null, error: null };
         }
         updatePipelineEvent(analyzeId, {
           status: "skipped",
-          message: "Analyzer unavailable, proceeding with direct generation",
+          message: "Analyzer unavailable",
         });
+        setState((prev) => ({
+          ...prev,
+          isAnalyzing: false,
+          pipelinePhase: "error",
+        }));
+        return { prd: null, error: "Analyzer failed" };
       }
+    },
+    [addPipelineEvent, updatePipelineEvent],
+  );
 
-      // ---------------------------------------------------------------
-      // STAGE 2: Coder (Claude Sonnet) — generate code
-      // ---------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // build() — Run Coder → Reviewer → Fixer stages with an approved PRD.
+  // -----------------------------------------------------------------
+  const build = useCallback(
+    async (
+      prompt: string,
+      existingFiles: FileNode[],
+      onFileGenerated: (path: string, content: string) => void,
+      chatHistory?: Array<{ role: string; content: string }>,
+      prd?: Record<string, unknown>,
+    ): Promise<GenerateResult> => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setState((prev) => ({
+        ...prev,
+        isGenerating: true,
+        streamedText: "",
+        files: [],
+        error: null,
+        pipelinePhase: "building",
+      }));
+
+      const flatFiles = flattenForContext(existingFiles);
+      const contextFiles = flatFiles.filter(
+        (f) => !f.content.includes("// Your generated code will appear here")
+      );
+
+      // STAGE 2: Coder (Claude Sonnet)
       const coderId = crypto.randomUUID();
       addPipelineEvent({
         id: coderId,
@@ -639,7 +703,7 @@ export function useGenerate() {
           return { files: [], error: null };
         }
         const errMsg = err instanceof Error ? err.message : "Generation failed";
-        setState((prev) => ({ ...prev, isGenerating: false, error: errMsg }));
+        setState((prev) => ({ ...prev, isGenerating: false, error: errMsg, pipelinePhase: "error" }));
         return { files: [], error: errMsg };
       }
 
@@ -648,7 +712,7 @@ export function useGenerate() {
           status: "failed",
           message: `Code generation failed: ${result.error}`,
         });
-        setState((prev) => ({ ...prev, isGenerating: false, error: result.error }));
+        setState((prev) => ({ ...prev, isGenerating: false, error: result.error, pipelinePhase: "error" }));
         return result;
       }
 
@@ -658,9 +722,8 @@ export function useGenerate() {
         meta: { tokens_in: 0, tokens_out: 0, cost_usd: 0, latency_ms: Date.now() - coderStart },
       });
 
-      // ---------------------------------------------------------------
-      // STAGE 3: Reviewer (Claude Haiku) — review code
-      // ---------------------------------------------------------------
+      // STAGE 3: Reviewer (Claude Haiku)
+      setState((prev) => ({ ...prev, pipelinePhase: "reviewing" }));
       const reviewId = crypto.randomUUID();
       addPipelineEvent({
         id: reviewId,
@@ -712,7 +775,6 @@ export function useGenerate() {
             });
           }
         } else {
-          // Reviewer failed — approve by default (don't block user)
           updatePipelineEvent(reviewId, {
             status: "skipped",
             message: "Reviewer unavailable, proceeding",
@@ -728,10 +790,9 @@ export function useGenerate() {
         });
       }
 
-      // ---------------------------------------------------------------
-      // STAGE 4: Fix (Claude Sonnet) — if review rejected, max 2 retries
-      // ---------------------------------------------------------------
+      // STAGE 4: Fix (Claude Sonnet) — if review rejected
       if (!reviewApproved && reviewFindings) {
+        setState((prev) => ({ ...prev, pipelinePhase: "fixing" }));
         const fixId = crypto.randomUUID();
         addPipelineEvent({
           id: fixId,
@@ -778,25 +839,58 @@ export function useGenerate() {
         }
       }
 
-      // ---------------------------------------------------------------
       // DONE
-      // ---------------------------------------------------------------
       setState((prev) => ({
         ...prev,
         isGenerating: false,
         files: result.files,
         streamedText: prev.streamedText,
+        pipelinePhase: "done",
       }));
 
       return result;
     },
-    [addPipelineEvent, updatePipelineEvent]
+    [addPipelineEvent, updatePipelineEvent],
+  );
+
+  // -----------------------------------------------------------------
+  // generate() — Legacy wrapper: runs analyze + build sequentially.
+  // Kept for backward compat (auto-fix path and existing callers).
+  // -----------------------------------------------------------------
+  const generate = useCallback(
+    async (
+      prompt: string,
+      existingFiles: FileNode[],
+      onFileGenerated: (path: string, content: string) => void,
+      chatHistory?: Array<{ role: string; content: string }>
+    ): Promise<GenerateResult> => {
+      // Reset full state for legacy path
+      setState({
+        isGenerating: true,
+        isAnalyzing: true,
+        streamedText: "",
+        files: [],
+        error: null,
+        pipelineEvents: [],
+        currentPrd: null,
+        pipelinePhase: "analyzing",
+      });
+
+      // Phase 1: Analyze
+      const analyzeResult = await analyze(prompt, existingFiles, chatHistory);
+      const prd = analyzeResult.prd ?? undefined;
+
+      // Phase 2: Build (proceed even if analyzer failed)
+      const buildResult = await build(prompt, existingFiles, onFileGenerated, chatHistory, prd);
+      return buildResult;
+    },
+    [analyze, build],
   );
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
-    setState((prev) => ({ ...prev, isGenerating: false }));
+    setState((prev) => ({ ...prev, isGenerating: false, isAnalyzing: false, pipelinePhase: "idle" }));
   }, []);
 
-  return { ...state, generate, stop };
+  return { ...state, analyze, build, generate, stop };
 }
