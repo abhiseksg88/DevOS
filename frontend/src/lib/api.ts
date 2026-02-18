@@ -197,21 +197,48 @@ export const preview = {
 };
 
 // --- Neural Nexus ---
+// Nexus calls are routed through a same-origin Next.js API proxy (/api/nexus)
+// to avoid CORS issues when the backend is on a different origin (e.g. Railway).
+
+async function nexusProxy<T>(
+  method: string,
+  token: string,
+  tenantId: string,
+  projectId: string,
+  action: string,
+  extra?: Record<string, string>,
+  body?: unknown,
+): Promise<T> {
+  const params = new URLSearchParams({ tenantId, projectId, action, ...extra });
+  // Same-origin call — goes to the Next.js API proxy, NOT the Railway backend
+  const url = `/api/nexus?${params.toString()}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error("Failed to reach Neural Nexus proxy. Please reload and try again.");
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? `Neural Nexus error ${res.status}`);
+  }
+  return res.json();
+}
+
 export const nexus = {
   /** Get full Neural Nexus state (UPP + PSM + Business Logic + Activity) */
   getState: (token: string, tenantId: string, projectId: string) =>
-    request<NexusState>(
-      "GET",
-      `/tenants/${tenantId}/projects/${projectId}/nexus`,
-      token,
-    ),
+    nexusProxy<NexusState>("GET", token, tenantId, projectId, "state"),
   /** Get Neural Nexus context string for code generation */
   getContext: (token: string, tenantId: string, projectId: string) =>
-    request<{ context: string }>(
-      "GET",
-      `/tenants/${tenantId}/projects/${projectId}/nexus/context`,
-      token,
-    ),
+    nexusProxy<{ context: string }>("GET", token, tenantId, projectId, "context"),
   /** Update user persona preferences/expertise */
   updatePersona: (
     token: string,
@@ -219,12 +246,7 @@ export const nexus = {
     projectId: string,
     data: { preferences?: Record<string, unknown>; expertise?: Record<string, string> },
   ) =>
-    request<{ status: string }>(
-      "PATCH",
-      `/tenants/${tenantId}/projects/${projectId}/nexus/persona`,
-      token,
-      data,
-    ),
+    nexusProxy<{ status: string }>("PATCH", token, tenantId, projectId, "persona", undefined, data),
   /** Record feedback into the flywheel */
   recordFeedback: (
     token: string,
@@ -238,19 +260,10 @@ export const nexus = {
       response_summary?: string;
     },
   ) =>
-    request<{ status: string }>(
-      "POST",
-      `/tenants/${tenantId}/projects/${projectId}/nexus/feedback`,
-      token,
-      data,
-    ),
+    nexusProxy<{ status: string }>("POST", token, tenantId, projectId, "feedback", undefined, data),
   /** Get recent agent activity */
   getActivity: (token: string, tenantId: string, projectId: string, limit = 20) =>
-    request<NexusAgentExecution[]>(
-      "GET",
-      `/tenants/${tenantId}/projects/${projectId}/nexus/activity?limit=${limit}`,
-      token,
-    ),
+    nexusProxy<NexusAgentExecution[]>("GET", token, tenantId, projectId, "activity", { limit: String(limit) }),
 };
 
 // --- SSE Stream ---

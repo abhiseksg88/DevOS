@@ -298,11 +298,9 @@ export function NeuralNexusPanel({
                              lower.includes("cors") ||
                              lower.includes("failed to fetch") ||
                              lower.includes("networkerror") ||
-                             lower.includes("network") ||
                              lower.includes("econnrefused") ||
                              lower.includes("load failed") ||
-                             lower.includes("fetch") ||
-                             lower.includes("api_url");
+                             lower.includes("backend unreachable");
       setError(isNetworkError ? "__NOT_CONNECTED__" : msg);
 
       // Auto-retry with exponential backoff (max 3 retries)
@@ -393,7 +391,7 @@ export function NeuralNexusPanel({
                 generation smarter over time.
               </p>
               <div className="mb-3 p-2 bg-surface-3/50 rounded-lg">
-                <p className="text-2xs text-slate-500 mb-1">Current API URL:</p>
+                <p className="text-2xs text-slate-500 mb-1">Backend API URL:</p>
                 <code className="text-2xs text-amber-400 font-mono break-all">
                   {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000 (default)"}
                 </code>
@@ -401,9 +399,9 @@ export function NeuralNexusPanel({
               <div className="space-y-2 text-2xs text-slate-600">
                 <p className="font-medium text-slate-400">To enable Neural Nexus:</p>
                 <ol className="list-decimal list-inside space-y-1">
-                  <li>Deploy the <code className="bg-surface-3 px-1 rounded text-slate-400">nimbusforge/</code> backend to Railway or similar</li>
-                  <li>Set <code className="bg-surface-3 px-1 rounded text-slate-400">NEXT_PUBLIC_API_URL</code> in your deployment env vars</li>
-                  <li>Ensure CORS allows requests from this origin</li>
+                  <li>Deploy the <code className="bg-surface-3 px-1 rounded text-slate-400">nimbusforge/</code> backend to Railway</li>
+                  <li>Set <code className="bg-surface-3 px-1 rounded text-slate-400">NEXT_PUBLIC_API_URL</code> in your Netlify env vars to the Railway URL</li>
+                  <li>Redeploy the frontend so the env var is baked into the build</li>
                 </ol>
               </div>
               <button
