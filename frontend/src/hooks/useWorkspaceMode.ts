@@ -92,7 +92,7 @@ export function useWorkspaceMode(
     if (generator.isGenerating) {
       return {
         mode: "build",
-        autoTab: "code",
+        autoTab: "console",
         statusLabel: "Building",
         statusColor: "bg-blue-500/10 border-blue-500/20 text-blue-400",
       };

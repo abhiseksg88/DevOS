@@ -173,6 +173,15 @@
     background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(139, 92, 246, 0.02));
   }
 
+  /* Slow ambient pulse for hero gradient blobs */
+  @keyframes pulse-slow {
+    0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+    50% { opacity: 0.7; transform: translateX(-50%) scale(1.05); }
+  }
+  .animate-pulse-slow {
+    animation: pulse-slow 8s ease-in-out infinite;
+  }
+
   /* Resizable panel handle */
   [data-panel-group-direction="horizontal"] > [data-resize-handle-active] {
     @apply bg-brand-500/50;
