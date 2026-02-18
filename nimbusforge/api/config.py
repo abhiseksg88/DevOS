@@ -71,6 +71,7 @@ class Settings(BaseSettings):
         "https://vedaa.io",
         "https://www.vedaa.io",
         "https://vedaaio.netlify.app",
+        "https://devos-app.netlify.app",
     ]
 
     # --- Debug ---

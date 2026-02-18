@@ -272,6 +272,7 @@ export function NeuralNexusPanel({
   const [state, setState] = useState<NexusState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
 
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -280,6 +281,7 @@ export function NeuralNexusPanel({
     if (!token || !tenantId || !projectId) return;
     setLoading(true);
     setError(null);
+    setErrorDetail(null);
     try {
       const data = await api.nexus.getState(token, tenantId, projectId);
       setState(data);
@@ -292,17 +294,19 @@ export function NeuralNexusPanel({
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to load Neural Nexus";
+      setErrorDetail(msg);
       const lower = msg.toLowerCase();
       const isNetworkError = lower.includes("cannot reach") ||
                              lower.includes("unreachable") ||
                              lower.includes("cors") ||
                              lower.includes("failed to fetch") ||
                              lower.includes("networkerror") ||
-                             lower.includes("network") ||
                              lower.includes("econnrefused") ||
                              lower.includes("load failed") ||
-                             lower.includes("fetch") ||
-                             lower.includes("api_url");
+                             lower.includes("backend unreachable") ||
+                             lower.includes("502") ||
+                             lower.includes("503") ||
+                             lower.includes("not configured");
       setError(isNetworkError ? "__NOT_CONNECTED__" : msg);
 
       // Auto-retry with exponential backoff (max 3 retries)
@@ -381,29 +385,33 @@ export function NeuralNexusPanel({
                 <span className="text-sm font-medium text-slate-300">
                   Backend Not Connected
                 </span>
-                {retryCountRef.current > 0 && retryCountRef.current < 3 && (
-                  <span className="text-2xs text-slate-600 ml-auto">
-                    Retrying ({retryCountRef.current}/3)...
+                {loading && (
+                  <span className="text-2xs text-amber-400 ml-auto flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
+                    {retryCountRef.current > 0 ? `Retry ${retryCountRef.current}/3...` : "Connecting..."}
                   </span>
                 )}
               </div>
+
+              {/* Show actual error from proxy */}
+              {errorDetail && (
+                <div className="mb-3 p-2 bg-red-500/5 border border-red-500/10 rounded-lg">
+                  <p className="text-2xs text-red-400/80 font-mono break-all leading-relaxed">
+                    {errorDetail}
+                  </p>
+                </div>
+              )}
+
               <p className="text-xs text-slate-500 leading-relaxed mb-2">
-                Neural Nexus requires the FastAPI backend to be running.
-                It will learn your preferences, track project health, and make every
-                generation smarter over time.
+                Neural Nexus requires the FastAPI backend to be running and reachable.
               </p>
-              <div className="mb-3 p-2 bg-surface-3/50 rounded-lg">
-                <p className="text-2xs text-slate-500 mb-1">Current API URL:</p>
-                <code className="text-2xs text-amber-400 font-mono break-all">
-                  {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000 (default)"}
-                </code>
-              </div>
               <div className="space-y-2 text-2xs text-slate-600">
-                <p className="font-medium text-slate-400">To enable Neural Nexus:</p>
+                <p className="font-medium text-slate-400">Troubleshooting:</p>
                 <ol className="list-decimal list-inside space-y-1">
-                  <li>Deploy the <code className="bg-surface-3 px-1 rounded text-slate-400">nimbusforge/</code> backend to Railway or similar</li>
-                  <li>Set <code className="bg-surface-3 px-1 rounded text-slate-400">NEXT_PUBLIC_API_URL</code> in your deployment env vars</li>
-                  <li>Ensure CORS allows requests from this origin</li>
+                  <li>Check the Railway dashboard — is the service <strong className="text-slate-400">Active</strong> (not crashed/sleeping)?</li>
+                  <li>Visit <code className="bg-surface-3 px-1 rounded text-slate-400">RAILWAY_URL/health</code> in your browser to verify the backend is responding</li>
+                  <li>Ensure <code className="bg-surface-3 px-1 rounded text-slate-400">NEXT_PUBLIC_API_URL</code> is set in Netlify env vars and matches the Railway URL</li>
+                  <li>If you changed env vars, <strong className="text-slate-400">redeploy</strong> the frontend (NEXT_PUBLIC vars are baked at build time)</li>
                 </ol>
               </div>
               <button
