@@ -496,8 +496,8 @@ ${cleanCSS}
   function __req(mod){
     if(mod==='react') return React;
     if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
-    if(mod==='recharts'||mod==='Recharts') return window.Recharts||{};
-    if(mod==='lucide-react') return window.lucideReact||{};
+    if(mod==='recharts'||mod==='Recharts'){var _R=window.Recharts||{};_R.__esModule=true;_R.default=_R;return _R;}
+    if(mod==='lucide-react'){var _L=window.lucideReact||{};_L.__esModule=true;_L.default=_L;return _L;}
     /* Intercept any Supabase-related imports and return window.supabase.
        Generated code may do: import { supabaseClient } from '@/lib/supabase'
        In the preview sandbox, window.supabase IS the client. */
@@ -1023,8 +1023,8 @@ ${cleanCSS}
   function __req(mod){
     if(mod==='react') return React;
     if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
-    if(mod==='recharts'||mod==='Recharts') return window.Recharts||{};
-    if(mod==='lucide-react') return window.lucideReact||{};
+    if(mod==='recharts'||mod==='Recharts'){var _R=window.Recharts||{};_R.__esModule=true;_R.default=_R;return _R;}
+    if(mod==='lucide-react'){var _L=window.lucideReact||{};_L.__esModule=true;_L.default=_L;return _L;}
     /* Intercept Supabase-related imports → return window.supabase */
     if(mod.indexOf('supabase')!==-1&&mod!=='@supabase/supabase-js'){
       var _sb=window.supabase||{};

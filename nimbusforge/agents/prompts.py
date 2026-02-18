@@ -85,6 +85,9 @@ When the user asks for admin panels, CRMs, dashboards, or multi-role apps:
 - Plan KPI cards (total count, revenue sum, growth %)
 - Plan charts using Recharts (BarChart, LineChart, PieChart)
 - Plan aggregation: group by collection, compute in JS after fetch
+
+### Storage Prerequisite
+- If the app needs file uploads, note in risk_assessment: "Requires 'project-assets' storage bucket in Supabase. Create via Supabase Dashboard > Storage > New Bucket if it doesn't exist."
 """
 
 SCAFFOLDER_SYSTEM = """\
@@ -260,8 +263,23 @@ On success, store session and redirect to dashboard.
 On error, show message to user.
 
 ### Signup Component
-Use `window.supabase.auth.signUp({ email, password, options: { data: { role: 'user', name } } })`.
+IMPORTANT — First-user bootstrap: Before signup, determine the role automatically:
+```jsx
+// First user becomes admin, subsequent users are regular users
+const { count } = await window.supabase
+  .from('app_data')
+  .select('*', { count: 'exact', head: true })
+  .eq('collection', 'users')
+  .eq('project_id', window.__VEDAA_PROJECT_ID);
+const assignedRole = (count === 0) ? 'admin' : 'user';
+
+const { data, error } = await window.supabase.auth.signUp({
+  email, password,
+  options: { data: { role: assignedRole, name } }
+});
+```
 Show "Check your email" message after signup.
+For demo/preview apps: optionally allow role selection in a dropdown (admin/user) so the user can test both roles.
 
 ### Auth Guard
 ```jsx
@@ -692,6 +710,7 @@ KEY PATTERNS:
 ### File Uploads — When file attachment is needed:
 - Use Supabase Storage: `window.supabase.storage.from('project-assets')`
 - Upload: `const { data, error } = await window.supabase.storage.from('project-assets').upload(path, file);`
+- Handle bucket-missing error: `if (error?.message?.includes('Bucket not found')) { setError('Storage not configured. Create a "project-assets" bucket in Supabase Dashboard > Storage.'); return; }`
 - Get URL: `const { data: { publicUrl } } = window.supabase.storage.from('project-assets').getPublicUrl(path);`
 - Store the URL in the record's JSONB data field
 - Validate file size: `if (file.size > 5 * 1024 * 1024) { setError('File too large (max 5MB)'); return; }`

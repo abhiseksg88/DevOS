@@ -268,7 +268,8 @@ const { error } = await window.supabase
 
 ### Auth & RBAC — When login/signup is needed:
 - Use \`window.supabase.auth.signInWithPassword({ email, password })\` for login
-- Use \`window.supabase.auth.signUp({ email, password, options: { data: { role: 'user', name } } })\` for signup
+- Use \`window.supabase.auth.signUp({ email, password, options: { data: { role: assignedRole, name } } })\` for signup
+- First-user bootstrap: before signup, check if users collection is empty — if so, assign 'admin' role; otherwise assign 'user'
 - Wrap app in AuthGuard that checks session via \`window.supabase.auth.getSession()\`
 - Use \`user.user_metadata.role\` for role-based checks
 - Admin sees all data; regular users see only their own data (filter by \`data->>created_by\`)
@@ -302,6 +303,7 @@ const { data, count } = await window.supabase
 
 ### File Uploads:
 - Use \`window.supabase.storage.from('project-assets').upload(path, file)\`
+- Handle bucket-missing error: if error message includes "Bucket not found", show user-friendly message: "Create a 'project-assets' bucket in Supabase Dashboard > Storage"
 - Validate: file.size <= 5MB, file.type in allowed list
 - Store resulting URL in the record's JSONB data
 

@@ -330,7 +330,8 @@ Use the universal `app_data` table via `window.supabase`:
 - Wrap the app in AuthGuard if auth is required
 
 ### RBAC — When roles are mentioned (admin, manager, user):
-- Store role in user_metadata during signup: `options: { data: { role: 'user' } }`
+- Store role in user_metadata during signup: `options: { data: { role: assignedRole } }`
+- First-user bootstrap: check if users collection is empty; if so, assign 'admin' role automatically
 - Check role before rendering admin-only UI: `if (role !== 'admin') return null;`
 - Check role before destructive operations: `if (role !== 'admin') { setError('Unauthorized'); return; }`
 - Filter data by ownership for non-admin users:
@@ -349,6 +350,7 @@ Use the universal `app_data` table via `window.supabase`:
 
 ### File Uploads — When file attachment is needed:
 - Use Supabase Storage: `window.supabase.storage.from('project-assets')`
+- Handle bucket-missing error: `if (error?.message?.includes('Bucket not found'))` → show user-friendly message to create bucket
 - Validate file size (max 5MB) and type before upload
 - Store the URL in the record's JSONB data field
 
