@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
@@ -62,6 +63,8 @@ from ..services.discriminator import (
 )
 from ..services.sentinel import run_sentinel
 from ..services.patch_apply import apply_all_patches
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Supabase helper (uses service-role)

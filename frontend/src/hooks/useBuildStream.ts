@@ -29,7 +29,7 @@ export function useBuildStream() {
       // Cancel any existing stream
       cancelRef.current?.();
 
-      setState({ events: [], isStreaming: true, status: "queued" });
+      setState({ events: [], isStreaming: true, status: "queued", awaitingApproval: false, plan: null });
 
       cancelRef.current = streamBuildEvents(
         token,
