@@ -205,7 +205,7 @@ export function Workspace({ projectId }: { projectId: string }) {
           build_id: "",
           kind: "agent_start",
           agent: "fix-agent",
-          payload: { message: "Auto-fixing preview errors..." },
+          payload: { message: "Refining preview..." },
           seq: seqRef.current,
           created_at: new Date().toISOString(),
         },
@@ -213,7 +213,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       // On subsequent iterations, update the existing message instead of creating a new one
       if (fixMsgIdRef.current) {
         updateMessageById(fixMsgIdRef.current, {
-          content: "Retrying auto-fix...",
+          content: "Still refining...",
           status: "coding",
         });
       } else {
@@ -224,7 +224,7 @@ export function Workspace({ projectId }: { projectId: string }) {
           {
             id: fixId,
             role: "assistant",
-            content: "Detected preview errors — auto-fixing...",
+            content: "Refining your app for the best experience...",
             timestamp: Date.now(),
             status: "coding",
           },
@@ -252,7 +252,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         ]);
         if (fixMsgIdRef.current) {
           updateMessageById(fixMsgIdRef.current, {
-            content: `Auto-fix applied (iteration ${iteration}). Verifying preview...`,
+            content: "Looking good! Verifying your app...",
             status: "succeeded",
           });
           // Don't null fixMsgIdRef — if new errors appear, onFixStart will
@@ -261,7 +261,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       } else if (iteration >= 5) {
         if (fixMsgIdRef.current) {
           updateMessageById(fixMsgIdRef.current, {
-            content: `Auto-fix couldn't resolve all errors after ${iteration} attempts. You can describe the issue and I'll try a different approach.`,
+            content: "I ran into a tricky issue. Could you describe what you'd like changed?",
             status: "failed",
           });
           fixMsgIdRef.current = null;
@@ -270,7 +270,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         // Intermediate failure — update message but keep ref for next iteration
         if (fixMsgIdRef.current) {
           updateMessageById(fixMsgIdRef.current, {
-            content: `Auto-fix iteration ${iteration} didn't produce fixes — retrying...`,
+            content: "Still refining...",
             status: "coding",
           });
         }
@@ -285,20 +285,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     (msg: string) => {
       if (!msg) return;
 
-      // Only add a system message on the FIRST error of a fix cycle
-      // (avoids flooding chat with duplicate error messages during iterations)
-      if (!fixMsgIdRef.current && !autoFix.isFixing) {
-        setMessages((prev) => {
-          const fixMsg = {
-            id: crypto.randomUUID(),
-            role: "system" as const,
-            content: `Preview error detected: "${msg.slice(0, 120)}". Auto-fix will attempt to resolve this.`,
-            timestamp: Date.now(),
-          };
-          if (prev.some((m) => m.content === fixMsg.content)) return prev;
-          return [...prev, fixMsg];
-        });
-      }
+      // Errors are logged silently (see error-log.ts) — no system message to user
 
       // Trigger auto-fix
       if (!generator.isGenerating && !autoFix.isFixing) {
@@ -1123,6 +1110,8 @@ export function Workspace({ projectId }: { projectId: string }) {
                   url={deployedUrl}
                   files={fileTree}
                   isGenerating={generator.isGenerating}
+                  isFixing={autoFix.isFixing}
+                  fixIteration={autoFix.iteration}
                   tenantId={resolvedTenantId}
                   projectId={projectId}
                   userToken={token}
