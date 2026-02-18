@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 80" fill="none">
+  <defs>
+    <linearGradient id="wm-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="50%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="wm-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <!-- "Vedaa" wordmark -->
+  <text x="0" y="52" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="56" font-weight="700" letter-spacing="-2" fill="url(#wm-grad)">Ved</text>
+  <text x="130" y="52" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="56" font-weight="700" letter-spacing="-2" fill="url(#wm-grad)">aa</text>
+  <!-- Accent dot between the two a's -->
+  <circle cx="172" cy="20" r="4" fill="url(#wm-accent)"/>
+  <!-- Subtitle -->
+  <text x="1" y="72" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11" font-weight="500" letter-spacing="3" fill="#94a3b8" text-transform="uppercase">AGENTIC CODING PLATFORM</text>
+</svg>

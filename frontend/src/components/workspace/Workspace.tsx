@@ -44,7 +44,7 @@ import { AgentPipeline } from "@/components/chat/AgentPipeline";
 import { ActivityTimeline } from "@/components/build/ActivityTimeline";
 import { useWorkspaceMode } from "@/hooks/useWorkspaceMode";
 
-type RightTab = "preview" | "code" | "cloud" | "console";
+type RightTab = "preview" | "cloud" | "console";
 
 // Default file tree for new projects
 const defaultFileTree: FileNode[] = [
@@ -141,6 +141,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [consoleView, setConsoleView] = useState<"log" | "timeline">("timeline");
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [fileSidebarOpen, setFileSidebarOpen] = useState(false);
+  const [codeEditorOpen, setCodeEditorOpen] = useState(false);
 
   // Chat input state
   const [chatValue, setChatValue] = useState("");
@@ -446,7 +447,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       // Map old tab names to new ones
       const tabMap: Record<string, RightTab> = {
         preview: "preview",
-        code: "code",
+        code: "preview",
         infra: "cloud",
         console: "console",
         history: "preview",
@@ -522,7 +523,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       if (prev.some((f) => f.path === file.path)) return prev;
       return [...prev, file];
     });
-    setRightTab("code");
+    setCodeEditorOpen(true);
   }, []);
 
   const handleCloseFile = useCallback(
@@ -976,10 +977,9 @@ export function Workspace({ projectId }: { projectId: string }) {
     );
   }
 
-  // Tab definitions for right panel
+  // Tab definitions for right panel (Code is accessed via file tree only)
   const tabs = [
     { key: "preview" as const, icon: Eye, label: "Preview" },
-    { key: "code" as const, icon: Code2, label: "Code" },
     { key: "cloud" as const, icon: Cloud, label: "Cloud" },
     { key: "console" as const, icon: Terminal, label: "Console" },
   ];
@@ -1267,24 +1267,33 @@ export function Workspace({ projectId }: { projectId: string }) {
           {/* Tab bar */}
           <div className="h-10 border-b border-surface-3 flex items-center justify-between px-2 shrink-0">
             <div className="flex items-center gap-1">
-              {/* File sidebar toggle (only when on Code tab) */}
-              {rightTab === "code" && (
-                <button
-                  onClick={() => setFileSidebarOpen(!fileSidebarOpen)}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all mr-1"
-                  title={fileSidebarOpen ? "Hide files" : "Show files"}
-                >
-                  {fileSidebarOpen ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeft className="w-3.5 h-3.5" />}
-                </button>
-              )}
+              {/* File tree toggle */}
+              <button
+                onClick={() => {
+                  setFileSidebarOpen(!fileSidebarOpen);
+                  if (!fileSidebarOpen) setCodeEditorOpen(true);
+                }}
+                className={cn(
+                  "p-1.5 rounded-lg transition-all mr-1",
+                  fileSidebarOpen
+                    ? "text-brand-400 bg-brand-500/10"
+                    : "text-slate-500 hover:text-foreground hover:bg-surface-2"
+                )}
+                title={fileSidebarOpen ? "Hide files" : "Show files"}
+              >
+                <Code2 className="w-3.5 h-3.5" />
+              </button>
 
               {tabs.map(({ key, icon: Icon, label }) => (
                 <button
                   key={key}
-                  onClick={() => setRightTab(key)}
+                  onClick={() => {
+                    setRightTab(key);
+                    if (key !== "preview") setCodeEditorOpen(false);
+                  }}
                   className={cn(
                     "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
-                    rightTab === key
+                    rightTab === key && !codeEditorOpen
                       ? "bg-surface-3 text-foreground"
                       : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
                   )}
@@ -1297,12 +1306,22 @@ export function Workspace({ projectId }: { projectId: string }) {
                 </button>
               ))}
             </div>
+
+            {/* Close code editor button when open */}
+            {codeEditorOpen && (
+              <button
+                onClick={() => { setCodeEditorOpen(false); setFileSidebarOpen(false); }}
+                className="px-2 py-1 rounded-lg text-2xs font-medium text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
+              >
+                Close Editor
+              </button>
+            )}
           </div>
 
           {/* Tab content */}
           <div className="flex-1 overflow-hidden flex">
-            {/* File sidebar (inside Code tab) */}
-            {rightTab === "code" && fileSidebarOpen && (
+            {/* File sidebar */}
+            {fileSidebarOpen && (
               <div className="w-[200px] shrink-0 border-r border-surface-3 flex flex-col bg-surface-1 overflow-y-auto">
                 <div className="p-2">
                   <span className="text-2xs font-semibold uppercase tracking-wider text-slate-500 px-2">Files</span>
@@ -1311,6 +1330,22 @@ export function Workspace({ projectId }: { projectId: string }) {
                   files={fileTree}
                   activeFile={activeFile}
                   onSelect={handleFileSelect}
+                />
+              </div>
+            )}
+
+            {/* Code editor split (when file is open) */}
+            {codeEditorOpen && activeFile && (
+              <div className={cn(
+                "shrink-0 border-r border-surface-3 overflow-hidden",
+                fileSidebarOpen ? "w-[calc(50%-100px)]" : "w-1/2"
+              )}>
+                <CodeEditor
+                  file={activeFile}
+                  openFiles={openFiles}
+                  onSelectFile={(f) => setActiveFile(f)}
+                  onCloseFile={handleCloseFile}
+                  onContentChange={updateFileContent}
                 />
               </div>
             )}
@@ -1327,16 +1362,6 @@ export function Workspace({ projectId }: { projectId: string }) {
                   projectId={projectId}
                   userToken={token}
                   onError={handlePreviewError}
-                />
-              )}
-
-              {rightTab === "code" && (
-                <CodeEditor
-                  file={activeFile}
-                  openFiles={openFiles}
-                  onSelectFile={(f) => setActiveFile(f)}
-                  onCloseFile={handleCloseFile}
-                  onContentChange={updateFileContent}
                 />
               )}
 
