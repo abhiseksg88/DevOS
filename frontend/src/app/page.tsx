@@ -61,11 +61,9 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="relative z-50 h-16 border-b border-surface-3/50 backdrop-blur-xl bg-surface-0/80">
         <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-brand-500 flex items-center justify-center glow-brand">
-              <Zap className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-bold gradient-text tracking-tight">Vedaa.io</span>
+          <div className="flex flex-col">
+            <span className="text-xl font-bold tracking-tight text-foreground">Vedaa</span>
+            <span className="text-2xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
           </div>
           <div className="hidden md:flex items-center gap-8">
             <a href="#features" className="text-sm text-slate-400 hover:text-foreground transition-colors">Features</a>
@@ -381,14 +379,12 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-surface-3/50 py-12 px-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-brand-500 flex items-center justify-center">
-              <Zap className="w-4 h-4 text-white" />
-            </div>
-            <span className="text-sm font-semibold gradient-text">Vedaa.io</span>
+          <div className="flex flex-col">
+            <span className="text-sm font-bold tracking-tight text-foreground">Vedaa</span>
+            <span className="text-2xs text-slate-500 tracking-wider">Agentic Coding Platform</span>
           </div>
           <p className="text-xs text-slate-600">
-            &copy; {new Date().getFullYear()} Vedaa.io. All rights reserved.
+            &copy; {new Date().getFullYear()} Vedaa. All rights reserved.
           </p>
         </div>
       </footer>

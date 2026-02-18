@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { LogOut, CreditCard, Settings, Zap, Sun, Moon } from "lucide-react";
+import { LogOut, CreditCard, Settings, Sun, Moon } from "lucide-react";
 import Image from "next/image";
 import type { User } from "@supabase/supabase-js";
 import { useTheme } from "@/components/ThemeProvider";
@@ -54,11 +54,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="min-h-screen bg-surface-0">
       {/* Top nav */}
       <header className="h-14 border-b border-surface-3 flex items-center justify-between px-6">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center">
-            <Zap className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-lg font-semibold gradient-text">Vedaa.io</span>
+        <div className="flex flex-col">
+          <span className="text-lg font-bold tracking-tight text-foreground">Vedaa</span>
+          <span className="text-2xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
         </div>
 
         <div className="flex items-center gap-2">

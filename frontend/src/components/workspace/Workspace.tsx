@@ -967,11 +967,10 @@ export function Workspace({ projectId }: { projectId: string }) {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="w-px h-5 bg-surface-3" />
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-md bg-brand-500 flex items-center justify-center">
-              <Zap className="w-3 h-3 text-white" />
-            </div>
-            <span className="text-sm font-medium text-foreground">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold tracking-tight text-foreground">Vedaa</span>
+            <div className="w-px h-4 bg-surface-3" />
+            <span className="text-sm font-medium text-slate-400">
               {project?.name ?? "Project"}
             </span>
           </div>
