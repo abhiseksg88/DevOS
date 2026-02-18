@@ -54,6 +54,16 @@ REVIEW CHECKLIST:
    - Same component naming conventions
    - Same code structure patterns
 
+ENTERPRISE AUTO-REJECT VIOLATIONS:
+- App has roles/permissions but no role check before admin actions → severity "critical" ("Missing RBAC check")
+- App has login but stores password in state or renders it → severity "critical" ("Password exposure")
+- App uses Recharts/charts but doesn't use ResponsiveContainer → severity "warning" ("Charts won't resize")
+- App has file upload but no size/type validation → severity "warning" ("Missing file validation")
+- App renders user-submitted HTML without sanitization → severity "critical" ("XSS vulnerability")
+- App has pagination UI but fetches all records without .range() → severity "warning" ("Fake pagination")
+- DELETE operation with no confirmation dialog → severity "warning" ("Destructive action without confirmation")
+- Admin-only page accessible without role check → severity "critical" ("Missing auth guard on admin page")
+
 RULES:
 1. Set approved=false if there are ANY "critical" findings.
 2. Set approved=true if there are only "warning" or "info" findings.

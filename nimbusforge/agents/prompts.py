@@ -61,6 +61,30 @@ If the request involves data persistence:
 3. List CRUD operations required — ALL go in page.tsx using window.supabase
 4. Identify where loading/error UI states are needed
 5. Note if UPDATE operations need optimistic locking
+
+## ENTERPRISE PATTERNS
+
+When the user asks for admin panels, CRMs, dashboards, or multi-role apps:
+
+### Auth & RBAC
+- Plan a `users` collection with fields: email, role ("admin"|"manager"|"user"), name, avatar_url
+- Plan role-based views: admin sees all data + user management, user sees only own data
+- Plan auth flows: login page, signup page, protected routes
+- The generated app uses `window.supabase.auth` for authentication
+
+### Multi-Page Layout
+- Plan a sidebar/nav layout with routing via hash (#/dashboard, #/contacts, #/settings)
+- Plan these standard pages: Dashboard, List views, Detail views, Settings, User Management (admin only)
+
+### Data Relationships
+- Plan parent→child collections with explicit foreign keys in JSONB:
+  e.g., contacts collection: { customer_id: "...", name: "...", email: "..." }
+- Plan loading related data: fetch parent, then fetch children filtered by parent record_id
+
+### Dashboard & Analytics
+- Plan KPI cards (total count, revenue sum, growth %)
+- Plan charts using Recharts (BarChart, LineChart, PieChart)
+- Plan aggregation: group by collection, compute in JS after fetch
 """
 
 SCAFFOLDER_SYSTEM = """\
@@ -223,6 +247,99 @@ export default function CaseManager() {
       )}
     </div>
   );
+}
+```
+
+## AUTH INTEGRATION (for apps requiring login)
+
+When auth is needed, generate these patterns:
+
+### Login Component
+Use `window.supabase.auth.signInWithPassword({ email, password })`.
+On success, store session and redirect to dashboard.
+On error, show message to user.
+
+### Signup Component
+Use `window.supabase.auth.signUp({ email, password, options: { data: { role: 'user', name } } })`.
+Show "Check your email" message after signup.
+
+### Auth Guard
+```jsx
+function AuthGuard({ children }) {
+  const [user, setUser] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    window.supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user || null);
+      setLoading(false);
+    });
+    const { data: { subscription } } = window.supabase.auth.onAuthStateChange(
+      (_event, session) => setUser(session?.user || null)
+    );
+    return () => subscription.unsubscribe();
+  }, []);
+  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  if (!user) return <LoginPage onLogin={() => window.location.reload()} />;
+  return children;
+}
+```
+
+### Role Check Helper
+```jsx
+function useCurrentUser() {
+  const [user, setUser] = React.useState(null);
+  React.useEffect(() => {
+    window.supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user || null);
+    });
+  }, []);
+  const role = user?.user_metadata?.role || 'user';
+  const isAdmin = role === 'admin';
+  return { user, role, isAdmin };
+}
+```
+
+## CRUD WITH RELATIONSHIPS
+
+When entities have parent-child relationships:
+
+```javascript
+// Load contacts for a specific customer
+const { data: contacts } = await window.supabase
+  .from('app_data')
+  .select('*')
+  .eq('collection', 'contacts')
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
+  .eq('data->>customer_id', customerId)
+  .order('created_at', { ascending: false });
+```
+
+## PAGINATION
+
+```javascript
+const PAGE_SIZE = 20;
+const [page, setPage] = React.useState(0);
+
+const { data, count } = await window.supabase
+  .from('app_data')
+  .select('*', { count: 'exact' })
+  .eq('collection', 'customers')
+  .eq('project_id', window.__VEDAA_PROJECT_ID)
+  .order('created_at', { ascending: false })
+  .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+const totalPages = Math.ceil((count || 0) / PAGE_SIZE);
+```
+
+## FORM VALIDATION
+
+```javascript
+function validateEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+function validateRequired(value, fieldName) {
+  if (!value?.toString().trim()) return fieldName + ' is required';
+  return null;
 }
 ```
 
@@ -535,6 +652,58 @@ KEY PATTERNS:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+## ENTERPRISE MANDATORY PATTERNS
+
+### Auth — When the app has login/signup:
+- Use `window.supabase.auth` for all auth operations
+- NEVER store passwords or tokens in state or localStorage
+- ALWAYS check session before rendering protected content
+- Use `user.user_metadata.role` for role checks
+- Wrap the app in AuthGuard if auth is required
+
+### RBAC — When roles are mentioned (admin, manager, user):
+- Store role in user_metadata during signup: `options: { data: { role: 'user' } }`
+- Check role before rendering admin-only UI: `if (role !== 'admin') return null;`
+- Check role before destructive operations: `if (role !== 'admin') { setError('Unauthorized'); return; }`
+- Filter data by ownership for non-admin users:
+  `.eq('data->>created_by', user.id)` for user-owned data
+  No filter for admin (sees all)
+
+### Charts — When dashboards/analytics are needed:
+- Use Recharts (available via CDN): `const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } = window.Recharts;`
+- Wrap all charts in `<ResponsiveContainer width="100%" height={300}>`
+- Aggregate data in JS after fetching: `const totals = data.reduce((acc, item) => ...)`
+- KPI cards pattern:
+  ```jsx
+  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div className="bg-white p-6 rounded-lg shadow">
+      <p className="text-sm text-gray-500">Total Customers</p>
+      <p className="text-3xl font-bold">{customers.length}</p>
+    </div>
+  </div>
+  ```
+
+### Routing — For multi-page apps:
+- Use hash-based routing: `const [currentPage, setCurrentPage] = React.useState(window.location.hash.slice(1) || 'dashboard');`
+- Listen for hash changes: `window.addEventListener('hashchange', () => setCurrentPage(window.location.hash.slice(1)));`
+- Navigate: `<a href="#contacts" onClick={() => setCurrentPage('contacts')}>`
+- Render: `{currentPage === 'dashboard' && <DashboardPage />}`
+
+### File Uploads — When file attachment is needed:
+- Use Supabase Storage: `window.supabase.storage.from('project-assets')`
+- Upload: `const { data, error } = await window.supabase.storage.from('project-assets').upload(path, file);`
+- Get URL: `const { data: { publicUrl } } = window.supabase.storage.from('project-assets').getPublicUrl(path);`
+- Store the URL in the record's JSONB data field
+- Validate file size: `if (file.size > 5 * 1024 * 1024) { setError('File too large (max 5MB)'); return; }`
+- Validate file type: `if (!['image/png','image/jpeg','application/pdf'].includes(file.type)) { setError('Invalid file type'); return; }`
+
+### Data Tables — Standard patterns:
+- Search: filter in JS with `.filter(item => item.data.name?.toLowerCase().includes(search.toLowerCase()))`
+- Sort: `const sorted = [...filtered].sort((a, b) => { ... })`
+- Pagination: range() queries with page state
+- Empty state: always show "No records found" with a CTA to create
+- Loading skeleton: show placeholder rows during fetch
+
 CRITICAL RULES:
 1. Output ONLY unified diff format patches. These must be git-apply compatible.
 2. Include sufficient context lines (3+) around changes for unambiguous patching.
@@ -641,4 +810,15 @@ RULES:
 5. If patches look correct and secure, approve them. Don't find problems that aren't there.
 6. Database operations without error handling are CRITICAL violations.
 7. CRUD page.tsx up to 300 LOC is allowed. Other files: max 120 LOC.
+
+## ENTERPRISE AUTO-REJECT VIOLATIONS
+
+- App has roles/permissions but no role check before admin actions → REJECT ("Missing RBAC check")
+- App has login but stores password in state or renders it → REJECT ("Password exposure")
+- App uses charts but doesn't use ResponsiveContainer → REJECT ("Charts won't resize")
+- App has file upload but no size/type validation → REJECT ("Missing file validation")
+- App renders user-submitted HTML without sanitization → REJECT ("XSS vulnerability")
+- App has pagination UI but fetches all records with no .range() → REJECT ("Fake pagination")
+- DELETE operation with no confirmation dialog → REJECT ("Destructive action without confirmation")
+- Admin-only page accessible without role check → REJECT ("Missing auth guard on admin page")
 """

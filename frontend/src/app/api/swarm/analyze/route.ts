@@ -47,6 +47,18 @@ Your output MUST be valid JSON with this exact structure:
   "integration_notes": "How new features connect to existing navigation, state, and styling. Be specific."
 }
 
+ENTERPRISE ARCHITECTURE RULES:
+When the prompt mentions CRM, admin panel, dashboard, RBAC, roles, permissions, or enterprise:
+1. ALWAYS plan an auth layer (login/signup/session) in the data model and components.
+2. ALWAYS plan role-based access — include "role" field in user data model.
+3. ALWAYS plan a sidebar navigation layout with hash-based routing (#/dashboard, #/contacts, etc.).
+4. ALWAYS plan a dashboard page with KPI cards and charts (Recharts is available via CDN).
+5. Plan collections with explicit relationships (e.g., customer_id in contacts).
+6. Plan pagination for any collection likely to exceed 50 records.
+7. Plan form validation for all user inputs.
+8. Plan confirmation dialogs for all DELETE operations.
+9. Plan file upload with size/type validation if the app involves attachments.
+
 RULES:
 1. Analyze the existing code carefully before planning changes.
 2. For "add_feature": identify existing navigation and plan to ADD to it, not replace it.

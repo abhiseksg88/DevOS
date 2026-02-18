@@ -264,6 +264,56 @@ const { error } = await window.supabase
 - Pricing table
 - CTA sections
 
+## Enterprise App Patterns (CRM, Admin Panels, RBAC Apps)
+
+### Auth & RBAC — When login/signup is needed:
+- Use \`window.supabase.auth.signInWithPassword({ email, password })\` for login
+- Use \`window.supabase.auth.signUp({ email, password, options: { data: { role: 'user', name } } })\` for signup
+- Wrap app in AuthGuard that checks session via \`window.supabase.auth.getSession()\`
+- Use \`user.user_metadata.role\` for role-based checks
+- Admin sees all data; regular users see only their own data (filter by \`data->>created_by\`)
+- NEVER store passwords or tokens in state or localStorage
+
+### Multi-Page Routing (hash-based):
+- Use \`const [currentPage, setCurrentPage] = useState(window.location.hash.slice(1) || 'dashboard')\`
+- Listen: \`window.addEventListener('hashchange', () => setCurrentPage(window.location.hash.slice(1)))\`
+- Navigate: \`<a href="#contacts" onClick={() => setCurrentPage('contacts')}>\`
+- Sidebar layout: fixed sidebar (w-64) + scrollable main content area
+
+### Charts & Analytics — Recharts is available via CDN:
+- Access: \`const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } = window.Recharts;\`
+- ALWAYS wrap in \`<ResponsiveContainer width="100%" height={300}>\`
+- Aggregate data in JS: \`const totals = data.reduce((acc, item) => ...)\`
+- KPI cards: grid of stat cards with large number + label + trend indicator
+
+### Pagination:
+\`\`\`javascript
+const PAGE_SIZE = 20;
+const { data, count } = await window.supabase
+  .from('app_data').select('*', { count: 'exact' })
+  .eq('collection', 'items').eq('project_id', window.__VEDAA_PROJECT_ID)
+  .order('created_at', { ascending: false })
+  .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+\`\`\`
+
+### Data Relationships:
+- Filter children by parent ID: \`.eq('data->>customer_id', customerId)\`
+- Load parent, then fetch children filtered by parent record_id
+
+### File Uploads:
+- Use \`window.supabase.storage.from('project-assets').upload(path, file)\`
+- Validate: file.size <= 5MB, file.type in allowed list
+- Store resulting URL in the record's JSONB data
+
+### Form Validation:
+- Validate email: \`/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)\`
+- Validate required: show inline error messages, highlight fields with red border
+- Prevent submit until valid
+
+### DELETE Safety:
+- ALWAYS show a confirmation dialog before destructive operations
+- Pattern: \`if (!confirm('Are you sure you want to delete this?')) return;\`
+
 Do NOT include any explanation text outside of file blocks.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
