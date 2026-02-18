@@ -61,8 +61,32 @@ def run_sentinel(
         # Step 2: tsc --noEmit
         type_errors = _run_tsc_check(repo_dir)
 
+        # Step 2b: Enterprise pattern checks on source files
+        enterprise_warnings: list[str] = []
+        for src_file in repo_dir.rglob("*.tsx"):
+            try:
+                code_content = src_file.read_text(encoding="utf-8")
+                enterprise_warnings.extend(run_enterprise_checks(code_content))
+            except Exception:
+                pass
+        for src_file in repo_dir.rglob("*.jsx"):
+            try:
+                code_content = src_file.read_text(encoding="utf-8")
+                enterprise_warnings.extend(run_enterprise_checks(code_content))
+            except Exception:
+                pass
+        if enterprise_warnings:
+            logger.info(
+                "Sentinel enterprise checks: %d warnings",
+                len(enterprise_warnings),
+            )
+
         # Combine all errors
-        all_errors = lint_result.get("unfixed", []) + type_errors
+        all_errors = (
+            lint_result.get("unfixed", [])
+            + type_errors
+            + enterprise_warnings
+        )
 
         if not all_errors:
             logger.info(
@@ -101,12 +125,76 @@ def run_sentinel(
         len(remaining), MAX_HEAL_ATTEMPTS,
     )
 
+    # Separate enterprise warnings from hard errors for clarity
+    hard_errors = [e for e in remaining if not any(
+        e.startswith(pfx)
+        for pfx in ("RBAC:", "FILE_UPLOAD:", "UX:", "CHARTS:", "AUTH:")
+    )]
+    ent_warnings = [e for e in remaining if e not in hard_errors]
+
     return {
         "clean": False,
         "attempts": MAX_HEAL_ATTEMPTS,
         "errors_fixed": total_fixed,
-        "remaining_errors": remaining[:20],  # cap output
+        "remaining_errors": hard_errors[:20],
+        "enterprise_warnings": ent_warnings[:10],
     }
+
+
+def run_enterprise_checks(code: str) -> list[str]:
+    """Check for enterprise pattern violations in generated code."""
+    warnings: list[str] = []
+
+    has_auth = "supabase.auth" in code or "signInWithPassword" in code
+    has_roles = "role" in code and ("admin" in code or "manager" in code)
+    has_upload = (
+        "storage.from" in code
+        or 'input type="file"' in code
+        or "type='file'" in code
+    )
+    has_delete = ".delete()" in code
+    has_charts = (
+        "Recharts" in code or "BarChart" in code or "LineChart" in code
+    )
+
+    if has_roles:
+        if (
+            "isAdmin" not in code
+            and "role === 'admin'" not in code
+            and 'role === "admin"' not in code
+            and "role !== " not in code
+        ):
+            warnings.append(
+                "RBAC: App mentions roles but no role-check conditionals found"
+            )
+
+    if has_upload:
+        if "file.size" not in code and "maxSize" not in code:
+            warnings.append(
+                "FILE_UPLOAD: No file size validation found"
+            )
+        if "file.type" not in code and "accept=" not in code:
+            warnings.append(
+                "FILE_UPLOAD: No file type validation found"
+            )
+
+    if has_delete and "confirm(" not in code and "Confirm" not in code:
+        warnings.append(
+            "UX: DELETE operation without confirmation dialog"
+        )
+
+    if has_charts and "ResponsiveContainer" not in code:
+        warnings.append(
+            "CHARTS: Using Recharts without ResponsiveContainer — "
+            "charts won't resize"
+        )
+
+    if has_auth and "AuthGuard" not in code and "getSession" not in code:
+        warnings.append(
+            "AUTH: Auth operations exist but no session check/guard found"
+        )
+
+    return warnings
 
 
 def _run_eslint_fix(repo_dir: Path) -> dict[str, Any]:

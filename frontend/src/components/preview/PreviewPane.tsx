@@ -225,6 +225,12 @@ console.error=function(){
 <!-- 5. Supabase Client SDK (for data persistence) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>
 
+<!-- 6. Recharts (for dashboard charts and analytics) -->
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"><\/script>
+
+<!-- 7. Lucide React Icons (for enterprise UI icons) -->
+<script src="https://cdn.jsdelivr.net/npm/lucide-react@0.468.0/dist/umd/lucide-react.min.js"><\/script>
+
 <style>
 html,body,#root{height:100%;width:100%;margin:0;padding:0;overflow-x:hidden}
 *,*::before,*::after{box-sizing:border-box}
@@ -490,6 +496,8 @@ ${cleanCSS}
   function __req(mod){
     if(mod==='react') return React;
     if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
+    if(mod==='recharts'||mod==='Recharts'){var _R=window.Recharts||{};_R.__esModule=true;_R.default=_R;return _R;}
+    if(mod==='lucide-react'){var _L=window.lucideReact||{};_L.__esModule=true;_L.default=_L;return _L;}
     /* Intercept any Supabase-related imports and return window.supabase.
        Generated code may do: import { supabaseClient } from '@/lib/supabase'
        In the preview sandbox, window.supabase IS the client. */
@@ -893,6 +901,8 @@ window.onunhandledrejection=function(e){window.__errs.push({message:e.reason?(e.
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"><\/script>
 <script src="https://cdn.tailwindcss.com"><\/script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/lucide-react@0.468.0/dist/umd/lucide-react.min.js"><\/script>
 
 <style>
 html,body,#root{height:100%;width:100%;margin:0;padding:0;overflow-x:hidden}
@@ -1013,6 +1023,8 @@ ${cleanCSS}
   function __req(mod){
     if(mod==='react') return React;
     if(mod==='react-dom'||mod==='react-dom/client') return ReactDOM;
+    if(mod==='recharts'||mod==='Recharts'){var _R=window.Recharts||{};_R.__esModule=true;_R.default=_R;return _R;}
+    if(mod==='lucide-react'){var _L=window.lucideReact||{};_L.__esModule=true;_L.default=_L;return _L;}
     /* Intercept Supabase-related imports → return window.supabase */
     if(mod.indexOf('supabase')!==-1&&mod!=='@supabase/supabase-js'){
       var _sb=window.supabase||{};

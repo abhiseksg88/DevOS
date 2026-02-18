@@ -98,6 +98,18 @@ intent into concrete technical specifications that other agents will execute.
   "persona_insights": "What I learned about the user from this interaction"
 }
 
+### Enterprise Architecture Awareness
+
+When the prompt mentions CRM, admin panel, dashboard, RBAC, roles, permissions, or enterprise:
+
+1. ALWAYS plan an auth layer (login/signup/session)
+2. ALWAYS plan role-based access (admin sees all, user sees own data)
+3. ALWAYS plan a sidebar navigation layout with hash routing
+4. ALWAYS plan a dashboard page with KPI cards
+5. Plan collections with explicit relationships (customer_id in contacts)
+6. Plan pagination for any collection likely to exceed 50 records
+7. Include "role" field in user collection schema
+
 ## Rules
 1. NEVER output code. Your output is pure strategy and planning.
 2. Reference the Neural Nexus context extensively. Show the user you know them.
@@ -308,6 +320,44 @@ Use the universal `app_data` table via `window.supabase`:
 - DELETE: by collection + record_id
 - ALWAYS handle errors and show them to the user
 
+## ENTERPRISE MANDATORY PATTERNS
+
+### Auth — When the app has login/signup:
+- Use `window.supabase.auth` for all auth operations
+- NEVER store passwords or tokens in state or localStorage
+- ALWAYS check session before rendering protected content
+- Use `user.user_metadata.role` for role checks
+- Wrap the app in AuthGuard if auth is required
+
+### RBAC — When roles are mentioned (admin, manager, user):
+- Store role in user_metadata during signup: `options: { data: { role: assignedRole } }`
+- First-user bootstrap: check if users collection is empty; if so, assign 'admin' role automatically
+- Check role before rendering admin-only UI: `if (role !== 'admin') return null;`
+- Check role before destructive operations: `if (role !== 'admin') { setError('Unauthorized'); return; }`
+- Filter data by ownership for non-admin users:
+  `.eq('data->>created_by', user.id)` for user-owned data
+  No filter for admin (sees all)
+
+### Charts — When dashboards/analytics are needed:
+- Use Recharts (available via CDN): `const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } = window.Recharts;`
+- Wrap all charts in `<ResponsiveContainer width="100%" height={300}>`
+- Aggregate data in JS after fetching
+
+### Routing — For multi-page apps:
+- Use hash-based routing: `const [currentPage, setCurrentPage] = React.useState(window.location.hash.slice(1) || 'dashboard');`
+- Listen for hash changes: `window.addEventListener('hashchange', ...)`
+- Render: `{currentPage === 'dashboard' && <DashboardPage />}`
+
+### File Uploads — When file attachment is needed:
+- Use Supabase Storage: `window.supabase.storage.from('project-assets')`
+- Handle bucket-missing error: `if (error?.message?.includes('Bucket not found'))` → show user-friendly message to create bucket
+- Validate file size (max 5MB) and type before upload
+- Store the URL in the record's JSONB data field
+
+### Pagination:
+- Use `.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)` for real pagination
+- Use `{ count: 'exact' }` in select to get total count
+
 ## CRITICAL — OUTPUT SAFETY
 1. For EXISTING files (in "Current Files" context): MUST use ===EDIT: ...=== with SEARCH/REPLACE.
    NEVER use ===FILE: ...=== for existing files. Full-file rewrites cause output truncation crashes.
@@ -404,6 +454,14 @@ developer, and a compliance auditor simultaneously.
 - ✅ No localStorage for sensitive data
 - ✅ No hardcoded credentials
 - ⚠️ RLS policies verified for tenant isolation
+
+### Enterprise Security Checks
+- If app has auth: verify AuthGuard wraps the main component
+- If app has roles: verify admin actions check role before executing
+- If app has file uploads: verify size and type validation exists
+- If app has user input rendered as HTML: verify sanitization
+- If app has DELETE: verify confirmation dialog exists
+- If app fetches user data: verify it filters by project_id AND (for non-admin) by created_by
 """
 
 
