@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Github, Mail, ArrowRight, Loader2, CheckCircle, Zap } from "lucide-react";
+import { Github, Mail, ArrowRight, Loader2, CheckCircle } from "lucide-react";
 import Image from "next/image";
 
 export default function LoginPage() {
@@ -121,11 +121,9 @@ export default function LoginPage() {
         <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-violet-500/10 rounded-full blur-3xl" />
 
         <div className="relative z-10 max-w-md px-8">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-12 h-12 rounded-xl bg-brand-500 flex items-center justify-center glow-brand">
-              <Zap className="w-6 h-6 text-white" />
-            </div>
-            <span className="text-2xl font-bold gradient-text">Vedaa.io</span>
+          <div className="flex flex-col mb-8">
+            <span className="text-2xl font-bold tracking-tight text-foreground">Vedaa</span>
+            <span className="text-xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
           </div>
           <h1 className="text-4xl font-bold text-foreground mb-4 leading-tight">
             The Agentic
@@ -159,11 +157,9 @@ export default function LoginPage() {
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="w-full max-w-sm">
           {/* Mobile logo */}
-          <div className="lg:hidden flex items-center gap-3 mb-10">
-            <div className="w-10 h-10 rounded-xl bg-brand-500 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-xl font-bold gradient-text">Vedaa.io</span>
+          <div className="lg:hidden flex flex-col mb-10">
+            <span className="text-xl font-bold tracking-tight text-foreground">Vedaa</span>
+            <span className="text-2xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
           </div>
 
           <h2 className="text-2xl font-bold text-foreground mb-2">

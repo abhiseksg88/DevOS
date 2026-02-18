@@ -21,8 +21,28 @@ export function useProject(projectId: string) {
   const tokenRef = useRef(token);
   tokenRef.current = token;
 
+  // ──────────────────────────────────────────────────────────────
+  // Auto-refresh: Listen for Supabase auth state changes
+  // (TOKEN_REFRESHED, SIGNED_IN, SIGNED_OUT, etc.)
+  // Supabase SDK auto-refreshes the JWT ~30s before it expires,
+  // this listener captures the new token so it's never stale.
+  // ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const supabase = createClient();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const newToken = session?.access_token ?? "";
+      const newUserId = session?.user?.id ?? null;
+      if (newToken && newToken !== tokenRef.current) {
+        setToken(newToken);
+        setUserId(newUserId);
+        tokenRef.current = newToken;
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // getToken always fetches a fresh session — never returns a stale cached value
   const getToken = useCallback(async () => {
-    if (tokenRef.current) return tokenRef.current;
     try {
       const supabase = createClient();
       const { data } = await supabase.auth.getSession();
@@ -34,9 +54,10 @@ export function useProject(projectId: string) {
       return t;
     } catch (err) {
       console.error("[useProject] Failed to get auth session:", err);
-      return "";
+      // Return whatever we have cached rather than empty string
+      return tokenRef.current || "";
     }
-  }, []); // Stable — no dependencies
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;
