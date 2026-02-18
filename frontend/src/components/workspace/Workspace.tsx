@@ -2,12 +2,10 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useProject } from "@/hooks/useProject";
 import { useGenerate, type PipelineEvent } from "@/hooks/useGenerate";
 import { useAutoFix } from "@/hooks/useAutoFix";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
-import { ChatPanel } from "@/components/chat/ChatPanel";
 import { CodeEditor } from "@/components/editor/CodeEditor";
 import { FileTree } from "@/components/editor/FileTree";
 import { PreviewPane } from "@/components/preview/PreviewPane";
@@ -26,6 +24,9 @@ import {
   Brain,
   Sun,
   Moon,
+  Palette,
+  PanelLeft,
+  PanelLeftClose,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -34,8 +35,12 @@ import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
 import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
 import { VersionHistory } from "@/components/workspace/VersionHistory";
 import { useTheme } from "@/components/ThemeProvider";
+import { FigmaPanel } from "@/components/workspace/FigmaPanel";
+import { CommandBar } from "@/components/chat/CommandBar";
+import { ActivityTimeline } from "@/components/build/ActivityTimeline";
+import { useWorkspaceMode } from "@/hooks/useWorkspaceMode";
 
-type RightTab = "code" | "preview" | "console" | "infra" | "history";
+type RightTab = "code" | "preview" | "console" | "infra" | "history" | "design";
 
 // Default file tree for new projects
 const defaultFileTree: FileNode[] = [
@@ -129,6 +134,8 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [showNexus, setShowNexus] = useState(false);
   const [integrationContext, setIntegrationContext] = useState<string>("");
   const [nexusContext, setNexusContext] = useState<string>("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [consoleView, setConsoleView] = useState<"log" | "timeline">("timeline");
 
   // Load integration context (what APIs are available) for code generation
   useEffect(() => {
@@ -157,6 +164,7 @@ export function Workspace({ projectId }: { projectId: string }) {
       setDeployedUrl(project.deployed_url);
     }
   }, [project?.deployed_url]);
+
   const seqRef = useRef(0);
 
   // Track pipeline events we've already converted to build events
@@ -277,6 +285,24 @@ export function Workspace({ projectId }: { projectId: string }) {
       }
     }, [updateMessageById]),
   );
+
+  // Workspace mode — auto-derives from build/fix/deploy state
+  const hasPreviewContent = fileTree !== defaultFileTree && flattenTree(fileTree).length > 3;
+  const { mode, autoTab, statusLabel, statusColor } = useWorkspaceMode(
+    generator,
+    autoFix,
+    undefined,
+    hasPreviewContent,
+  );
+
+  // Auto-switch tabs when mode changes (user can still override manually)
+  const autoTabAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (autoTab && autoTab !== rightTab && autoTabAppliedRef.current !== autoTab) {
+      autoTabAppliedRef.current = autoTab;
+      setRightTab(autoTab as RightTab);
+    }
+  }, [autoTab]);
 
   // Queue errors that arrive during generation — re-fire after generation completes
   const pendingErrorsRef = useRef<string[]>([]);
@@ -1026,141 +1052,200 @@ export function Workspace({ projectId }: { projectId: string }) {
         </div>
       </header>
 
-      {/* Main workspace — 3 panels */}
-      <PanelGroup direction="horizontal" className="flex-1">
-        {/* Panel 1: Chat */}
-        <Panel defaultSize={30} minSize={20} maxSize={45}>
-          <ChatPanel
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            onApprovePlan={handleApprovePlan}
-            onModifyPlan={handleModifyPlan}
-            onRejectPlan={handleRejectPlan}
-            onOpenPreview={() => setRightTab("preview")}
-            onOpenCode={() => setRightTab("code")}
-            isStreaming={generator.isGenerating}
-            isAnalyzing={generator.isAnalyzing}
-            buildEvents={generationEvents}
-          />
-        </Panel>
-
-        <PanelResizeHandle />
-
-        {/* Panel 2: Code + Preview + Console (tabbed) */}
-        <Panel defaultSize={70} minSize={40}>
-          <div className="h-full flex flex-col">
-            {/* Tabs */}
-            <div className="h-10 border-b border-surface-3 flex items-center px-2 gap-1 shrink-0">
-              {(
-                [
-                  { key: "code", icon: Code2, label: "Code" },
-                  { key: "preview", icon: Eye, label: "Preview" },
-                  { key: "console", icon: Terminal, label: "Console" },
-                  { key: "infra", icon: Database, label: "Infra" },
-                  { key: "history", icon: History, label: "History" },
-                ] as const
-              ).map(({ key, icon: Icon, label }) => (
-                <button
-                  key={key}
-                  onClick={() => setRightTab(key)}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
-                    rightTab === key
-                      ? "bg-surface-3 text-foreground"
-                      : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
-                  )}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {label}
-                  {key === "console" && generator.isGenerating && (
-                    <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
-                  )}
-                </button>
-              ))}
+      {/* Main workspace — sidebar + center */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left sidebar — file tree (always visible) */}
+        {!sidebarCollapsed && (
+          <div className="w-[220px] shrink-0 border-r border-surface-3 flex flex-col bg-surface-1">
+            <div className="h-10 border-b border-surface-3 flex items-center justify-between px-3 shrink-0">
+              <span className="text-2xs font-semibold uppercase tracking-wider text-slate-500">Files</span>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="p-1 rounded text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
+                title="Collapse sidebar"
+              >
+                <PanelLeftClose className="w-3.5 h-3.5" />
+              </button>
             </div>
-
-            {/* Tab content */}
-            <div className="flex-1 overflow-hidden">
-              {rightTab === "code" && (
-                <PanelGroup direction="horizontal">
-                  {/* File tree */}
-                  <Panel defaultSize={25} minSize={15} maxSize={40}>
-                    <FileTree
-                      files={fileTree}
-                      activeFile={activeFile}
-                      onSelect={handleFileSelect}
-                    />
-                  </Panel>
-                  <PanelResizeHandle />
-                  {/* Editor */}
-                  <Panel defaultSize={75}>
-                    <CodeEditor
-                      file={activeFile}
-                      openFiles={openFiles}
-                      onSelectFile={(f) => setActiveFile(f)}
-                      onCloseFile={handleCloseFile}
-                      onContentChange={updateFileContent}
-                    />
-                  </Panel>
-                </PanelGroup>
-              )}
-
-              {rightTab === "preview" && (
-                <PreviewPane
-                  url={deployedUrl}
-                  files={fileTree}
-                  isGenerating={generator.isGenerating}
-                  isFixing={autoFix.isFixing}
-                  fixIteration={autoFix.iteration}
-                  tenantId={resolvedTenantId}
-                  projectId={projectId}
-                  userToken={token}
-                  onError={handlePreviewError}
-                />
-              )}
-
-              {rightTab === "console" && (
-                <BuildLog
-                  events={generationEvents}
-                  isStreaming={generator.isGenerating}
-                  status={
-                    generator.isGenerating
-                      ? (() => {
-                          const active = [...generator.pipelineEvents].reverse().find(
-                            (e) => e.status === "running"
-                          );
-                          if (active?.agent === "analyzer") return "planning" as const;
-                          if (active?.agent === "reviewer") return "reviewing" as const;
-                          return "coding" as const;
-                        })()
-                      : generator.files.length > 0
-                      ? "succeeded"
-                      : null
-                  }
-                />
-              )}
-
-              {rightTab === "infra" && (
-                <InfrastructurePanel
-                  projectId={projectId}
-                  tenantId={resolvedTenantId}
-                />
-              )}
-
-              {rightTab === "history" && (
-                <VersionHistory
-                  projectId={projectId}
-                  onRestore={(codeFiles) => {
-                    const tree = codeMapToTree(codeFiles);
-                    setFileTree(tree);
-                    setRightTab("code");
-                  }}
-                />
-              )}
+            <div className="flex-1 overflow-y-auto">
+              <FileTree
+                files={fileTree}
+                activeFile={activeFile}
+                onSelect={handleFileSelect}
+              />
             </div>
           </div>
-        </Panel>
-      </PanelGroup>
+        )}
+
+        {/* Center workspace */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Tabs */}
+          <div className="h-10 border-b border-surface-3 flex items-center px-2 gap-1 shrink-0">
+            {/* Sidebar expand button (when collapsed) */}
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="p-1.5 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all mr-1"
+                title="Show sidebar"
+              >
+                <PanelLeft className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            {(
+              [
+                { key: "code", icon: Code2, label: "Code" },
+                { key: "preview", icon: Eye, label: "Preview" },
+                { key: "console", icon: Terminal, label: "Console" },
+                { key: "infra", icon: Database, label: "Infra" },
+                { key: "history", icon: History, label: "History" },
+                { key: "design", icon: Palette, label: "Design" },
+              ] as const
+            ).map(({ key, icon: Icon, label }) => (
+              <button
+                key={key}
+                onClick={() => setRightTab(key)}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                  rightTab === key
+                    ? "bg-surface-3 text-foreground"
+                    : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
+                )}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {label}
+                {key === "console" && generator.isGenerating && (
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-hidden">
+            {rightTab === "code" && (
+              <CodeEditor
+                file={activeFile}
+                openFiles={openFiles}
+                onSelectFile={(f) => setActiveFile(f)}
+                onCloseFile={handleCloseFile}
+                onContentChange={updateFileContent}
+              />
+            )}
+
+            {rightTab === "preview" && (
+              <PreviewPane
+                url={deployedUrl}
+                files={fileTree}
+                isGenerating={generator.isGenerating}
+                isFixing={autoFix.isFixing}
+                fixIteration={autoFix.iteration}
+                tenantId={resolvedTenantId}
+                projectId={projectId}
+                userToken={token}
+                onError={handlePreviewError}
+              />
+            )}
+
+            {rightTab === "console" && (
+              <div className="h-full flex flex-col">
+                {/* Console view toggle */}
+                <div className="flex items-center gap-1 px-3 py-1.5 border-b border-surface-3 shrink-0">
+                  <button
+                    onClick={() => setConsoleView("timeline")}
+                    className={cn(
+                      "px-2 py-1 rounded text-2xs font-medium transition-all",
+                      consoleView === "timeline"
+                        ? "bg-surface-3 text-foreground"
+                        : "text-slate-500 hover:text-slate-300"
+                    )}
+                  >
+                    Timeline
+                  </button>
+                  <button
+                    onClick={() => setConsoleView("log")}
+                    className={cn(
+                      "px-2 py-1 rounded text-2xs font-medium transition-all",
+                      consoleView === "log"
+                        ? "bg-surface-3 text-foreground"
+                        : "text-slate-500 hover:text-slate-300"
+                    )}
+                  >
+                    Raw Log
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  {consoleView === "timeline" ? (
+                    <ActivityTimeline
+                      events={generationEvents}
+                      isStreaming={generator.isGenerating}
+                    />
+                  ) : (
+                    <BuildLog
+                      events={generationEvents}
+                      isStreaming={generator.isGenerating}
+                      status={
+                        generator.isGenerating
+                          ? (() => {
+                              const active = [...generator.pipelineEvents].reverse().find(
+                                (e) => e.status === "running"
+                              );
+                              if (active?.agent === "analyzer") return "planning" as const;
+                              if (active?.agent === "reviewer") return "reviewing" as const;
+                              return "coding" as const;
+                            })()
+                          : generator.files.length > 0
+                          ? "succeeded"
+                          : null
+                      }
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {rightTab === "infra" && (
+              <InfrastructurePanel
+                projectId={projectId}
+                tenantId={resolvedTenantId}
+              />
+            )}
+
+            {rightTab === "history" && (
+              <VersionHistory
+                projectId={projectId}
+                onRestore={(codeFiles) => {
+                  const tree = codeMapToTree(codeFiles);
+                  setFileTree(tree);
+                  setRightTab("code");
+                }}
+              />
+            )}
+
+            {rightTab === "design" && (
+              <FigmaPanel
+                projectId={projectId}
+                tenantId={resolvedTenantId}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom command bar */}
+      <CommandBar
+        onSendMessage={handleSendMessage}
+        onApprovePlan={handleApprovePlan}
+        onModifyPlan={handleModifyPlan}
+        onRejectPlan={handleRejectPlan}
+        messages={messages}
+        mode={mode}
+        statusLabel={statusLabel}
+        statusColor={statusColor}
+        isStreaming={generator.isGenerating}
+        isAnalyzing={generator.isAnalyzing}
+        pipelineStages={mapPipelineToStages()}
+      />
 
       {/* Integrations drawer */}
       <IntegrationsPanel

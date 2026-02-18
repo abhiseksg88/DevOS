@@ -280,3 +280,73 @@ export interface NexusState {
   recent_feedback: NexusFeedback[];
   agent_activity: NexusAgentExecution[];
 }
+
+// ---------------------------------------------------------------------------
+// Figma Visual Integration Layer
+// ---------------------------------------------------------------------------
+
+export type FigmaComponentType =
+  | "button"
+  | "card"
+  | "form"
+  | "input"
+  | "table"
+  | "layout"
+  | "text"
+  | "image"
+  | "nav"
+  | "unknown";
+
+export type FigmaSyncStatus =
+  | "disconnected"
+  | "connecting"
+  | "synced"
+  | "error";
+
+export interface FigmaConfig {
+  enabled: boolean;
+  fileKey: string;
+  lastSynced: string | null;
+  syncStatus: FigmaSyncStatus;
+}
+
+export interface FigmaNode {
+  id: string;
+  name: string;
+  type: string;
+  boundingBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  children?: FigmaNode[];
+  styles?: Record<string, unknown>;
+}
+
+export interface FigmaComponent {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+  thumbnailUrl?: string;
+}
+
+export interface FigmaComponentMapping {
+  figmaId: string;
+  figmaName: string;
+  componentType: FigmaComponentType;
+  tailwindClasses: string;
+  props: Record<string, unknown>;
+  confidence: number;
+  action: "create" | "extend" | "ignore";
+}
+
+export interface FigmaDesignState {
+  config: FigmaConfig;
+  components: FigmaComponent[];
+  mappings: FigmaComponentMapping[];
+  componentHashMap: Record<string, string>;
+  nodeTree: FigmaNode | null;
+  error: string | null;
+}
