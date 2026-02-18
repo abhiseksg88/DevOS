@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { LogOut, CreditCard, Settings, Zap } from "lucide-react";
+import { LogOut, CreditCard, Settings, Zap, Sun, Moon } from "lucide-react";
 import Image from "next/image";
 import type { User } from "@supabase/supabase-js";
+import { useTheme } from "@/components/ThemeProvider";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
@@ -60,11 +62,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
 
         <div className="flex items-center gap-2">
-          <button className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-2 transition-all">
+          <button className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all">
             <CreditCard className="w-4 h-4" />
           </button>
-          <button className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-2 transition-all">
+          <button className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all">
             <Settings className="w-4 h-4" />
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
           <div className="w-px h-6 bg-surface-3 mx-1" />
           <div className="flex items-center gap-3">

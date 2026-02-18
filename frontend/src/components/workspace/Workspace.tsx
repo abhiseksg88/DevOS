@@ -24,6 +24,8 @@ import {
   History,
   Loader2,
   Brain,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -31,6 +33,7 @@ import { PublishButton } from "@/components/workspace/PublishButton";
 import { IntegrationsPanel } from "@/components/workspace/IntegrationsPanel";
 import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
 import { VersionHistory } from "@/components/workspace/VersionHistory";
+import { useTheme } from "@/components/ThemeProvider";
 
 type RightTab = "code" | "preview" | "console" | "infra" | "history";
 
@@ -111,6 +114,7 @@ function updateInTree(nodes: FileNode[], path: string, content: string): FileNod
 
 export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
   const { project, loading, userId, tenantId: resolvedTenantId, token } = useProject(projectId);
   const generator = useGenerate();
   const persistence = useCodePersistence(projectId, userId);
@@ -517,6 +521,34 @@ export function Workspace({ projectId }: { projectId: string }) {
     [activeFile, openFiles]
   );
 
+  // Helper to map PipelineEvents to ChatPipelineStages
+  const mapPipelineToStages = useCallback((): import("@/types").ChatPipelineStage[] => {
+    const stageKeys = ["plan", "code", "review", "fix"];
+    const stageLabels: Record<string, string> = { plan: "Plan", code: "Code", review: "Review", fix: "Fix" };
+    const agentForStage: Record<string, string> = { plan: "DeepSeek", code: "Sonnet", review: "Haiku", fix: "Sonnet" };
+    const pipelineAgentMap: Record<string, string> = { analyzer: "plan", coder: "code", reviewer: "review", fixer: "fix" };
+
+    return stageKeys.map((key) => {
+      const matchingEvent = generator.pipelineEvents.find(
+        (e) => pipelineAgentMap[e.agent] === key
+      );
+      let status: "pending" | "active" | "done" | "error" | "skipped" = "pending";
+      if (matchingEvent) {
+        if (matchingEvent.status === "running") status = "active";
+        else if (matchingEvent.status === "completed") status = "done";
+        else if (matchingEvent.status === "failed") status = "error";
+        else if (matchingEvent.status === "skipped") status = "skipped";
+      }
+      return {
+        key,
+        label: stageLabels[key],
+        agent: agentForStage[key],
+        status,
+        meta: matchingEvent?.meta ? { latency_ms: matchingEvent.meta.latency_ms, cost_usd: matchingEvent.meta.cost_usd } : undefined,
+      };
+    });
+  }, [generator.pipelineEvents]);
+
   // Sync pipeline events from the swarm into the build log
   useEffect(() => {
     const events = generator.pipelineEvents;
@@ -583,9 +615,13 @@ export function Workspace({ projectId }: { projectId: string }) {
 
     const stage = stageMap[activeEvent.agent];
     if (stage) {
-      updateMessageById(generatingMsgIdRef.current, stage);
+      updateMessageById(generatingMsgIdRef.current, {
+        ...stage,
+        // Also update pipelineStages for pipeline-type messages
+        pipelineStages: mapPipelineToStages(),
+      });
     }
-  }, [generator.pipelineEvents, generator.isGenerating, updateMessageById]);
+  }, [generator.pipelineEvents, generator.isGenerating, updateMessageById, mapPipelineToStages]);
 
   // When generation completes, switch to preview and save code
   useEffect(() => {
@@ -600,7 +636,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         {
           id: crypto.randomUUID(),
           build_id: "",
-          kind: "build_progress",
+          kind: "agent_end",
           agent: null,
           payload: { message: `Build complete — ${generator.files.length} files generated`, status: "succeeded" },
           seq: seqRef.current,
@@ -618,6 +654,9 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }, [generator.isGenerating, generator.files.length, persistence]);
 
+  // ---------------------------------------------------------------
+  // handleSendMessage — Phase 1: Analyze only, show PlanCard
+  // ---------------------------------------------------------------
   const handleSendMessage = useCallback(
     async (content: string) => {
       // Reset auto-fix counter and message ref on new user prompt
@@ -631,57 +670,93 @@ export function Workspace({ projectId }: { projectId: string }) {
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, userMsg]);
-
-      // Save user message to persistence
-      persistence.saveMessage('user', content);
-
-      // Store prompt for saving with generation
+      persistence.saveMessage("user", content);
       lastPromptRef.current = content;
 
       // Reset events and pipeline tracking
       seqRef.current = 0;
       pipelineSeenRef.current = 0;
-      lastSavedCountRef.current = 0; // Reset save guard for new generation
+      lastSavedCountRef.current = 0;
       setGenerationEvents([
         {
           id: crypto.randomUUID(),
           build_id: "",
           kind: "agent_start",
           agent: null,
-          payload: { message: "Starting AI pipeline — Analyze → Code → Review..." },
+          payload: { message: "Analyzing requirements..." },
           seq: 1,
           created_at: new Date().toISOString(),
         },
       ]);
       seqRef.current = 1;
 
-      // Show "generating" message — store ID for in-place updates
-      const genMsgId = crypto.randomUUID();
-      generatingMsgIdRef.current = genMsgId;
-      const generatingMsg: ChatMessage = {
-        id: genMsgId,
-        role: "assistant",
-        content: "Analyzing requirements...",
-        timestamp: Date.now(),
-        status: "planning",
-      };
-      setMessages((prev) => [...prev, generatingMsg]);
-      persistence.saveMessage('assistant', generatingMsg.content);
+      // Show "planning" message
+      const planningMsgId = crypto.randomUUID();
+      generatingMsgIdRef.current = planningMsgId;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: planningMsgId,
+          role: "assistant",
+          content: "Analyzing your request...",
+          timestamp: Date.now(),
+          status: "planning",
+        },
+      ]);
 
-      // Switch to console to show progress
-      setRightTab("console");
-
-      // Build conversation history for iterative chat (previous user+assistant turns)
+      // Build conversation history
       const history = messages
         .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
         .map((m) => ({ role: m.role, content: m.content }));
 
-      // Call Claude with full conversation history
-      const result = await generator.generate(content, fileTree, (path, fileContent) => {
-        addFileToTree(path, fileContent);
-      }, history.length > 1 ? history.slice(0, -1) : undefined);
+      // Run analyze-only
+      const result = await generator.analyze(
+        content,
+        fileTree,
+        history.length > 1 ? history.slice(0, -1) : undefined,
+      );
 
-      // Update the existing generating message in-place (no more stuck spinners)
+      if (result.prd) {
+        // Replace planning message with PlanCard
+        updateMessageById(planningMsgId, {
+          type: "plan",
+          content: "Here's the build plan:",
+          prd: result.prd,
+          planStatus: "pending",
+          status: "succeeded",
+        });
+        generatingMsgIdRef.current = null;
+      } else {
+        // Analyzer failed — fall back to direct build (legacy path)
+        updateMessageById(planningMsgId, {
+          content: "Analyzer unavailable — building directly...",
+          status: "coding",
+        });
+        await handleDirectBuild(content, planningMsgId);
+      }
+    },
+    [generator, fileTree, persistence, autoFix, updateMessageById, messages],
+  );
+
+  // ---------------------------------------------------------------
+  // handleDirectBuild — Fallback when analyzer fails. Runs full pipeline.
+  // ---------------------------------------------------------------
+  const handleDirectBuild = useCallback(
+    async (content: string, msgId: string) => {
+      generatingMsgIdRef.current = msgId;
+      setRightTab("console");
+
+      const history = messages
+        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      const result = await generator.build(
+        content,
+        fileTree,
+        (path, fileContent) => addFileToTree(path, fileContent),
+        history.length > 1 ? history.slice(0, -1) : undefined,
+      );
+
       if (result.error) {
         if (generatingMsgIdRef.current) {
           updateMessageById(generatingMsgIdRef.current, {
@@ -690,9 +765,8 @@ export function Workspace({ projectId }: { projectId: string }) {
           });
           generatingMsgIdRef.current = null;
         }
-        persistence.saveMessage('assistant', `Error: ${result.error}`);
       } else {
-        const successContent = `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the **Preview** tab to see your app, or the **Code** tab to inspect the files.`;
+        const successContent = `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the Preview tab.`;
         if (generatingMsgIdRef.current) {
           updateMessageById(generatingMsgIdRef.current, {
             content: successContent,
@@ -700,16 +774,178 @@ export function Workspace({ projectId }: { projectId: string }) {
           });
           generatingMsgIdRef.current = null;
         }
-        persistence.saveMessage('assistant', successContent);
-
-        // Auto-switch to preview
-        if (result.files.length > 0) {
-          setRightTab("preview");
-        }
+        if (result.files.length > 0) setRightTab("preview");
       }
     },
-    [generator, fileTree, addFileToTree, persistence, autoFix, integrationContext, nexusContext, updateMessageById]
+    [generator, fileTree, addFileToTree, updateMessageById, messages],
   );
+
+  // ---------------------------------------------------------------
+  // handleApprovePlan — Phase 2: Build with the approved PRD
+  // ---------------------------------------------------------------
+  const handleApprovePlan = useCallback(async () => {
+    // Find the pending plan message and update its status
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
+      if (idx === -1) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], planStatus: "building" };
+      return updated;
+    });
+
+    // Add pipeline visualization message
+    const pipelineId = crypto.randomUUID();
+    generatingMsgIdRef.current = pipelineId;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: pipelineId,
+        role: "assistant",
+        type: "pipeline",
+        content: "Building...",
+        timestamp: Date.now(),
+        status: "coding",
+        pipelineStages: mapPipelineToStages(),
+      },
+    ]);
+
+    // Switch to console
+    setRightTab("console");
+    seqRef.current = 0;
+    pipelineSeenRef.current = 0;
+    lastSavedCountRef.current = 0;
+    setGenerationEvents([
+      {
+        id: crypto.randomUUID(),
+        build_id: "",
+        kind: "agent_start",
+        agent: null,
+        payload: { message: "Starting build — Code → Review → Fix..." },
+        seq: 1,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    seqRef.current = 1;
+
+    // Build conversation history
+    const history = messages
+      .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    // Run build with approved PRD
+    const result = await generator.build(
+      lastPromptRef.current,
+      fileTree,
+      (path, fileContent) => addFileToTree(path, fileContent),
+      history.length > 1 ? history.slice(0, -1) : undefined,
+      generator.currentPrd ?? undefined,
+    );
+
+    // Update pipeline message
+    if (generatingMsgIdRef.current) {
+      updateMessageById(generatingMsgIdRef.current, {
+        status: result.error ? "failed" : "succeeded",
+        pipelineStages: mapPipelineToStages(),
+      });
+      generatingMsgIdRef.current = null;
+    }
+
+    if (result.error) {
+      persistence.saveMessage("assistant", `Error: ${result.error}`);
+    } else if (result.files.length > 0) {
+      // Add BuildSummary message
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          type: "summary",
+          content: `Generated ${result.files.length} files`,
+          timestamp: Date.now(),
+          status: "succeeded",
+          buildFiles: result.files.map((f) => ({ path: f.path })),
+          pipelineStages: mapPipelineToStages(),
+        },
+      ]);
+
+      // Update plan card to "completed"
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "building");
+        if (idx === -1) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], planStatus: "completed" };
+        return updated;
+      });
+
+      persistence.saveMessage("assistant", `Generated ${result.files.length} files`);
+      setRightTab("preview");
+    }
+  }, [generator, fileTree, addFileToTree, persistence, updateMessageById, mapPipelineToStages, messages]);
+
+  // ---------------------------------------------------------------
+  // handleModifyPlan — Re-analyze with user's notes
+  // ---------------------------------------------------------------
+  const handleModifyPlan = useCallback(
+    async (notes: string) => {
+      const modifiedPrompt = `${lastPromptRef.current}\n\nAdditional requirements: ${notes}`;
+      lastPromptRef.current = modifiedPrompt;
+
+      // Find existing plan and update
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
+        if (idx === -1) return prev;
+        const updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          content: "Re-analyzing with your modifications...",
+          planStatus: "modified",
+          status: "planning",
+        };
+        return updated;
+      });
+
+      const result = await generator.analyze(modifiedPrompt, fileTree);
+      if (result.prd) {
+        setMessages((prev) => {
+          const idx = prev.findIndex(
+            (m) => m.type === "plan" && (m.planStatus === "modified" || m.planStatus === "pending"),
+          );
+          if (idx === -1) return prev;
+          const updated = [...prev];
+          updated[idx] = {
+            ...updated[idx],
+            prd: result.prd!,
+            planStatus: "pending",
+            status: "succeeded",
+          };
+          return updated;
+        });
+      }
+    },
+    [generator, fileTree],
+  );
+
+  // ---------------------------------------------------------------
+  // handleRejectPlan — Cancel the plan
+  // ---------------------------------------------------------------
+  const handleRejectPlan = useCallback(() => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
+      if (idx === -1) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], planStatus: "completed", status: "cancelled" };
+      return updated;
+    });
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "system",
+        content: "Plan cancelled. Send a new prompt to try again.",
+        timestamp: Date.now(),
+      },
+    ]);
+  }, []);
 
   if (loading) {
     return (
@@ -726,7 +962,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/dashboard")}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -735,11 +971,11 @@ export function Workspace({ projectId }: { projectId: string }) {
             <div className="w-6 h-6 rounded-md bg-brand-500 flex items-center justify-center">
               <Zap className="w-3 h-3 text-white" />
             </div>
-            <span className="text-sm font-medium text-white">
+            <span className="text-sm font-medium text-foreground">
               {project?.name ?? "Project"}
             </span>
           </div>
-          {generator.isGenerating && (() => {
+          {(generator.isGenerating || generator.isAnalyzing) && (() => {
             const activeEvent = [...generator.pipelineEvents].reverse().find(
               (e) => e.status === "running"
             );
@@ -775,17 +1011,24 @@ export function Workspace({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowNexus(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-purple-500/30 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-foreground hover:border-purple-500/30 transition-all"
           >
             <Brain className="w-3 h-3" />
             Neural Nexus
           </button>
           <button
             onClick={() => setShowIntegrations(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-white hover:border-brand-500/30 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 text-xs font-medium hover:text-foreground hover:border-brand-500/30 transition-all"
           >
             <Zap className="w-3 h-3" />
             Integrations
+          </button>
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 border border-transparent hover:border-surface-3 transition-all"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
           <PublishButton
             project={project}
@@ -804,7 +1047,13 @@ export function Workspace({ projectId }: { projectId: string }) {
           <ChatPanel
             messages={messages}
             onSendMessage={handleSendMessage}
+            onApprovePlan={handleApprovePlan}
+            onModifyPlan={handleModifyPlan}
+            onRejectPlan={handleRejectPlan}
+            onOpenPreview={() => setRightTab("preview")}
+            onOpenCode={() => setRightTab("code")}
             isStreaming={generator.isGenerating}
+            isAnalyzing={generator.isAnalyzing}
             buildEvents={generationEvents}
           />
         </Panel>
@@ -831,7 +1080,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                   className={cn(
                     "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
                     rightTab === key
-                      ? "bg-surface-3 text-white"
+                      ? "bg-surface-3 text-foreground"
                       : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
                   )}
                 >

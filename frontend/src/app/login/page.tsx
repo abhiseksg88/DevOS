@@ -127,7 +127,7 @@ export default function LoginPage() {
             </div>
             <span className="text-2xl font-bold gradient-text">Vedaa.io</span>
           </div>
-          <h1 className="text-4xl font-bold text-white mb-4 leading-tight">
+          <h1 className="text-4xl font-bold text-foreground mb-4 leading-tight">
             The Agentic
             <br />
             <span className="gradient-text">Development OS.</span>
@@ -146,7 +146,7 @@ export default function LoginPage() {
               <div key={title} className="flex items-center gap-3">
                 <div className="w-2 h-2 rounded-full bg-brand-500" />
                 <div>
-                  <span className="text-white font-medium">{title}</span>
+                  <span className="text-foreground font-medium">{title}</span>
                   <span className="text-slate-500 ml-2">{desc}</span>
                 </div>
               </div>
@@ -166,7 +166,7 @@ export default function LoginPage() {
             <span className="text-xl font-bold gradient-text">Vedaa.io</span>
           </div>
 
-          <h2 className="text-2xl font-bold text-white mb-2">
+          <h2 className="text-2xl font-bold text-foreground mb-2">
             {isSignUp ? "Create your account" : "Welcome back"}
           </h2>
           <p className="text-slate-500 mb-8">
@@ -181,7 +181,7 @@ export default function LoginPage() {
                 <span className="text-emerald-400 font-medium">Check your email</span>
               </div>
               <p className="text-sm text-slate-400">
-                We sent a confirmation link to <span className="text-white font-medium">{email}</span>.
+                We sent a confirmation link to <span className="text-foreground font-medium">{email}</span>.
                 Click the link to activate your account, then come back and sign in.
               </p>
             </div>
@@ -203,14 +203,14 @@ export default function LoginPage() {
           <div className="space-y-3 mb-6">
             <button
               onClick={() => handleOAuth("github")}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl glass glass-hover text-white font-medium transition-all"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl glass glass-hover text-foreground font-medium transition-all"
             >
               <Github className="w-5 h-5" />
               Continue with GitHub
             </button>
             <button
               onClick={() => handleOAuth("google")}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl glass glass-hover text-white font-medium transition-all"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl glass glass-hover text-foreground font-medium transition-all"
             >
               <Mail className="w-5 h-5" />
               Continue with Google
@@ -233,7 +233,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@company.com"
                 required
-                className="w-full px-4 py-3 rounded-xl bg-surface-2 border border-surface-4 text-white placeholder:text-slate-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                className="w-full px-4 py-3 rounded-xl bg-surface-2 border border-surface-4 text-foreground placeholder:text-slate-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 transition-all"
               />
             </div>
             <div>
@@ -245,7 +245,7 @@ export default function LoginPage() {
                 placeholder="••••••••"
                 required
                 minLength={6}
-                className="w-full px-4 py-3 rounded-xl bg-surface-2 border border-surface-4 text-white placeholder:text-slate-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 transition-all"
+                className="w-full px-4 py-3 rounded-xl bg-surface-2 border border-surface-4 text-foreground placeholder:text-slate-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/50 transition-all"
               />
             </div>
 

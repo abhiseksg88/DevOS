@@ -15,10 +15,14 @@ import {
   Shield,
   Layers,
   ChevronRight,
+  Sun,
+  Moon,
 } from "lucide-react";
+import { useTheme } from "@/components/ThemeProvider";
 
 export default function LandingPage() {
   const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -53,7 +57,7 @@ export default function LandingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-surface-0 text-white overflow-hidden">
+    <div className="min-h-screen bg-surface-0 text-foreground overflow-hidden">
       {/* Nav */}
       <nav className="relative z-50 h-16 border-b border-surface-3/50 backdrop-blur-xl bg-surface-0/80">
         <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
@@ -64,14 +68,21 @@ export default function LandingPage() {
             <span className="text-xl font-bold gradient-text tracking-tight">Vedaa.io</span>
           </div>
           <div className="hidden md:flex items-center gap-8">
-            <a href="#features" className="text-sm text-slate-400 hover:text-white transition-colors">Features</a>
-            <a href="#how-it-works" className="text-sm text-slate-400 hover:text-white transition-colors">How It Works</a>
-            <a href="#pricing" className="text-sm text-slate-400 hover:text-white transition-colors">Pricing</a>
+            <a href="#features" className="text-sm text-slate-400 hover:text-foreground transition-colors">Features</a>
+            <a href="#how-it-works" className="text-sm text-slate-400 hover:text-foreground transition-colors">How It Works</a>
+            <a href="#pricing" className="text-sm text-slate-400 hover:text-foreground transition-colors">Pricing</a>
           </div>
           <div className="flex items-center gap-3">
             <button
+              onClick={toggleTheme}
+              className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+            <button
               onClick={() => router.push("/login")}
-              className="px-4 py-2 text-sm text-slate-300 hover:text-white transition-colors"
+              className="px-4 py-2 text-sm text-slate-300 hover:text-foreground transition-colors"
             >
               Sign In
             </button>
@@ -119,7 +130,7 @@ export default function LandingPage() {
             </button>
             <a
               href="#how-it-works"
-              className="flex items-center gap-2 px-8 py-3.5 rounded-xl glass glass-hover font-semibold transition-all"
+              className="flex items-center gap-2 px-8 py-3.5 rounded-xl glass glass-hover text-foreground font-semibold transition-all"
             >
               See How It Works
             </a>
@@ -337,7 +348,7 @@ export default function LandingPage() {
                   className={`w-full py-3 rounded-xl text-sm font-semibold transition-all ${
                     featured
                       ? "bg-brand-500 text-white hover:bg-brand-600 shadow-lg shadow-brand-500/25"
-                      : "glass glass-hover text-white"
+                      : "glass glass-hover text-foreground"
                   }`}
                 >
                   {cta}

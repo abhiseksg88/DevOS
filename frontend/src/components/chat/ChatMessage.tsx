@@ -3,6 +3,9 @@
 import type { ChatMessage } from "@/types";
 import { cn } from "@/lib/utils";
 import { User, Bot, CheckCircle2, Circle, XCircle, Loader2 } from "lucide-react";
+import { PlanCard } from "./PlanCard";
+import { AgentPipeline } from "./AgentPipeline";
+import { BuildSummary } from "./BuildSummary";
 
 const STATUS_CONFIG: Record<string, { color: string; icon: typeof Circle; label: string }> = {
   queued: { color: "text-slate-400", icon: Circle, label: "Queued" },
@@ -17,7 +20,63 @@ const STATUS_CONFIG: Record<string, { color: string; icon: typeof Circle; label:
   cancelled: { color: "text-slate-500", icon: XCircle, label: "Cancelled" },
 };
 
-export function ChatMessageBubble({ message }: { message: ChatMessage }) {
+interface ChatMessageBubbleProps {
+  message: ChatMessage;
+  onApprovePlan?: () => void;
+  onModifyPlan?: (notes: string) => void;
+  onRejectPlan?: () => void;
+  onOpenPreview?: () => void;
+  onOpenCode?: () => void;
+}
+
+export function ChatMessageBubble({
+  message,
+  onApprovePlan,
+  onModifyPlan,
+  onRejectPlan,
+  onOpenPreview,
+  onOpenCode,
+}: ChatMessageBubbleProps) {
+  // Rich message: Plan Card
+  if (message.type === "plan" && message.prd) {
+    return (
+      <div className="animate-slide-up px-1">
+        <PlanCard
+          prd={message.prd}
+          status={message.planStatus ?? "pending"}
+          onApprove={onApprovePlan ?? (() => {})}
+          onModify={onModifyPlan ?? (() => {})}
+          onReject={onRejectPlan ?? (() => {})}
+          disabled={message.planStatus === "building" || message.planStatus === "completed"}
+        />
+      </div>
+    );
+  }
+
+  // Rich message: Agent Pipeline
+  if (message.type === "pipeline" && message.pipelineStages) {
+    return (
+      <div className="animate-slide-up px-1">
+        <AgentPipeline stages={message.pipelineStages} />
+      </div>
+    );
+  }
+
+  // Rich message: Build Summary
+  if (message.type === "summary" && message.buildFiles) {
+    return (
+      <div className="animate-slide-up px-1">
+        <BuildSummary
+          files={message.buildFiles}
+          stages={message.pipelineStages}
+          onOpenPreview={onOpenPreview ?? (() => {})}
+          onOpenCode={onOpenCode ?? (() => {})}
+        />
+      </div>
+    );
+  }
+
+  // Default: text bubble
   const isUser = message.role === "user";
 
   return (

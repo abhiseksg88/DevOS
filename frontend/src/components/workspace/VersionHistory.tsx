@@ -85,7 +85,7 @@ export function VersionHistory({ projectId, onRestore }: VersionHistoryProps) {
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-surface-3">
         <History className="w-4 h-4 text-brand-400" />
-        <span className="text-sm font-medium text-white">Version History</span>
+        <span className="text-sm font-medium text-foreground">Version History</span>
         <span className="text-xs text-slate-500 ml-auto">{versions.length} versions</span>
       </div>
 
@@ -128,7 +128,7 @@ export function VersionHistory({ projectId, onRestore }: VersionHistoryProps) {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-white">v{v.version}</span>
+                      <span className="text-xs font-medium text-foreground">v{v.version}</span>
                       {isLatest && (
                         <span className="text-2xs px-1.5 py-0.5 rounded-full bg-brand-500/10 text-brand-400 font-medium">
                           Current

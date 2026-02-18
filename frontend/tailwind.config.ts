@@ -19,17 +19,34 @@ const config: Config = {
           900: "#4c1d95",
           950: "#2e1065",
         },
+        // Surface colors — CSS-variable-backed for theme switching
         surface: {
-          0: "#0a0a0f",
-          1: "#12121a",
-          2: "#1a1a25",
-          3: "#222230",
-          4: "#2a2a3a",
+          0: "rgb(var(--surface-0) / <alpha-value>)",
+          1: "rgb(var(--surface-1) / <alpha-value>)",
+          2: "rgb(var(--surface-2) / <alpha-value>)",
+          3: "rgb(var(--surface-3) / <alpha-value>)",
+          4: "rgb(var(--surface-4) / <alpha-value>)",
         },
+        // Border colors — CSS-variable-backed
         border: {
-          DEFAULT: "#2a2a3a",
-          hover: "#3a3a4a",
+          DEFAULT: "rgb(var(--border-default) / <alpha-value>)",
+          hover: "rgb(var(--border-hover) / <alpha-value>)",
           active: "#8b5cf6",
+        },
+        // Semantic foreground (replaces text-white for primary text)
+        foreground: {
+          DEFAULT: "rgb(var(--foreground) / <alpha-value>)",
+          secondary: "rgb(var(--foreground-secondary) / <alpha-value>)",
+        },
+        // Override slate scale with CSS vars for auto theme adaptation
+        slate: {
+          100: "rgb(var(--slate-100) / <alpha-value>)",
+          200: "rgb(var(--slate-200) / <alpha-value>)",
+          300: "rgb(var(--slate-300) / <alpha-value>)",
+          400: "rgb(var(--slate-400) / <alpha-value>)",
+          500: "rgb(var(--slate-500) / <alpha-value>)",
+          600: "rgb(var(--slate-600) / <alpha-value>)",
+          700: "rgb(var(--slate-700) / <alpha-value>)",
         },
       },
       fontFamily: {

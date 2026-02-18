@@ -130,7 +130,7 @@ export function StorageBrowser({ projectId }: StorageBrowserProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-surface-3">
         <div className="flex items-center gap-2">
           <HardDrive className="w-4 h-4 text-brand-400" />
-          <span className="text-sm font-medium text-white">Storage</span>
+          <span className="text-sm font-medium text-foreground">Storage</span>
           <span className="text-xs text-slate-500">{files.length} files</span>
         </div>
         <div className="flex items-center gap-2">
@@ -150,7 +150,7 @@ export function StorageBrowser({ projectId }: StorageBrowserProps) {
           </label>
           <button
             onClick={fetchFiles}
-            className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1.5 rounded-md text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
@@ -185,7 +185,7 @@ export function StorageBrowser({ projectId }: StorageBrowserProps) {
                     <File className="w-4 h-4 text-slate-400" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm text-white truncate">{file.name}</p>
+                    <p className="text-sm text-foreground truncate">{file.name}</p>
                     <p className="text-2xs text-slate-500">
                       {file.metadata?.size ? formatBytes(file.metadata.size) : "—"}
                       {" · "}
@@ -196,7 +196,7 @@ export function StorageBrowser({ projectId }: StorageBrowserProps) {
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={() => handleDownload(file.name)}
-                    className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-surface-2 transition-all"
+                    className="p-1.5 rounded-md text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all"
                   >
                     <Download className="w-3.5 h-3.5" />
                   </button>

@@ -360,7 +360,7 @@ export function IntegrationsPanel({
               <Zap className="w-4 h-4 text-brand-400" />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-white">Integrations</h2>
+              <h2 className="text-sm font-semibold text-foreground">Integrations</h2>
               <p className="text-xs text-slate-500">
                 Connect APIs, LLMs, auth, payments
               </p>
@@ -368,7 +368,7 @@ export function IntegrationsPanel({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-surface-2 transition-all"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
           >
             <X className="w-4 h-4" />
           </button>
@@ -384,12 +384,12 @@ export function IntegrationsPanel({
             /* --- Connector Catalog --- */
             <div className="p-4 space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-white">
+                <h3 className="text-sm font-medium text-foreground">
                   Add Connector
                 </h3>
                 <button
                   onClick={() => setShowCatalog(false)}
-                  className="text-xs text-slate-500 hover:text-white transition-all"
+                  className="text-xs text-slate-500 hover:text-foreground transition-all"
                 >
                   Back
                 </button>
@@ -419,7 +419,7 @@ export function IntegrationsPanel({
                       >
                         <span className="text-lg">{c.icon}</span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-white">
+                          <p className="text-sm font-medium text-foreground">
                             {c.display_name}
                           </p>
                           <p className="text-xs text-slate-500 truncate">
@@ -581,7 +581,7 @@ function IntegrationCard({
         <span className="text-lg shrink-0">{connector?.icon ?? "\u2699\uFE0F"}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <p className="text-sm font-medium text-white truncate">
+            <p className="text-sm font-medium text-foreground truncate">
               {integration.display_name}
             </p>
             <span
@@ -610,7 +610,7 @@ function IntegrationCard({
               "p-1.5 rounded-lg text-xs transition-all",
               isEditing
                 ? "bg-brand-500/10 text-brand-400"
-                : "text-slate-500 hover:text-white hover:bg-surface-2",
+                : "text-slate-500 hover:text-foreground hover:bg-surface-2",
             )}
             title="Edit"
           >
@@ -672,7 +672,7 @@ function IntegrationCard({
                         [cred.key]: e.target.value,
                       }))
                     }
-                    className="w-full rounded-lg border border-surface-3 bg-surface-0 px-3 py-2 text-xs text-white font-mono placeholder:text-slate-600 focus:ring-1 focus:ring-brand-500 focus:border-transparent outline-none transition-all pr-8"
+                    className="w-full rounded-lg border border-surface-3 bg-surface-0 px-3 py-2 text-xs text-foreground font-mono placeholder:text-slate-600 focus:ring-1 focus:ring-brand-500 focus:border-transparent outline-none transition-all pr-8"
                   />
                   {isSecret && (
                     <button
@@ -683,7 +683,7 @@ function IntegrationCard({
                           [cred.key]: !prev[cred.key],
                         }))
                       }
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-600 hover:text-white transition-all"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-600 hover:text-foreground transition-all"
                     >
                       {shown ? (
                         <EyeOff className="w-3.5 h-3.5" />
@@ -712,7 +712,7 @@ function IntegrationCard({
                       [cfg.key]: e.target.value,
                     }))
                   }
-                  className="w-full rounded-lg border border-surface-3 bg-surface-0 px-3 py-2 text-xs text-white focus:ring-1 focus:ring-brand-500 outline-none transition-all"
+                  className="w-full rounded-lg border border-surface-3 bg-surface-0 px-3 py-2 text-xs text-foreground focus:ring-1 focus:ring-brand-500 outline-none transition-all"
                 >
                   {cfg.options.map((opt) => (
                     <option key={opt} value={opt}>
@@ -730,7 +730,7 @@ function IntegrationCard({
                       [cfg.key]: e.target.value,
                     }))
                   }
-                  className="w-full rounded-lg border border-surface-3 bg-surface-0 px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:ring-1 focus:ring-brand-500 outline-none transition-all"
+                  className="w-full rounded-lg border border-surface-3 bg-surface-0 px-3 py-2 text-xs text-foreground placeholder:text-slate-600 focus:ring-1 focus:ring-brand-500 outline-none transition-all"
                 />
               )}
             </div>
@@ -774,7 +774,7 @@ function IntegrationCard({
                 href={connector.docs_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-surface-2 transition-all"
+                className="p-2 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
                 title="Documentation"
               >
                 <ExternalLink className="w-3.5 h-3.5" />

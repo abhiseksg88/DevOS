@@ -134,7 +134,7 @@ export function SchemaViewer({ projectId, tenantId }: SchemaViewerProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-surface-3">
         <div className="flex items-center gap-2">
           <Settings className="w-4 h-4 text-brand-400" />
-          <span className="text-sm font-medium text-white">Schema Inspector</span>
+          <span className="text-sm font-medium text-foreground">Schema Inspector</span>
         </div>
         <button
           onClick={analyzeSchema}
@@ -168,7 +168,7 @@ export function SchemaViewer({ projectId, tenantId }: SchemaViewerProps) {
               {/* Collection header */}
               <div className="flex items-center gap-3 px-4 py-3 bg-surface-2/30 border-b border-surface-3/50">
                 <Table2 className="w-4 h-4 text-brand-400" />
-                <span className="text-sm font-semibold text-white">{schema.collection}</span>
+                <span className="text-sm font-semibold text-foreground">{schema.collection}</span>
                 <span className="text-xs text-slate-500">{schema.rowCount} rows</span>
                 <span className="text-xs text-slate-600">{schema.fields.length} fields</span>
               </div>
@@ -189,7 +189,7 @@ export function SchemaViewer({ projectId, tenantId }: SchemaViewerProps) {
                     >
                       <div className="flex items-center gap-2">
                         <Icon className="w-3 h-3 text-slate-500" />
-                        <span className="font-mono text-white">{field.name}</span>
+                        <span className="font-mono text-foreground">{field.name}</span>
                       </div>
                       <span className="font-mono text-brand-400/80">{field.type}</span>
                       <span className="text-slate-400 truncate font-mono">{field.sample}</span>

@@ -36,7 +36,7 @@ export function InfrastructurePanel({ projectId, tenantId }: InfrastructurePanel
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
               activeTab === key
-                ? "bg-surface-3 text-white"
+                ? "bg-surface-3 text-foreground"
                 : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
             )}
           >

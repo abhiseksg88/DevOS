@@ -36,7 +36,7 @@ class WorkspaceErrorBoundary extends Component<{ children: ReactNode }, ErrorSta
             <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto mb-6">
               <AlertTriangle className="w-8 h-8 text-red-400" />
             </div>
-            <h1 className="text-xl font-bold text-white mb-2">
+            <h1 className="text-xl font-bold text-foreground mb-2">
               Something went wrong
             </h1>
             <p className="text-slate-400 text-sm mb-4">

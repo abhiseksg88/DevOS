@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import type { FileNode } from "@/types";
 import { cn, getLanguageFromPath } from "@/lib/utils";
 import { X, FileCode2 } from "lucide-react";
+import { useTheme } from "@/components/ThemeProvider";
 
 // Lazy load Monaco to avoid SSR issues
 const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
@@ -25,10 +26,16 @@ interface CodeEditorProps {
 }
 
 export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile, onContentChange }: CodeEditorProps) {
+  const { theme } = useTheme();
+  const monacoRef = useRef<{ editor: { defineTheme: (name: string, theme: unknown) => void; setTheme: (name: string) => void } } | null>(null);
+
   const handleEditorMount = useCallback((editor: unknown, monaco: unknown) => {
-    // Configure Monaco theme
-    const m = monaco as { editor: { defineTheme: (name: string, theme: unknown) => void; setTheme: (name: string) => void } };
-    m.editor.defineTheme("nimbus-dark", {
+    const m = monaco as typeof monacoRef.current;
+    monacoRef.current = m;
+    if (!m) return;
+
+    // Dark theme
+    m.editor.defineTheme("vedaa-dark", {
       base: "vs-dark",
       inherit: true,
       rules: [
@@ -55,8 +62,45 @@ export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile, onConte
         "editorWidget.border": "#2a2a3a",
       },
     });
-    m.editor.setTheme("nimbus-dark");
-  }, []);
+
+    // Light theme — clean, minimal
+    m.editor.defineTheme("vedaa-light", {
+      base: "vs",
+      inherit: true,
+      rules: [
+        { token: "comment", foreground: "94a3b8", fontStyle: "italic" },
+        { token: "keyword", foreground: "7c3aed" },
+        { token: "string", foreground: "16a34a" },
+        { token: "number", foreground: "ea580c" },
+        { token: "type", foreground: "d97706" },
+        { token: "function", foreground: "2563eb" },
+        { token: "variable", foreground: "dc2626" },
+      ],
+      colors: {
+        "editor.background": "#ffffff",
+        "editor.foreground": "#1e293b",
+        "editor.lineHighlightBackground": "#f8fafc",
+        "editor.selectionBackground": "#8b5cf625",
+        "editorCursor.foreground": "#7c3aed",
+        "editorLineNumber.foreground": "#cbd5e1",
+        "editorLineNumber.activeForeground": "#7c3aed",
+        "editor.inactiveSelectionBackground": "#e2e8f015",
+        "editorIndentGuide.background1": "#f1f5f9",
+        "editorIndentGuide.activeBackground1": "#e2e8f0",
+        "editorWidget.background": "#ffffff",
+        "editorWidget.border": "#e2e8f0",
+      },
+    });
+
+    m.editor.setTheme(theme === "dark" ? "vedaa-dark" : "vedaa-light");
+  }, [theme]);
+
+  // Switch Monaco theme when app theme changes
+  useEffect(() => {
+    if (monacoRef.current) {
+      monacoRef.current.editor.setTheme(theme === "dark" ? "vedaa-dark" : "vedaa-light");
+    }
+  }, [theme]);
 
   if (!file) {
     return (
@@ -78,7 +122,7 @@ export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile, onConte
             className={cn(
               "flex items-center gap-1.5 px-3 h-full text-xs border-r border-surface-3 cursor-pointer transition-colors shrink-0 group",
               f.path === file.path
-                ? "bg-surface-0 text-white border-b-2 border-b-brand-500"
+                ? "bg-surface-0 text-foreground border-b-2 border-b-brand-500"
                 : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
             )}
           >
@@ -101,7 +145,7 @@ export function CodeEditor({ file, openFiles, onSelectFile, onCloseFile, onConte
         <MonacoEditor
           language={getLanguageFromPath(file.path)}
           value={file.content ?? ""}
-          theme="nimbus-dark"
+          theme={theme === "dark" ? "vedaa-dark" : "vedaa-light"}
           onMount={handleEditorMount}
           onChange={(value) => {
             if (value !== undefined && onContentChange) {
