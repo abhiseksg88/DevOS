@@ -1618,7 +1618,7 @@ async def get_nexus_state(
     try:
         from ..nexus.engine import NexusEngine
         nexus = NexusEngine(settings)
-        return nexus.get_full_state(tenant_id, project_id, user.id)
+        return nexus.get_full_state(tenant_id, project_id, user.user_id)
     except Exception as e:
         import logging
         logging.getLogger("vedaa.nexus").warning("Nexus state load failed: %s", e)
@@ -1659,7 +1659,7 @@ async def get_persona(
     try:
         from ..nexus.engine import NexusEngine
         nexus = NexusEngine(settings)
-        persona = nexus._get_or_create_persona(tenant_id, user.id)
+        persona = nexus._get_or_create_persona(tenant_id, user.user_id)
         return {
             "preferences": persona.get("preferences", {}),
             "expertise": persona.get("expertise", {}),
@@ -1688,11 +1688,11 @@ async def update_persona(
 
     if "preferences" in data:
         for key, value in data["preferences"].items():
-            nexus.update_persona_preference(tenant_id, user.id, key, value)
+            nexus.update_persona_preference(tenant_id, user.user_id, key, value)
 
     if "expertise" in data:
         for domain, level in data["expertise"].items():
-            nexus.update_persona_expertise(tenant_id, user.id, domain, level)
+            nexus.update_persona_expertise(tenant_id, user.user_id, domain, level)
 
     return {"status": "updated"}
 
@@ -1712,7 +1712,7 @@ async def record_feedback(
     nexus.record_feedback(
         tenant_id=tenant_id,
         project_id=project_id,
-        user_id=user.id,
+        user_id=user.user_id,
         event_type=data.get("event_type", "code_accepted"),
         feedback=data.get("feedback", {}),
         agent=data.get("agent"),
@@ -1747,5 +1747,5 @@ async def get_nexus_context(
     """Get the Neural Nexus context string for code generation."""
     from ..nexus.engine import NexusEngine
     nexus = NexusEngine(settings)
-    ctx = nexus.get_context(tenant_id, project_id, user.id, "principal_builder")
+    ctx = nexus.get_context(tenant_id, project_id, user.user_id, "principal_builder")
     return {"context": ctx.to_prompt_section()}
