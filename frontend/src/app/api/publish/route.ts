@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
     projectSlug: string;
     projectName: string;
     tenantId: string;
+    customSubdomain?: string;
   };
   try {
     body = await req.json();
@@ -41,13 +42,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { html, projectId, projectSlug, projectName, tenantId } = body;
+  const { html, projectId, projectSlug, projectName, tenantId, customSubdomain } = body;
   if (!html || !projectId || !projectSlug) {
     return NextResponse.json(
       { error: "html, projectId, and projectSlug are required" },
       { status: 400 }
     );
   }
+
+  // Use custom subdomain if provided, otherwise fall back to project slug
+  const subdomainSlug = customSubdomain || projectSlug;
 
   // --- Env vars ---
   const netlifyToken = process.env.NF_TOKEN;
@@ -69,7 +73,7 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Build the custom domain for this project ---
-  const customDomain = customDomainBase ? `${projectSlug}.${customDomainBase}` : null;
+  const customDomain = customDomainBase ? `${subdomainSlug}.${customDomainBase}` : null;
 
   // --- Deploy to Netlify ---
   let netlifyDeployId: string | null = null;
@@ -96,7 +100,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (!siteId) {
-        let siteName = `${sitePrefix}-${projectSlug}`;
+        let siteName = `${sitePrefix}-${subdomainSlug}`;
         const nfHeaders = netlifyHeaders(netlifyToken);
 
         let resp = await fetch(`${NETLIFY_API}/sites`, {
@@ -245,7 +249,7 @@ export async function POST(req: NextRequest) {
     ? `https://${customDomain}`
     : netlifyUrl
       ? netlifyUrl
-      : `https://vedaa.io/p/${projectSlug}`;
+      : `https://vedaa.io/p/${subdomainSlug}`;
 
   // --- Update project in Supabase ---
   if (supabase) {
@@ -258,6 +262,8 @@ export async function POST(req: NextRequest) {
           deployment_status: "deployed",
           custom_domain: customDomain,
           ...(netlifySiteId ? { netlify_site_id: netlifySiteId } : {}),
+          // Update slug to match chosen subdomain so serve-app can resolve it
+          ...(customSubdomain ? { slug: subdomainSlug } : {}),
         })
         .eq("id", projectId);
 
