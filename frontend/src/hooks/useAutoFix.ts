@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { FileNode } from "@/types";
+import { logPreviewError, logAutoFixStart, logAutoFixResult } from "@/lib/error-log";
 
 interface FixState {
   isFixing: boolean;
@@ -161,6 +162,7 @@ export function useAutoFix(
       lastError: errors[0],
     });
     onFixStartRef.current();
+    logAutoFixStart(iteration, errors);
 
     try {
       const errorList = errors
@@ -258,18 +260,21 @@ export function useAutoFix(
       const fixedFiles = parseFixFiles(fullText, fileTreeRef.current);
       isFixingRef.current = false;
       if (fixedFiles.length > 0) {
+        logAutoFixResult(iteration, true, fixedFiles.map(f => f.path));
         for (const file of fixedFiles) {
           onFileFixRef.current(file.path, file.content);
         }
         setState((prev) => ({ ...prev, isFixing: false }));
         onFixEndRef.current(true, iteration);
       } else {
+        logAutoFixResult(iteration, false);
         setState((prev) => ({ ...prev, isFixing: false }));
         onFixEndRef.current(false, iteration);
       }
     } catch (err) {
       isFixingRef.current = false;
       if ((err as Error).name === "AbortError") return;
+      logAutoFixResult(iterationRef.current, false);
       setState((prev) => ({ ...prev, isFixing: false }));
       onFixEndRef.current(false, iterationRef.current);
     }
@@ -284,6 +289,7 @@ export function useAutoFix(
       // Deduplicate
       if (!errorsRef.current.includes(errorMessage)) {
         errorsRef.current.push(errorMessage);
+        logPreviewError(errorMessage);
       }
 
       // Debounce: wait 1.5s for more errors before triggering fix

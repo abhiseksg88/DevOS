@@ -31,6 +31,8 @@ interface PreviewPaneProps {
   files?: FileNode[];
   onError?: (errorMessage: string) => void;
   isGenerating?: boolean;
+  isFixing?: boolean;
+  fixIteration?: number;
   tenantId?: string;
   projectId?: string;
   userToken?: string;
@@ -446,14 +448,38 @@ ${cleanCSS}
     return new TextDecoder().decode(a);
   }
   function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+  var _fixTimeout=null;
+  var _rawError=null;
   function showErr(msg,stack){
-    document.getElementById('root').innerHTML=
-      '<div style="padding:24px;font-family:ui-monospace,monospace;font-size:13px;color:#f38ba8;background:#1e1e2e;min-height:100vh">'+
-      '<div style="max-width:640px;margin:40px auto">'+
-      '<h2 style="color:#cdd6f4;font-size:16px;margin:0 0 16px">Preview Error</h2>'+
-      '<div style="background:#181825;padding:16px;border-radius:8px;border:1px solid #313244;white-space:pre-wrap;word-break:break-word;line-height:1.6">'+
-      esc(msg)+(stack?'\\n\\n<span style="color:#6c7086">'+esc(stack)+'</span>':'')+
-      '</div></div></div>';
+    _rawError={msg:msg,stack:stack};
+    /* Show a pleasant skeleton instead of raw error — auto-fix will handle it.
+       The PREVIEW_ERROR postMessage still fires (handled by parent).
+       After 30s with no new code, fall back to showing the raw error. */
+    if(!document.getElementById('_refining_skel')){
+      document.getElementById('root').innerHTML=
+        '<div id="_refining_skel" style="padding:32px;max-width:800px;margin:0 auto">'+
+        '<div style="height:32px;width:60%;background:#e2e8f0;margin-bottom:16px;border-radius:8px;animation:_skelpulse 1.5s ease-in-out infinite"></div>'+
+        '<div style="height:16px;width:90%;background:#e2e8f0;margin-bottom:12px;border-radius:8px;animation:_skelpulse 1.5s ease-in-out infinite"></div>'+
+        '<div style="height:16px;width:75%;background:#e2e8f0;margin-bottom:24px;border-radius:8px;animation:_skelpulse 1.5s ease-in-out infinite"></div>'+
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">'+
+        '<div style="height:120px;background:#e2e8f0;border-radius:12px;animation:_skelpulse 1.5s ease-in-out infinite"></div>'+
+        '<div style="height:120px;background:#e2e8f0;border-radius:12px;animation:_skelpulse 1.5s ease-in-out infinite;animation-delay:0.2s"></div>'+
+        '<div style="height:120px;background:#e2e8f0;border-radius:12px;animation:_skelpulse 1.5s ease-in-out infinite;animation-delay:0.4s"></div>'+
+        '</div></div>';
+    }
+    /* Fallback: show raw error after 30s if nothing fixes it */
+    if(_fixTimeout) clearTimeout(_fixTimeout);
+    _fixTimeout=setTimeout(function(){
+      if(_rawError){
+        document.getElementById('root').innerHTML=
+          '<div style="padding:24px;font-family:ui-monospace,monospace;font-size:13px;color:#f38ba8;background:#1e1e2e;min-height:100vh">'+
+          '<div style="max-width:640px;margin:40px auto">'+
+          '<h2 style="color:#cdd6f4;font-size:16px;margin:0 0 16px">Preview Error</h2>'+
+          '<div style="background:#181825;padding:16px;border-radius:8px;border:1px solid #313244;white-space:pre-wrap;word-break:break-word;line-height:1.6">'+
+          esc(_rawError.msg)+(_rawError.stack?'\\n\\n<span style="color:#6c7086">'+esc(_rawError.stack)+'</span>':'')+
+          '</div></div></div>';
+      }
+    },30000);
   }
 
   /* --- component-file registry & require shim --- */
@@ -662,11 +688,16 @@ ${cleanCSS}
       EB.prototype.render=function(){
         if(this.state.error){
           var e=this.state.error;
-          return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
-            React.createElement('div',{style:{maxWidth:'640px',margin:'40px auto'}},
-              React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Render Error'),
-              React.createElement('pre',{style:{background:'#181825',padding:'16px',borderRadius:'8px',border:'1px solid #313244',whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:'1.6'}},
-                String(e.message||e)+(e.stack?'\\n\\n'+e.stack:''))));
+          /* Post error to parent for auto-fix, then show skeleton (not raw stack trace) */
+          try{window.parent.postMessage({type:'PREVIEW_ERROR',payload:{message:String(e.message||e)}},'*')}catch(x){}
+          return React.createElement('div',{style:{padding:'32px',maxWidth:'800px',margin:'0 auto'}},
+            React.createElement('div',{style:{height:'32px',width:'60%',background:'#e2e8f0',marginBottom:'16px',borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'}}),
+            React.createElement('div',{style:{height:'16px',width:'90%',background:'#e2e8f0',marginBottom:'12px',borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'}}),
+            React.createElement('div',{style:{height:'16px',width:'75%',background:'#e2e8f0',marginBottom:'24px',borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'}}),
+            React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'16px'}},
+              React.createElement('div',{style:{height:'120px',background:'#e2e8f0',borderRadius:'12px',animation:'_skelpulse 1.5s ease-in-out infinite'}}),
+              React.createElement('div',{style:{height:'120px',background:'#e2e8f0',borderRadius:'12px',animation:'_skelpulse 1.5s ease-in-out infinite',animationDelay:'0.2s'}}),
+              React.createElement('div',{style:{height:'120px',background:'#e2e8f0',borderRadius:'12px',animation:'_skelpulse 1.5s ease-in-out infinite',animationDelay:'0.4s'}})));
         }
         return this.props.children;
       };
@@ -734,12 +765,12 @@ ${cleanCSS}
           };
         },[]);
 
-        /* Show diagnostic error screen */
+        /* Show skeleton instead of raw error (auto-fix will handle it) */
         if(diagErr){
-          return React.createElement('div',{style:{padding:'24px',fontFamily:'ui-monospace,monospace',fontSize:'13px',color:'#f38ba8',background:'#1e1e2e',minHeight:'100vh'}},
-            React.createElement('div',{style:{maxWidth:'640px',margin:'40px auto'}},
-              React.createElement('h2',{style:{color:'#cdd6f4',fontSize:'16px',margin:'0 0 16px'}},'Preview Error'),
-              React.createElement('div',{style:{background:'#181825',padding:'16px',borderRadius:'8px',border:'1px solid #313244',whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:'1.6'}},diagErr)));
+          return React.createElement('div',{style:{padding:'32px',maxWidth:'800px',margin:'0 auto'}},
+            React.createElement('div',{style:{height:'32px',width:'60%',background:'#e2e8f0',marginBottom:'16px',borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'}}),
+            React.createElement('div',{style:{height:'16px',width:'90%',background:'#e2e8f0',marginBottom:'12px',borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'}}),
+            React.createElement('div',{style:{height:'16px',width:'75%',background:'#e2e8f0',marginBottom:'24px',borderRadius:'8px',animation:'_skelpulse 1.5s ease-in-out infinite'}}));
         }
 
         var appEl;
@@ -1100,10 +1131,29 @@ ${cleanCSS}
 // React component
 // ---------------------------------------------------------------------------
 
-export function PreviewPane({ url, files, onError, isGenerating, tenantId, projectId, userToken }: PreviewPaneProps) {
+const REFINING_MESSAGES = [
+  "Refining your app...",
+  "Optimizing components...",
+  "Almost there...",
+];
+
+export function PreviewPane({ url, files, onError, isGenerating, isFixing, fixIteration, tenantId, projectId, userToken }: PreviewPaneProps) {
   const [viewport, setViewport] = useState<ViewportSize>("desktop");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
+  const [refiningMsgIndex, setRefiningMsgIndex] = useState(0);
+
+  // Cycle through refining messages while auto-fix is active
+  useEffect(() => {
+    if (!isFixing) {
+      setRefiningMsgIndex(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setRefiningMsgIndex((i) => (i + 1) % REFINING_MESSAGES.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isFixing]);
 
   // Compute a content hash from file tree to detect changes
   const contentHash = useMemo(() => {
@@ -1292,8 +1342,15 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
             </div>
           )}
 
-          {/* Error indicator */}
-          {previewErrors.length > 0 && (
+          {/* Error / Refining indicator */}
+          {isFixing ? (
+            <div className="flex items-center gap-1 ml-1 px-2 py-0.5 rounded-full bg-brand-500/10 border border-brand-500/20">
+              <Loader2 className="w-2.5 h-2.5 text-brand-400 animate-spin" />
+              <span className="text-2xs text-brand-400 font-medium">
+                Refining{fixIteration && fixIteration > 1 ? ` (${fixIteration})` : ""}
+              </span>
+            </div>
+          ) : previewErrors.length > 0 ? (
             <div
               className="flex items-center gap-1 ml-1 px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 cursor-help"
               title={previewErrors[previewErrors.length - 1]}
@@ -1304,7 +1361,7 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
                 {previewErrors.length !== 1 ? "s" : ""}
               </span>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* URL bar */}
@@ -1370,6 +1427,48 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
               <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot" />
               <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.2s]" />
               <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.4s]" />
+            </div>
+          </div>
+        )}
+
+        {/* Refining overlay — shown while auto-fix is active (hides raw errors) */}
+        {isFixing && !isGenerating && (
+          <div className="absolute inset-0 bg-surface-0/60 backdrop-blur-sm flex flex-col items-center justify-center z-10 animate-fade-in">
+            <div className="bg-surface-2/80 backdrop-blur-md rounded-2xl border border-surface-3 px-8 py-6 flex flex-col items-center shadow-xl">
+              {/* Shimmer progress bar */}
+              <div className="w-48 h-1.5 rounded-full bg-surface-3 overflow-hidden mb-5">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-brand-500/0 via-brand-400 to-brand-500/0 animate-shimmer"
+                  style={{ backgroundSize: "200% 100%" }}
+                />
+              </div>
+
+              {/* Cycling message */}
+              <p className="text-sm text-slate-300 font-medium mb-3 transition-all duration-300">
+                {REFINING_MESSAGES[refiningMsgIndex]}
+              </p>
+
+              {/* Pulsing dots */}
+              <div className="flex gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot" />
+                <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.2s]" />
+                <div className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-dot [animation-delay:0.4s]" />
+              </div>
+
+              {/* Iteration progress dots */}
+              {fixIteration !== undefined && fixIteration > 0 && (
+                <div className="mt-4 flex gap-1">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "w-1.5 h-1.5 rounded-full transition-colors duration-300",
+                        i < fixIteration ? "bg-brand-400" : "bg-surface-3"
+                      )}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
