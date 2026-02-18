@@ -15,6 +15,8 @@ import {
   Layers,
   ArrowRight,
   AlertTriangle,
+  Send,
+  Sparkles,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -24,8 +26,9 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showNewProject, setShowNewProject] = useState(false);
   const [showNewTenant, setShowNewTenant] = useState(false);
+  const [promptValue, setPromptValue] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -53,6 +56,35 @@ export default function DashboardPage() {
       setProjects(p);
     } catch {
       setProjects([]);
+    }
+  }
+
+  async function handlePromptSubmit() {
+    if (!promptValue.trim() || !activeTenant || creatingProject) return;
+    setCreatingProject(true);
+
+    try {
+      // Create a new project from the prompt
+      const name = promptValue.trim().slice(0, 50);
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 40);
+
+      const p = await db.createProject(
+        activeTenant.id,
+        name,
+        slug || "new-project",
+        promptValue.trim(),
+        { framework: "nextjs", language: "typescript" }
+      );
+
+      // Navigate to project with initial prompt
+      router.push(`/project/${p.id}?tenant=${activeTenant.id}&prompt=${encodeURIComponent(promptValue.trim())}`);
+    } catch (err) {
+      console.error("Failed to create project:", err);
+      setCreatingProject(false);
     }
   }
 
@@ -124,109 +156,140 @@ export default function DashboardPage() {
     );
   }
 
-  return (
-    <div className="max-w-6xl mx-auto px-6 py-10">
-      {/* Tenant selector */}
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-3">
-          <Layers className="w-5 h-5 text-brand-400" />
-          <select
-            value={activeTenant?.id ?? ""}
-            onChange={(e) => {
-              const t = tenants.find((x) => x.id === e.target.value);
-              if (t) handleSelectTenant(t);
-            }}
-            className="bg-surface-2 border border-surface-4 text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500"
-          >
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400 border border-brand-500/20 uppercase tracking-wider font-medium">
-            {activeTenant?.plan}
-          </span>
-        </div>
-        <button
-          onClick={() => setShowNewProject(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium transition-all glow-brand"
-        >
-          <Plus className="w-4 h-4" />
-          New Project
-        </button>
-      </div>
+  const suggestions = [
+    "Build a task management app with real-time updates",
+    "Create a SaaS dashboard with analytics and billing",
+    "Design a landing page with hero, features, and CTA",
+    "Build a blog platform with markdown support",
+  ];
 
-      {/* Project grid */}
-      {projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20">
-          <FolderOpen className="w-12 h-12 text-slate-600 mb-4" />
-          <p className="text-slate-400 mb-2">No projects yet</p>
-          <p className="text-slate-600 text-sm">Create your first project to start building</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map((project) => (
-            <button
-              key={project.id}
-              onClick={() => router.push(`/project/${project.id}?tenant=${activeTenant?.id}`)}
-              className="group text-left p-5 rounded-2xl glass glass-hover gradient-border transition-all duration-300"
+  return (
+    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+      {/* Main content — centered prompt area */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-8">
+        {/* Tenant selector — compact */}
+        {tenants.length > 1 && (
+          <div className="absolute top-4 left-6 flex items-center gap-2">
+            <Layers className="w-4 h-4 text-brand-400" />
+            <select
+              value={activeTenant?.id ?? ""}
+              onChange={(e) => {
+                const t = tenants.find((x) => x.id === e.target.value);
+                if (t) handleSelectTenant(t);
+              }}
+              className="bg-surface-2 border border-surface-3 text-foreground rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-brand-500"
             >
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-10 h-10 rounded-xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 font-mono text-sm font-bold">
-                  {project.name[0]?.toUpperCase()}
-                </div>
-                <ArrowRight className="w-4 h-4 text-slate-600 group-hover:text-brand-400 transition-colors" />
-              </div>
-              <h3 className="text-foreground font-semibold mb-1">{project.name}</h3>
-              <p className="text-slate-500 text-sm line-clamp-2 mb-4">
-                {project.description || "No description"}
-              </p>
-              <div className="flex items-center gap-3 text-xs text-slate-600">
-                <div className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  {timeAgo(project.updated_at)}
-                </div>
-                {project.stack?.framework && (
-                  <span className="px-2 py-0.5 rounded-full bg-surface-3 text-slate-400">
-                    {project.stack.framework}
-                  </span>
-                )}
-                <span
-                  className={cn(
-                    "px-2 py-0.5 rounded-full text-2xs font-medium uppercase tracking-wider",
-                    project.status === "active"
-                      ? "bg-emerald-500/10 text-emerald-400"
-                      : "bg-slate-500/10 text-slate-400"
-                  )}
-                >
-                  {project.status}
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Hero heading */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-foreground mb-3">
+            What do you want to build?
+          </h1>
+          <p className="text-slate-400 text-lg max-w-lg mx-auto">
+            Describe your idea and Vedaa&apos;s AI agents will build it for you.
+          </p>
+        </div>
+
+        {/* Prompt input */}
+        <div className="w-full max-w-2xl mb-6">
+          <div className="relative flex items-end rounded-2xl bg-surface-1 border border-surface-3 focus-within:border-brand-500/50 focus-within:ring-2 focus-within:ring-brand-500/20 transition-all shadow-lg shadow-black/5 dark:shadow-black/20">
+            <textarea
+              value={promptValue}
+              onChange={(e) => setPromptValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handlePromptSubmit();
+                }
+              }}
+              placeholder="Describe your app in detail..."
+              rows={3}
+              disabled={creatingProject}
+              className="flex-1 bg-transparent text-foreground text-sm placeholder:text-slate-500 px-5 py-4 resize-none focus:outline-none disabled:opacity-50 min-h-[80px] max-h-[160px]"
+            />
+            <button
+              onClick={handlePromptSubmit}
+              disabled={!promptValue.trim() || creatingProject}
+              className="p-3 m-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white transition-all disabled:opacity-30 disabled:hover:bg-brand-600 shrink-0"
+            >
+              {creatingProject ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Send className="w-5 h-5" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Suggestion cards */}
+        <div className="w-full max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {suggestions.map((suggestion) => (
+            <button
+              key={suggestion}
+              onClick={() => setPromptValue(suggestion)}
+              className="group text-left px-4 py-3 rounded-xl bg-surface-1/50 border border-surface-3/50 hover:border-brand-500/30 hover:bg-surface-1 transition-all"
+            >
+              <div className="flex items-start gap-3">
+                <Sparkles className="w-4 h-4 text-brand-400 mt-0.5 shrink-0 opacity-50 group-hover:opacity-100 transition-opacity" />
+                <span className="text-sm text-slate-400 group-hover:text-foreground transition-colors leading-relaxed">
+                  {suggestion}
                 </span>
               </div>
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Recent projects section */}
+      {projects.length > 0 && (
+        <div className="border-t border-surface-3/50 px-6 py-5 bg-surface-1/30">
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
+                Recent Projects
+              </h2>
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-thin">
+              {projects.slice(0, 6).map((project) => (
+                <button
+                  key={project.id}
+                  onClick={() => router.push(`/project/${project.id}?tenant=${activeTenant?.id}`)}
+                  className="group shrink-0 w-56 text-left p-4 rounded-xl bg-surface-1/50 border border-surface-3/50 hover:border-brand-500/30 hover:bg-surface-1 transition-all"
+                >
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="w-8 h-8 rounded-lg bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 font-mono text-xs font-bold shrink-0">
+                      {project.name[0]?.toUpperCase()}
+                    </div>
+                    <h3 className="text-sm font-medium text-foreground truncate">{project.name}</h3>
+                  </div>
+                  <p className="text-xs text-slate-500 line-clamp-1 mb-2">
+                    {project.description || "No description"}
+                  </p>
+                  <div className="flex items-center gap-2 text-2xs text-slate-600">
+                    <Clock className="w-3 h-3" />
+                    {timeAgo(project.updated_at)}
+                    {project.stack?.framework && (
+                      <span className="px-1.5 py-0.5 rounded bg-surface-3/50 text-slate-500">
+                        {project.stack.framework}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modals */}
-      {showNewProject && activeTenant && (
-        <CreateProjectModal
-          onClose={() => setShowNewProject(false)}
-          onCreate={async (name, slug, description) => {
-            const p = await db.createProject(
-              activeTenant.id,
-              name,
-              slug,
-              description,
-              { framework: "nextjs", language: "typescript" }
-            );
-            setProjects((prev) => [p, ...prev]);
-            setShowNewProject(false);
-            router.push(`/project/${p.id}?tenant=${activeTenant.id}`);
-          }}
-        />
-      )}
-
       {showNewTenant && (
         <CreateTenantModal
           onClose={() => setShowNewTenant(false)}
@@ -246,57 +309,6 @@ export default function DashboardPage() {
 // ---------------------------------------------------------------------------
 // Modals
 // ---------------------------------------------------------------------------
-
-function CreateProjectModal({
-  onClose,
-  onCreate,
-}: {
-  onClose: () => void;
-  onCreate: (name: string, slug: string, description: string) => Promise<void>;
-}) {
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-
-  return (
-    <Modal onClose={onClose} title="New Project">
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setLoading(true);
-          setError("");
-          try {
-            await onCreate(name, slug, desc);
-          } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to create project");
-            setLoading(false);
-          }
-        }}
-        className="space-y-4"
-      >
-        <Field label="Project name" value={name} onChange={setName} placeholder="My Awesome App" required />
-        <div className="text-xs text-slate-600 -mt-2 pl-1 font-mono">{slug || "my-awesome-app"}</div>
-        <Field label="Description" value={desc} onChange={setDesc} placeholder="A brief description..." />
-        {error && (
-          <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>
-        )}
-        <button
-          type="submit"
-          disabled={loading || !name}
-          className="w-full py-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-medium transition-all disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Create Project"}
-        </button>
-      </form>
-    </Modal>
-  );
-}
 
 function CreateTenantModal({
   onClose,

@@ -53,16 +53,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen bg-surface-0">
       {/* Top nav */}
-      <header className="h-14 border-b border-surface-3 flex items-center justify-between px-6">
-        <div className="flex flex-col">
-          <span className="text-lg font-bold tracking-tight text-foreground">Vedaa</span>
-          <span className="text-2xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
+      <header className="h-14 border-b border-surface-3/50 flex items-center justify-between px-6 bg-surface-0/80 backdrop-blur-xl">
+        <div className="flex items-center gap-3">
+          <Image
+            src="/vedaa-logo.svg"
+            alt="Vedaa"
+            width={28}
+            height={28}
+            className="rounded-lg"
+          />
+          <div className="flex flex-col">
+            <span className="text-sm font-bold tracking-tight text-foreground leading-tight">Vedaa</span>
+            <span className="text-2xs text-slate-500 tracking-wider leading-tight">Agentic Coding Platform</span>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <button className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all">
-            <CreditCard className="w-4 h-4" />
-          </button>
           <button className="p-2 rounded-lg text-slate-400 hover:text-foreground hover:bg-surface-2 transition-all">
             <Settings className="w-4 h-4" />
           </button>

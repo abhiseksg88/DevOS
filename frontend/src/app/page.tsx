@@ -18,6 +18,7 @@ import {
   Sun,
   Moon,
 } from "lucide-react";
+import Image from "next/image";
 import { useTheme } from "@/components/ThemeProvider";
 
 export default function LandingPage() {
@@ -61,9 +62,18 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="relative z-50 h-16 border-b border-surface-3/50 backdrop-blur-xl bg-surface-0/80">
         <div className="max-w-7xl mx-auto px-6 h-full flex items-center justify-between">
-          <div className="flex flex-col">
-            <span className="text-xl font-bold tracking-tight text-foreground">Vedaa</span>
-            <span className="text-2xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
+          <div className="flex items-center gap-3">
+            <Image
+              src="/vedaa-logo.svg"
+              alt="Vedaa"
+              width={32}
+              height={32}
+              className="rounded-lg"
+            />
+            <div className="flex flex-col">
+              <span className="text-xl font-bold tracking-tight text-foreground">Vedaa</span>
+              <span className="text-2xs text-slate-400 tracking-wider">Agentic Coding Platform</span>
+            </div>
           </div>
           <div className="hidden md:flex items-center gap-8">
             <a href="#features" className="text-sm text-slate-400 hover:text-foreground transition-colors">Features</a>
