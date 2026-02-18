@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { useProject } from "@/hooks/useProject";
 import { useGenerate, type PipelineEvent } from "@/hooks/useGenerate";
 import { useAutoFix } from "@/hooks/useAutoFix";
@@ -18,13 +19,15 @@ import {
   Code2,
   Eye,
   Terminal,
-  Database,
-  History,
+  Cloud,
   Loader2,
   Brain,
   Sun,
   Moon,
-  Palette,
+  Send,
+  ChevronUp,
+  ChevronDown,
+  Sparkles,
   PanelLeft,
   PanelLeftClose,
 } from "lucide-react";
@@ -36,11 +39,12 @@ import { NeuralNexusPanel } from "@/components/workspace/NeuralNexusPanel";
 import { VersionHistory } from "@/components/workspace/VersionHistory";
 import { useTheme } from "@/components/ThemeProvider";
 import { FigmaPanel } from "@/components/workspace/FigmaPanel";
-import { CommandBar } from "@/components/chat/CommandBar";
+import { PlanCard } from "@/components/chat/PlanCard";
+import { AgentPipeline } from "@/components/chat/AgentPipeline";
 import { ActivityTimeline } from "@/components/build/ActivityTimeline";
 import { useWorkspaceMode } from "@/hooks/useWorkspaceMode";
 
-type RightTab = "code" | "preview" | "console" | "infra" | "history" | "design";
+type RightTab = "preview" | "code" | "cloud" | "console";
 
 // Default file tree for new projects
 const defaultFileTree: FileNode[] = [
@@ -134,8 +138,14 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [showNexus, setShowNexus] = useState(false);
   const [integrationContext, setIntegrationContext] = useState<string>("");
   const [nexusContext, setNexusContext] = useState<string>("");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [consoleView, setConsoleView] = useState<"log" | "timeline">("timeline");
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [fileSidebarOpen, setFileSidebarOpen] = useState(false);
+
+  // Chat input state
+  const [chatValue, setChatValue] = useState("");
+  const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // Load integration context (what APIs are available) for code generation
   useEffect(() => {
@@ -181,6 +191,19 @@ export function Workspace({ projectId }: { projectId: string }) {
     setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
   }, []);
 
+  // Auto-scroll chat when new messages arrive
+  useEffect(() => {
+    chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  // Auto-resize chat textarea
+  useEffect(() => {
+    const el = chatTextareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 120) + "px";
+  }, [chatValue]);
+
   // -------------------------------------------------------------------------
   // Auto-fix loop: preview errors → fix agent → apply → re-render
   // -------------------------------------------------------------------------
@@ -203,7 +226,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
     }, []),
-    // onFixStart — update existing message or create new one (avoids duplicates)
+    // onFixStart
     useCallback(() => {
       seqRef.current += 1;
       setGenerationEvents((prev) => [
@@ -218,7 +241,6 @@ export function Workspace({ projectId }: { projectId: string }) {
           created_at: new Date().toISOString(),
         },
       ]);
-      // On subsequent iterations, update the existing message instead of creating a new one
       if (fixMsgIdRef.current) {
         updateMessageById(fixMsgIdRef.current, {
           content: "Still refining...",
@@ -239,7 +261,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         ]);
       }
     }, [updateMessageById]),
-    // onFixEnd — update the existing fix message in-place
+    // onFixEnd
     useCallback((success: boolean, iteration: number) => {
       seqRef.current += 1;
       if (success) {
@@ -263,8 +285,6 @@ export function Workspace({ projectId }: { projectId: string }) {
             content: "Looking good! Verifying your app...",
             status: "succeeded",
           });
-          // Don't null fixMsgIdRef — if new errors appear, onFixStart will
-          // update this same message instead of creating a duplicate
         }
       } else if (iteration >= 5) {
         if (fixMsgIdRef.current) {
@@ -275,7 +295,6 @@ export function Workspace({ projectId }: { projectId: string }) {
           fixMsgIdRef.current = null;
         }
       } else {
-        // Intermediate failure — update message but keep ref for next iteration
         if (fixMsgIdRef.current) {
           updateMessageById(fixMsgIdRef.current, {
             content: "Still refining...",
@@ -310,14 +329,9 @@ export function Workspace({ projectId }: { projectId: string }) {
   const handlePreviewError = useCallback(
     (msg: string) => {
       if (!msg) return;
-
-      // Errors are logged silently (see error-log.ts) — no system message to user
-
-      // Trigger auto-fix
       if (!generator.isGenerating && !autoFix.isFixing) {
         autoFix.reportError(msg);
       } else {
-        // Queue errors that arrive while generating/fixing — they'll be re-fired below
         if (!pendingErrorsRef.current.includes(msg)) {
           pendingErrorsRef.current.push(msg);
         }
@@ -331,7 +345,6 @@ export function Workspace({ projectId }: { projectId: string }) {
     if (!generator.isGenerating && pendingErrorsRef.current.length > 0) {
       const queued = [...pendingErrorsRef.current];
       pendingErrorsRef.current = [];
-      // Small delay to let the final render settle
       const timer = setTimeout(() => {
         for (const msg of queued) {
           autoFix.reportError(msg);
@@ -358,10 +371,7 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   // Helper: Convert code map to file tree for loading
   function codeMapToTree(map: Record<string, string>): FileNode[] {
-    // Start with the skeleton
     const tree = JSON.parse(JSON.stringify(defaultFileTree));
-
-    // Overlay saved files
     for (const [path, content] of Object.entries(map)) {
       const parts = path.split("/");
       addFileToTreeStatic(tree, parts, 0, content);
@@ -369,7 +379,6 @@ export function Workspace({ projectId }: { projectId: string }) {
     return tree;
   }
 
-  // Static version of addToDirectory for loading from saved code
   function addFileToTreeStatic(
     tree: FileNode[],
     parts: string[],
@@ -411,13 +420,10 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }
 
-  // Ref to track current file tree state (avoid stale closures in save operations)
+  // Ref to track current file tree state
   const fileTreeRef = useRef<FileNode[]>(fileTree);
-
-  // Track last saved file count to prevent duplicate saves
   const lastSavedCountRef = useRef<number>(0);
 
-  // Sync ref with state
   useEffect(() => {
     fileTreeRef.current = fileTree;
   }, [fileTree]);
@@ -426,21 +432,27 @@ export function Workspace({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (persistence.isLoading) return;
 
-    // Load code from persistence
     if (Object.keys(persistence.codeFiles).length > 0) {
       const tree = codeMapToTree(persistence.codeFiles);
       setFileTree(tree);
     }
 
-    // Load messages from persistence
     if (persistence.messages.length > 0) {
       setMessages(persistence.messages);
     }
 
-    // Load workspace state (active file, open tabs, right tab)
     if (persistence.workspaceState) {
       const ws = persistence.workspaceState;
-      setRightTab(ws.rightTab as RightTab);
+      // Map old tab names to new ones
+      const tabMap: Record<string, RightTab> = {
+        preview: "preview",
+        code: "code",
+        infra: "cloud",
+        console: "console",
+        history: "preview",
+        design: "preview",
+      };
+      setRightTab(tabMap[ws.rightTab] ?? "preview");
       if (ws.openFiles.length > 0) {
         const flat = flattenTree(fileTree);
         const restored = ws.openFiles
@@ -460,16 +472,12 @@ export function Workspace({ projectId }: { projectId: string }) {
     setFileTree((prev) => updateInTree(prev, path, content));
     setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
     setOpenFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content } : f)));
-
-    // Auto-save with debounce (handled in persistence hook)
     persistence.saveCode(treeToCodeMap(updateInTree(fileTree, path, content)), 'autosave');
   }, [persistence, fileTree]);
 
   /** Add or update a file in the tree */
   const addFileToTree = useCallback((path: string, content: string, language?: string) => {
-    // Normalize path: strip leading ./ and /
     let normalizedPath = path.replace(/^\.\/+/, "").replace(/^\/+/, "").trim();
-    console.log('[Workspace] addFileToTree called:', { path: normalizedPath, contentLength: content.length });
 
     const parts = normalizedPath.split("/");
     const fileName = parts[parts.length - 1];
@@ -486,19 +494,12 @@ export function Workspace({ projectId }: { projectId: string }) {
     setFileTree((prev) => {
       const flat = flattenTree(prev);
       const exists = flat.some((f) => f.path === normalizedPath);
-      console.log('[Workspace] Updating file tree:', { path: normalizedPath, exists, prevTreeSize: flat.length });
-
       if (exists) {
-        const updated = updateInTree(prev, normalizedPath, content);
-        console.log('[Workspace] Updated existing file in tree');
-        return updated;
+        return updateInTree(prev, normalizedPath, content);
       }
-      const newTree = addToDirectory(prev, parts, 0, content, detectedLang);
-      console.log('[Workspace] Added new file to tree');
-      return newTree;
+      return addToDirectory(prev, parts, 0, content, detectedLang);
     });
 
-    // Add a build event for the console
     seqRef.current += 1;
     setGenerationEvents((prev) => [
       ...prev,
@@ -630,7 +631,6 @@ export function Workspace({ projectId }: { projectId: string }) {
     if (stage) {
       updateMessageById(generatingMsgIdRef.current, {
         ...stage,
-        // Also update pipelineStages for pipeline-type messages
         pipelineStages: mapPipelineToStages(),
       });
     }
@@ -639,10 +639,8 @@ export function Workspace({ projectId }: { projectId: string }) {
   // When generation completes, switch to preview and save code
   useEffect(() => {
     if (!generator.isGenerating && generator.files.length > 0 && generator.files.length !== lastSavedCountRef.current) {
-      console.log('[Workspace] Generation completed, saving code...', { fileCount: generator.files.length });
       setRightTab("preview");
 
-      // Add completion event
       seqRef.current += 1;
       setGenerationEvents((prev) => [
         ...prev,
@@ -657,22 +655,25 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
 
-      // Save code after generation completes using ref (not stale closure)
       const currentTree = fileTreeRef.current;
       const codeMap = treeToCodeMap(currentTree);
-      console.log('[Workspace] Saving file tree:', { treeSize: flattenTree(currentTree).length, codeMapSize: Object.keys(codeMap).length });
-
       persistence.saveCode(codeMap, 'generation', lastPromptRef.current);
       lastSavedCountRef.current = generator.files.length;
     }
   }, [generator.isGenerating, generator.files.length, persistence]);
+
+  // Find the latest pending plan message
+  const pendingPlan = messages.find(
+    (m) => m.type === "plan" && m.planStatus === "pending",
+  );
+
+  const isDisabled = generator.isGenerating || generator.isAnalyzing;
 
   // ---------------------------------------------------------------
   // handleSendMessage — Phase 1: Analyze only, show PlanCard
   // ---------------------------------------------------------------
   const handleSendMessage = useCallback(
     async (content: string) => {
-      // Reset auto-fix counter and message ref on new user prompt
       autoFix.reset();
       fixMsgIdRef.current = null;
 
@@ -686,7 +687,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       persistence.saveMessage("user", content);
       lastPromptRef.current = content;
 
-      // Reset events and pipeline tracking
       seqRef.current = 0;
       pipelineSeenRef.current = 0;
       lastSavedCountRef.current = 0;
@@ -703,7 +703,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       ]);
       seqRef.current = 1;
 
-      // Show "planning" message
       const planningMsgId = crypto.randomUUID();
       generatingMsgIdRef.current = planningMsgId;
       setMessages((prev) => [
@@ -717,12 +716,10 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
 
-      // Build conversation history
       const history = messages
         .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
         .map((m) => ({ role: m.role, content: m.content }));
 
-      // Run analyze-only
       const result = await generator.analyze(
         content,
         fileTree,
@@ -730,7 +727,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       );
 
       if (result.prd) {
-        // Replace planning message with PlanCard
         updateMessageById(planningMsgId, {
           type: "plan",
           content: "Here's the build plan:",
@@ -740,7 +736,6 @@ export function Workspace({ projectId }: { projectId: string }) {
         });
         generatingMsgIdRef.current = null;
       } else {
-        // Analyzer failed — fall back to direct build (legacy path)
         updateMessageById(planningMsgId, {
           content: "Analyzer unavailable — building directly...",
           status: "coding",
@@ -752,7 +747,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   );
 
   // ---------------------------------------------------------------
-  // handleDirectBuild — Fallback when analyzer fails. Runs full pipeline.
+  // handleDirectBuild — Fallback when analyzer fails
   // ---------------------------------------------------------------
   const handleDirectBuild = useCallback(
     async (content: string, msgId: string) => {
@@ -797,7 +792,6 @@ export function Workspace({ projectId }: { projectId: string }) {
   // handleApprovePlan — Phase 2: Build with the approved PRD
   // ---------------------------------------------------------------
   const handleApprovePlan = useCallback(async () => {
-    // Find the pending plan message and update its status
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
       if (idx === -1) return prev;
@@ -806,7 +800,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       return updated;
     });
 
-    // Add pipeline visualization message
     const pipelineId = crypto.randomUUID();
     generatingMsgIdRef.current = pipelineId;
     setMessages((prev) => [
@@ -822,7 +815,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       },
     ]);
 
-    // Switch to console
     setRightTab("console");
     seqRef.current = 0;
     pipelineSeenRef.current = 0;
@@ -840,12 +832,10 @@ export function Workspace({ projectId }: { projectId: string }) {
     ]);
     seqRef.current = 1;
 
-    // Build conversation history
     const history = messages
       .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
       .map((m) => ({ role: m.role, content: m.content }));
 
-    // Run build with approved PRD
     const result = await generator.build(
       lastPromptRef.current,
       fileTree,
@@ -854,7 +844,6 @@ export function Workspace({ projectId }: { projectId: string }) {
       generator.currentPrd ?? undefined,
     );
 
-    // Update pipeline message
     if (generatingMsgIdRef.current) {
       updateMessageById(generatingMsgIdRef.current, {
         status: result.error ? "failed" : "succeeded",
@@ -866,7 +855,6 @@ export function Workspace({ projectId }: { projectId: string }) {
     if (result.error) {
       persistence.saveMessage("assistant", `Error: ${result.error}`);
     } else if (result.files.length > 0) {
-      // Add BuildSummary message
       setMessages((prev) => [
         ...prev,
         {
@@ -881,7 +869,6 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
 
-      // Update plan card to "completed"
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "building");
         if (idx === -1) return prev;
@@ -896,14 +883,13 @@ export function Workspace({ projectId }: { projectId: string }) {
   }, [generator, fileTree, addFileToTree, persistence, updateMessageById, mapPipelineToStages, messages]);
 
   // ---------------------------------------------------------------
-  // handleModifyPlan — Re-analyze with user's notes
+  // handleModifyPlan
   // ---------------------------------------------------------------
   const handleModifyPlan = useCallback(
     async (notes: string) => {
       const modifiedPrompt = `${lastPromptRef.current}\n\nAdditional requirements: ${notes}`;
       lastPromptRef.current = modifiedPrompt;
 
-      // Find existing plan and update
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
         if (idx === -1) return prev;
@@ -939,7 +925,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   );
 
   // ---------------------------------------------------------------
-  // handleRejectPlan — Cancel the plan
+  // handleRejectPlan
   // ---------------------------------------------------------------
   const handleRejectPlan = useCallback(() => {
     setMessages((prev) => {
@@ -960,6 +946,28 @@ export function Workspace({ projectId }: { projectId: string }) {
     ]);
   }, []);
 
+  function handleChatSubmit() {
+    const trimmed = chatValue.trim();
+    if (!trimmed || isDisabled) return;
+    handleSendMessage(trimmed);
+    setChatValue("");
+  }
+
+  // Handle initial prompt from URL params
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const prompt = params.get("prompt");
+    if (prompt && messages.length === 0 && !generator.isGenerating && !generator.isAnalyzing) {
+      // Clean up URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete("prompt");
+      window.history.replaceState({}, "", url.toString());
+      // Send the prompt
+      handleSendMessage(prompt);
+    }
+  }, [messages.length, generator.isGenerating, generator.isAnalyzing]);
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-surface-0">
@@ -968,10 +976,18 @@ export function Workspace({ projectId }: { projectId: string }) {
     );
   }
 
+  // Tab definitions for right panel
+  const tabs = [
+    { key: "preview" as const, icon: Eye, label: "Preview" },
+    { key: "code" as const, icon: Code2, label: "Code" },
+    { key: "cloud" as const, icon: Cloud, label: "Cloud" },
+    { key: "console" as const, icon: Terminal, label: "Console" },
+  ];
+
   return (
     <div className="h-screen flex flex-col bg-surface-0">
       {/* Top bar */}
-      <header className="h-12 border-b border-surface-3 flex items-center justify-between px-4 shrink-0">
+      <header className="h-12 border-b border-surface-3/50 flex items-center justify-between px-4 shrink-0 bg-surface-0/80 backdrop-blur-xl">
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push("/dashboard")}
@@ -980,10 +996,15 @@ export function Workspace({ projectId }: { projectId: string }) {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="w-px h-5 bg-surface-3" />
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-bold tracking-tight text-foreground">Vedaa</span>
-            <div className="w-px h-4 bg-surface-3" />
-            <span className="text-sm font-medium text-slate-400">
+          <div className="flex items-center gap-2.5">
+            <Image
+              src="/vedaa-logo.svg"
+              alt="Vedaa"
+              width={24}
+              height={24}
+              className="rounded-md"
+            />
+            <span className="text-sm font-bold tracking-tight text-foreground">
               {project?.name ?? "Project"}
             </span>
           </div>
@@ -1052,200 +1073,339 @@ export function Workspace({ projectId }: { projectId: string }) {
         </div>
       </header>
 
-      {/* Main workspace — sidebar + center */}
+      {/* Main workspace — Chat left + Content right */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left sidebar — file tree (always visible) */}
-        {!sidebarCollapsed && (
-          <div className="w-[220px] shrink-0 border-r border-surface-3 flex flex-col bg-surface-1">
-            <div className="h-10 border-b border-surface-3 flex items-center justify-between px-3 shrink-0">
-              <span className="text-2xs font-semibold uppercase tracking-wider text-slate-500">Files</span>
+        {/* ============ LEFT: Chat Panel ============ */}
+        {!chatCollapsed ? (
+          <div className="w-[380px] shrink-0 border-r border-surface-3 flex flex-col bg-surface-1">
+            {/* Chat header */}
+            <div className="h-10 border-b border-surface-3 flex items-center justify-between px-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+                <span className="text-2xs font-semibold uppercase tracking-wider text-slate-500">
+                  AI Chat
+                </span>
+                {statusLabel && (
+                  <div
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-0.5 rounded-full border text-2xs font-medium",
+                      statusColor,
+                    )}
+                  >
+                    {(mode === "build" || mode === "plan") && (
+                      <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse-dot" />
+                    )}
+                    {statusLabel}
+                  </div>
+                )}
+              </div>
               <button
-                onClick={() => setSidebarCollapsed(true)}
+                onClick={() => setChatCollapsed(true)}
                 className="p-1 rounded text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
-                title="Collapse sidebar"
+                title="Collapse chat"
               >
                 <PanelLeftClose className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto">
-              <FileTree
-                files={fileTree}
-                activeFile={activeFile}
-                onSelect={handleFileSelect}
-              />
+
+            {/* Messages area */}
+            <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+              {messages.length === 0 && (
+                <div className="text-center py-12 animate-fade-in">
+                  <div className="w-14 h-14 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mx-auto mb-5 glow-brand">
+                    <Sparkles className="w-7 h-7 text-brand-400" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-foreground mb-2">What do you want to build?</h2>
+                  <p className="text-sm text-slate-500 max-w-xs mx-auto leading-relaxed mb-6">
+                    Describe your app and AI agents will plan, code, review, and deploy it.
+                  </p>
+                  <div className="space-y-2">
+                    {[
+                      "A SaaS dashboard with auth and billing",
+                      "A landing page with hero and features",
+                      "A task management app with database",
+                    ].map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        onClick={() => setChatValue(suggestion)}
+                        className="block w-full text-left text-xs text-slate-500 hover:text-slate-300 px-3 py-2 rounded-lg bg-surface-2/50 border border-surface-3 hover:border-brand-500/30 hover:bg-surface-2 cursor-pointer transition-all"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {messages
+                .filter((m) => m.role !== "system")
+                .map((m) => (
+                  <div key={m.id}>
+                    {/* User message */}
+                    {m.role === "user" && (
+                      <div className="flex justify-end">
+                        <div className="max-w-[85%] px-3 py-2 rounded-xl bg-brand-500/10 border border-brand-500/20 text-sm text-foreground">
+                          {m.content}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Assistant message */}
+                    {m.role === "assistant" && m.type !== "plan" && m.type !== "pipeline" && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[85%] px-3 py-2 rounded-xl bg-surface-2 border border-surface-3 text-sm text-slate-300">
+                          {m.status === "planning" || m.status === "coding" || m.status === "reviewing" ? (
+                            <div className="flex items-center gap-2">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-400" />
+                              <span>{m.content}</span>
+                            </div>
+                          ) : (
+                            m.content
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Plan card */}
+                    {m.type === "plan" && m.prd && m.planStatus === "pending" && (
+                      <div className="animate-slide-up">
+                        <PlanCard
+                          prd={m.prd}
+                          status={m.planStatus || "pending"}
+                          onApprove={handleApprovePlan}
+                          onModify={handleModifyPlan}
+                          onReject={handleRejectPlan}
+                          disabled={isDisabled}
+                        />
+                      </div>
+                    )}
+
+                    {/* Pipeline visualization */}
+                    {m.type === "pipeline" && m.pipelineStages && (
+                      <div className="animate-slide-up">
+                        <AgentPipeline stages={m.pipelineStages} compact />
+                      </div>
+                    )}
+
+                    {/* Build summary */}
+                    {m.type === "summary" && (
+                      <div className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-sm text-emerald-400">
+                        {m.content}
+                        {m.buildFiles && (
+                          <div className="mt-2 space-y-0.5">
+                            {m.buildFiles.map((f: { path: string }) => (
+                              <div key={f.path} className="text-2xs text-emerald-500/70 font-mono">
+                                {f.path}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+              {/* Pipeline dots during build */}
+              {mapPipelineToStages().some((s) => s.status !== "pending") && mode === "build" && (
+                <div className="animate-slide-up">
+                  <AgentPipeline stages={mapPipelineToStages()} compact />
+                </div>
+              )}
             </div>
+
+            {/* Chat input */}
+            <div className="border-t border-surface-3 p-3">
+              <div className="flex items-end gap-2 rounded-xl bg-surface-2 border border-surface-3 focus-within:border-brand-500/50 focus-within:ring-1 focus-within:ring-brand-500/30 transition-all">
+                <textarea
+                  ref={chatTextareaRef}
+                  value={chatValue}
+                  onChange={(e) => setChatValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatSubmit();
+                    }
+                  }}
+                  placeholder={
+                    isDisabled
+                      ? statusLabel ? `${statusLabel}...` : "Building..."
+                      : "Describe what you want to build..."
+                  }
+                  disabled={isDisabled}
+                  rows={1}
+                  className="flex-1 bg-transparent text-foreground text-sm placeholder:text-slate-600 px-3 py-2.5 resize-none focus:outline-none disabled:opacity-50 max-h-[120px]"
+                />
+                <button
+                  onClick={handleChatSubmit}
+                  disabled={isDisabled || !chatValue.trim()}
+                  className="p-2 m-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition-all disabled:opacity-30 disabled:hover:bg-brand-600 shrink-0"
+                >
+                  {isDisabled ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Collapsed chat — thin strip to expand */
+          <div className="w-10 shrink-0 border-r border-surface-3 flex flex-col items-center pt-2 bg-surface-1">
+            <button
+              onClick={() => setChatCollapsed(false)}
+              className="p-2 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all"
+              title="Show chat"
+            >
+              <PanelLeft className="w-4 h-4" />
+            </button>
           </div>
         )}
 
-        {/* Center workspace */}
+        {/* ============ RIGHT: Tabs + Content ============ */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Tabs */}
-          <div className="h-10 border-b border-surface-3 flex items-center px-2 gap-1 shrink-0">
-            {/* Sidebar expand button (when collapsed) */}
-            {sidebarCollapsed && (
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all mr-1"
-                title="Show sidebar"
-              >
-                <PanelLeft className="w-3.5 h-3.5" />
-              </button>
-            )}
+          {/* Tab bar */}
+          <div className="h-10 border-b border-surface-3 flex items-center justify-between px-2 shrink-0">
+            <div className="flex items-center gap-1">
+              {/* File sidebar toggle (only when on Code tab) */}
+              {rightTab === "code" && (
+                <button
+                  onClick={() => setFileSidebarOpen(!fileSidebarOpen)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-foreground hover:bg-surface-2 transition-all mr-1"
+                  title={fileSidebarOpen ? "Hide files" : "Show files"}
+                >
+                  {fileSidebarOpen ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeft className="w-3.5 h-3.5" />}
+                </button>
+              )}
 
-            {(
-              [
-                { key: "code", icon: Code2, label: "Code" },
-                { key: "preview", icon: Eye, label: "Preview" },
-                { key: "console", icon: Terminal, label: "Console" },
-                { key: "infra", icon: Database, label: "Infra" },
-                { key: "history", icon: History, label: "History" },
-                { key: "design", icon: Palette, label: "Design" },
-              ] as const
-            ).map(({ key, icon: Icon, label }) => (
-              <button
-                key={key}
-                onClick={() => setRightTab(key)}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
-                  rightTab === key
-                    ? "bg-surface-3 text-foreground"
-                    : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
-                )}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {label}
-                {key === "console" && generator.isGenerating && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
-                )}
-              </button>
-            ))}
+              {tabs.map(({ key, icon: Icon, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setRightTab(key)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                    rightTab === key
+                      ? "bg-surface-3 text-foreground"
+                      : "text-slate-500 hover:text-slate-300 hover:bg-surface-2"
+                  )}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {label}
+                  {key === "console" && generator.isGenerating && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse-dot" />
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Tab content */}
-          <div className="flex-1 overflow-hidden">
-            {rightTab === "code" && (
-              <CodeEditor
-                file={activeFile}
-                openFiles={openFiles}
-                onSelectFile={(f) => setActiveFile(f)}
-                onCloseFile={handleCloseFile}
-                onContentChange={updateFileContent}
-              />
-            )}
-
-            {rightTab === "preview" && (
-              <PreviewPane
-                url={deployedUrl}
-                files={fileTree}
-                isGenerating={generator.isGenerating}
-                isFixing={autoFix.isFixing}
-                fixIteration={autoFix.iteration}
-                tenantId={resolvedTenantId}
-                projectId={projectId}
-                userToken={token}
-                onError={handlePreviewError}
-              />
-            )}
-
-            {rightTab === "console" && (
-              <div className="h-full flex flex-col">
-                {/* Console view toggle */}
-                <div className="flex items-center gap-1 px-3 py-1.5 border-b border-surface-3 shrink-0">
-                  <button
-                    onClick={() => setConsoleView("timeline")}
-                    className={cn(
-                      "px-2 py-1 rounded text-2xs font-medium transition-all",
-                      consoleView === "timeline"
-                        ? "bg-surface-3 text-foreground"
-                        : "text-slate-500 hover:text-slate-300"
-                    )}
-                  >
-                    Timeline
-                  </button>
-                  <button
-                    onClick={() => setConsoleView("log")}
-                    className={cn(
-                      "px-2 py-1 rounded text-2xs font-medium transition-all",
-                      consoleView === "log"
-                        ? "bg-surface-3 text-foreground"
-                        : "text-slate-500 hover:text-slate-300"
-                    )}
-                  >
-                    Raw Log
-                  </button>
+          <div className="flex-1 overflow-hidden flex">
+            {/* File sidebar (inside Code tab) */}
+            {rightTab === "code" && fileSidebarOpen && (
+              <div className="w-[200px] shrink-0 border-r border-surface-3 flex flex-col bg-surface-1 overflow-y-auto">
+                <div className="p-2">
+                  <span className="text-2xs font-semibold uppercase tracking-wider text-slate-500 px-2">Files</span>
                 </div>
-                <div className="flex-1 overflow-hidden">
-                  {consoleView === "timeline" ? (
-                    <ActivityTimeline
-                      events={generationEvents}
-                      isStreaming={generator.isGenerating}
-                    />
-                  ) : (
-                    <BuildLog
-                      events={generationEvents}
-                      isStreaming={generator.isGenerating}
-                      status={
-                        generator.isGenerating
-                          ? (() => {
-                              const active = [...generator.pipelineEvents].reverse().find(
-                                (e) => e.status === "running"
-                              );
-                              if (active?.agent === "analyzer") return "planning" as const;
-                              if (active?.agent === "reviewer") return "reviewing" as const;
-                              return "coding" as const;
-                            })()
-                          : generator.files.length > 0
-                          ? "succeeded"
-                          : null
-                      }
-                    />
-                  )}
-                </div>
+                <FileTree
+                  files={fileTree}
+                  activeFile={activeFile}
+                  onSelect={handleFileSelect}
+                />
               </div>
             )}
 
-            {rightTab === "infra" && (
-              <InfrastructurePanel
-                projectId={projectId}
-                tenantId={resolvedTenantId}
-              />
-            )}
+            <div className="flex-1 overflow-hidden">
+              {rightTab === "preview" && (
+                <PreviewPane
+                  url={deployedUrl}
+                  files={fileTree}
+                  isGenerating={generator.isGenerating}
+                  isFixing={autoFix.isFixing}
+                  fixIteration={autoFix.iteration}
+                  tenantId={resolvedTenantId}
+                  projectId={projectId}
+                  userToken={token}
+                  onError={handlePreviewError}
+                />
+              )}
 
-            {rightTab === "history" && (
-              <VersionHistory
-                projectId={projectId}
-                onRestore={(codeFiles) => {
-                  const tree = codeMapToTree(codeFiles);
-                  setFileTree(tree);
-                  setRightTab("code");
-                }}
-              />
-            )}
+              {rightTab === "code" && (
+                <CodeEditor
+                  file={activeFile}
+                  openFiles={openFiles}
+                  onSelectFile={(f) => setActiveFile(f)}
+                  onCloseFile={handleCloseFile}
+                  onContentChange={updateFileContent}
+                />
+              )}
 
-            {rightTab === "design" && (
-              <FigmaPanel
-                projectId={projectId}
-                tenantId={resolvedTenantId}
-              />
-            )}
+              {rightTab === "cloud" && (
+                <InfrastructurePanel
+                  projectId={projectId}
+                  tenantId={resolvedTenantId}
+                />
+              )}
+
+              {rightTab === "console" && (
+                <div className="h-full flex flex-col">
+                  <div className="flex items-center gap-1 px-3 py-1.5 border-b border-surface-3 shrink-0">
+                    <button
+                      onClick={() => setConsoleView("timeline")}
+                      className={cn(
+                        "px-2 py-1 rounded text-2xs font-medium transition-all",
+                        consoleView === "timeline"
+                          ? "bg-surface-3 text-foreground"
+                          : "text-slate-500 hover:text-slate-300"
+                      )}
+                    >
+                      Timeline
+                    </button>
+                    <button
+                      onClick={() => setConsoleView("log")}
+                      className={cn(
+                        "px-2 py-1 rounded text-2xs font-medium transition-all",
+                        consoleView === "log"
+                          ? "bg-surface-3 text-foreground"
+                          : "text-slate-500 hover:text-slate-300"
+                      )}
+                    >
+                      Raw Log
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    {consoleView === "timeline" ? (
+                      <ActivityTimeline
+                        events={generationEvents}
+                        isStreaming={generator.isGenerating}
+                      />
+                    ) : (
+                      <BuildLog
+                        events={generationEvents}
+                        isStreaming={generator.isGenerating}
+                        status={
+                          generator.isGenerating
+                            ? (() => {
+                                const active = [...generator.pipelineEvents].reverse().find(
+                                  (e) => e.status === "running"
+                                );
+                                if (active?.agent === "analyzer") return "planning" as const;
+                                if (active?.agent === "reviewer") return "reviewing" as const;
+                                return "coding" as const;
+                              })()
+                            : generator.files.length > 0
+                            ? "succeeded"
+                            : null
+                        }
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-
-      {/* Bottom command bar */}
-      <CommandBar
-        onSendMessage={handleSendMessage}
-        onApprovePlan={handleApprovePlan}
-        onModifyPlan={handleModifyPlan}
-        onRejectPlan={handleRejectPlan}
-        messages={messages}
-        mode={mode}
-        statusLabel={statusLabel}
-        statusColor={statusColor}
-        isStreaming={generator.isGenerating}
-        isAnalyzing={generator.isAnalyzing}
-        pipelineStages={mapPipelineToStages()}
-      />
 
       {/* Integrations drawer */}
       <IntegrationsPanel
@@ -1255,7 +1415,6 @@ export function Workspace({ projectId }: { projectId: string }) {
         open={showIntegrations}
         onClose={() => {
           setShowIntegrations(false);
-          // Refresh integration context after panel closes (user may have added/updated)
           if (token && resolvedTenantId && projectId) {
             api.integrations
               .context(token, resolvedTenantId, projectId)
@@ -1273,7 +1432,6 @@ export function Workspace({ projectId }: { projectId: string }) {
         open={showNexus}
         onClose={() => {
           setShowNexus(false);
-          // Refresh Nexus context after panel closes (state may have updated)
           if (token && resolvedTenantId && projectId) {
             api.nexus
               .getContext(token, resolvedTenantId, projectId)
