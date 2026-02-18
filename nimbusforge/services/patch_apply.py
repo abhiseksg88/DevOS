@@ -46,6 +46,11 @@ def apply_unified_diff(
         if result["success"]:
             return result
 
+        # Phase 2A: Try fuzzy apply before 3-way merge
+        result = _try_fuzzy_apply(repo_dir, patch_file, fuzz=3)
+        if result["success"]:
+            return result
+
         result = _try_3way_merge(repo_dir, patch_file)
         if result["success"]:
             return result
@@ -88,6 +93,32 @@ def _try_direct_apply(
     return {
         "success": True,
         "method": "direct",
+        "files_changed": files,
+        "errors": None,
+    }
+
+
+def _try_fuzzy_apply(
+    repo_dir: Path, patch_file: Path, fuzz: int = 3
+) -> dict[str, Any]:
+    """Try git apply with fuzz factor for approximate matching."""
+    result = subprocess.run(
+        ["git", "apply", f"--fuzz={fuzz}", str(patch_file)],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return {
+            "success": False,
+            "method": f"fuzz-{fuzz}",
+            "errors": [result.stderr.strip()],
+        }
+    files = _extract_files_from_patch(patch_file.read_text())
+    logger.info("Patch applied with fuzz=%d: %s", fuzz, files)
+    return {
+        "success": True,
+        "method": f"fuzz-{fuzz}",
         "files_changed": files,
         "errors": None,
     }

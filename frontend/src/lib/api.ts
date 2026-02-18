@@ -67,6 +67,19 @@ export const builds = {
     request<Build>("GET", `/tenants/${tenantId}/projects/${projectId}/builds/${buildId}`, token),
   cancel: (token: string, tenantId: string, projectId: string, buildId: string) =>
     request<unknown>("POST", `/tenants/${tenantId}/projects/${projectId}/builds/${buildId}/cancel`, token),
+  approve: (
+    token: string,
+    tenantId: string,
+    projectId: string,
+    buildId: string,
+    data: { action: "approve" | "modify" | "reject"; modified_plan?: Record<string, unknown>; notes?: string },
+  ) =>
+    request<{ status: string; build_id?: string }>(
+      "POST",
+      `/tenants/${tenantId}/projects/${projectId}/builds/${buildId}/approve`,
+      token,
+      data,
+    ),
 };
 
 // --- Deployments ---

@@ -41,6 +41,7 @@ from .dependencies import (
     get_supabase_service,
 )
 from .models import (
+    BuildApproval,
     BuildCreate,
     BuildEventResponse,
     BuildResponse,
@@ -674,6 +675,114 @@ async def cancel_build(
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", str(build_id)).eq("tenant_id", str(tenant_id)).execute()
     return {"status": "cancelled"}
+
+
+# ===========================================================================
+# BUILD APPROVAL — HITL Checkpoint
+# ===========================================================================
+
+@app.post(
+    "/tenants/{tenant_id}/projects/{project_id}/builds/{build_id}/approve",
+    status_code=200,
+)
+async def approve_build(
+    tenant_id: UUID,
+    project_id: UUID,
+    build_id: UUID,
+    body: BuildApproval,
+    background_tasks: BackgroundTasks,
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+    settings: Settings = Depends(get_settings),
+):
+    """Approve, modify, or reject a build plan (HITL checkpoint)."""
+    user.assert_tenant_access(tenant_id)
+
+    # Verify build is awaiting approval
+    build = db.table("builds").select("*").eq("id", str(build_id)).single().execute()
+    if build.data["status"] != "awaiting_approval":
+        raise HTTPException(400, "Build is not awaiting approval")
+
+    if body.action == "reject":
+        db.table("builds").update({
+            "status": "cancelled",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", str(build_id)).execute()
+
+        # Record feedback: user rejected the plan
+        try:
+            from ..nexus.engine import NexusEngine
+            nexus = NexusEngine(settings)
+            nexus.record_feedback(
+                tenant_id=str(tenant_id),
+                project_id=str(project_id),
+                user_id=str(user.user_id),
+                event_type="code_rejected",
+                feedback={"reason": body.notes or "Plan rejected", "stage": "planning"},
+                agent="shadow_cto",
+                prompt=build.data.get("prompt"),
+            )
+        except Exception:
+            pass
+
+        return {"status": "cancelled"}
+
+    plan = body.modified_plan or build.data.get("plan_json", {})
+
+    if body.action == "modify" and body.modified_plan:
+        try:
+            from ..nexus.engine import NexusEngine
+            nexus = NexusEngine(settings)
+            nexus.record_feedback(
+                tenant_id=str(tenant_id),
+                project_id=str(project_id),
+                user_id=str(user.user_id),
+                event_type="architecture_decision",
+                feedback={"decision": f"Modified plan: {body.notes or 'User adjusted plan'}"},
+                agent="shadow_cto",
+                prompt=build.data.get("prompt"),
+            )
+        except Exception:
+            pass
+
+    # Resume the build in background
+    background_tasks.add_task(
+        _resume_build_pipeline,
+        build_id=str(build_id),
+        tenant_id=str(tenant_id),
+        project_id=str(project_id),
+        plan=plan,
+        settings=settings,
+    )
+
+    return {"status": "approved", "build_id": str(build_id)}
+
+
+async def _resume_build_pipeline(
+    build_id: str,
+    tenant_id: str,
+    project_id: str,
+    plan: dict,
+    settings: Settings,
+):
+    """Resume build after HITL approval."""
+    from ..agents.orchestrator import run_build_resume
+    try:
+        await run_build_resume(
+            build_id=build_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            approved_plan=plan,
+            settings=settings,
+        )
+    except Exception as e:
+        from supabase import create_client
+        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        db.table("builds").update({
+            "status": "failed",
+            "error_message": str(e),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", build_id).execute()
 
 
 # ===========================================================================

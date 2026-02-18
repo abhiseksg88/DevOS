@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     netlify_site_prefix: str = "vedaa"   # Prefix for site names (vedaa-{slug})
     netlify_custom_domain: str = ""      # Base domain for user apps (e.g., "vedaa.io")
 
+    # --- Edge DB (Neon) ---
+    neon_api_key: str = ""
+    neon_project_id: str = ""
+
     # --- Plan Cache ---
     plan_cache_ttl_seconds: int = 3600  # 1 hour
 

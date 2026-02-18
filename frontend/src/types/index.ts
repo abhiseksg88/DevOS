@@ -41,6 +41,7 @@ export interface PublishStatus {
 export type BuildStatus =
   | "queued"
   | "planning"
+  | "awaiting_approval"
   | "scaffolding"
   | "coding"
   | "reviewing"

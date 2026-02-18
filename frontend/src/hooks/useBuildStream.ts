@@ -8,6 +8,10 @@ export interface BuildStreamState {
   events: BuildEvent[];
   isStreaming: boolean;
   status: BuildStatus | null;
+  /** True when build is paused at HITL gate waiting for plan approval */
+  awaitingApproval: boolean;
+  /** Plan data from HITL gate for user review */
+  plan: Record<string, unknown> | null;
 }
 
 export function useBuildStream() {
@@ -15,6 +19,8 @@ export function useBuildStream() {
     events: [],
     isStreaming: false,
     status: null,
+    awaitingApproval: false,
+    plan: null,
   });
   const cancelRef = useRef<(() => void) | null>(null);
 
@@ -23,7 +29,7 @@ export function useBuildStream() {
       // Cancel any existing stream
       cancelRef.current?.();
 
-      setState({ events: [], isStreaming: true, status: "queued" });
+      setState({ events: [], isStreaming: true, status: "queued", awaitingApproval: false, plan: null });
 
       cancelRef.current = streamBuildEvents(
         token,
@@ -33,10 +39,13 @@ export function useBuildStream() {
         0,
         (event) => {
           const be = event as unknown as BuildEvent;
+          const isHitl = be.kind === "info" && be.payload?.hitl_required === true;
           setState((prev) => ({
             ...prev,
             events: [...prev.events, be],
             status: (be.payload?.status as BuildStatus) ?? prev.status,
+            awaitingApproval: isHitl ? true : prev.awaitingApproval,
+            plan: isHitl ? (be.payload?.plan as Record<string, unknown>) ?? prev.plan : prev.plan,
           }));
         },
         () => {

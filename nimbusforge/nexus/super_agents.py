@@ -504,7 +504,7 @@ AGENT_REGISTRY = {
     },
     "red_team_sentinel": {
         "system_prompt": RED_TEAM_SENTINEL_SYSTEM,
-        "default_model": "haiku",
+        "default_model": "sonnet",
         "description": "Security & QA — adversarial testing and audit",
         "can_write_code": False,
     },

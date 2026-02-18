@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
@@ -62,6 +63,8 @@ from ..services.discriminator import (
 )
 from ..services.sentinel import run_sentinel
 from ..services.patch_apply import apply_all_patches
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Supabase helper (uses service-role)
@@ -233,6 +236,7 @@ class BuildState(TypedDict):
     build_id: str
     tenant_id: str
     project_id: str
+    user_id: str  # For Nexus persona lookup
     prompt: str
     settings: dict  # serialized Settings
 
@@ -257,6 +261,10 @@ class BuildState(TypedDict):
     patches: list[str]              # unified diff strings
     review_result: dict | None      # {"approved": bool, "findings": [...]}
     review_iterations: int
+
+    # HITL checkpoint
+    hitl_approved: bool             # Whether the HITL gate has been approved
+    hitl_modified_plan: dict | None # Modified plan from user, if any
 
     # Sentinel results
     sentinel_result: dict | None    # auto-heal loop results
@@ -563,6 +571,19 @@ def coder_node(state: BuildState) -> dict:
     result = _parse_json_response(response["content"])
     patches = result.get("patches", [])
 
+    # Phase 2A: Detect SEARCH/REPLACE format and convert to unified diffs
+    if not patches and "===EDIT:" in response["content"]:
+        from ..services.search_replace import parse_search_replace_blocks, search_replace_to_diff
+        blocks = parse_search_replace_blocks(response["content"])
+        if blocks:
+            all_files = {**state.get("existing_files", {}), **state.get("scaffold_files", {})}
+            patches = search_replace_to_diff(blocks, all_files)
+            state["event_seq"] = _emit_event(
+                state, "info", "sonnet",
+                {"message": f"Converted {len(blocks)} SEARCH/REPLACE blocks to patches"},
+                settings,
+            )
+
     for patch in patches:
         state["event_seq"] = _emit_event(state, "patch", "sonnet", {"diff": patch}, settings)
 
@@ -580,13 +601,55 @@ def coder_node(state: BuildState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node: REVIEWER (Haiku — QA, security, tests)
+# Node: HITL GATE (pause for user approval)
+# ---------------------------------------------------------------------------
+
+def hitl_gate_node(state: BuildState) -> dict:
+    """HITL checkpoint: pause pipeline and wait for user approval of the plan."""
+    settings = Settings(**state["settings"])
+    _update_build_status(state, "awaiting_approval", settings)
+
+    # Save plan to builds table for resume
+    db = _get_db(settings)
+    db.table("builds").update({
+        "plan_json": state["plan"],
+        "status": "awaiting_approval",
+    }).eq("id", state["build_id"]).execute()
+
+    state["event_seq"] = _emit_event(
+        state, "info", None,
+        {
+            "message": "Plan ready for review",
+            "hitl_required": True,
+            "plan": state["plan"],
+        },
+        settings,
+    )
+
+    return {
+        "hitl_approved": False,
+        "event_seq": state["event_seq"],
+    }
+
+
+def hitl_decision(state: BuildState) -> str:
+    """After hitl_gate: if approved -> scaffolder/coder; if not -> end (wait)."""
+    if state.get("hitl_approved"):
+        plan = state.get("plan", {})
+        if plan.get("needs_scaffold", False):
+            return "scaffolder"
+        return "coder"
+    return "__end__"
+
+
+# ---------------------------------------------------------------------------
+# Node: REVIEWER (Sonnet — QA, security, tests)
 # ---------------------------------------------------------------------------
 
 def reviewer_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "reviewing", settings)
-    state["event_seq"] = _emit_event(state, "agent_start", "haiku", {"agent": "reviewer", "message": "Reviewing patches..."}, settings)
+    state["event_seq"] = _emit_event(state, "agent_start", "sonnet", {"agent": "reviewer", "message": "Reviewing patches..."}, settings)
 
     messages = [
         {"role": "system", "content": REVIEWER_SYSTEM},
@@ -601,16 +664,16 @@ def reviewer_node(state: BuildState) -> dict:
         )},
     ]
 
-    response = call_llm(ModelTier.HAIKU, messages, settings)
+    response = call_llm(ModelTier.SONNET, messages, settings)
     review = _parse_json_response(response["content"])
 
-    _log_usage(state, "haiku", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
 
     for finding in review.get("findings", []):
-        state["event_seq"] = _emit_event(state, "warning" if finding.get("severity") != "critical" else "error", "haiku", finding, settings)
+        state["event_seq"] = _emit_event(state, "warning" if finding.get("severity") != "critical" else "error", "sonnet", finding, settings)
 
     state["event_seq"] = _emit_event(
-        state, "agent_end", "haiku",
+        state, "agent_end", "sonnet",
         {"agent": "reviewer", "approved": review.get("approved", False), "finding_count": len(review.get("findings", []))},
         settings,
     )
@@ -622,7 +685,7 @@ def reviewer_node(state: BuildState) -> dict:
         "total_tokens_in": state["total_tokens_in"] + response["tokens_in"],
         "total_tokens_out": state["total_tokens_out"] + response["tokens_out"],
         "total_cost_usd": state["total_cost_usd"] + response["cost"],
-        "model_usage": _update_model_usage(state["model_usage"], "haiku", response),
+        "model_usage": _update_model_usage(state["model_usage"], "sonnet", response),
     }
 
 
@@ -671,11 +734,63 @@ def committer_node(state: BuildState) -> dict:
             settings,
         )
 
+    # --- Phase 1C: Feed sentinel findings into Neural Nexus ---
+    if sentinel_result:
+        try:
+            from ..nexus.engine import NexusEngine
+            nexus = NexusEngine(settings)
+
+            for error_msg in sentinel_result.get("remaining_errors", []):
+                file_path = _extract_file_from_error(error_msg)
+                if file_path:
+                    nexus.tag_tech_debt(
+                        project_id=state["project_id"],
+                        file=file_path,
+                        severity="medium" if "warning" in error_msg.lower() else "high",
+                        description=error_msg[:200],
+                        tagged_by="sentinel",
+                    )
+
+            nexus.record_feedback(
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                user_id=state.get("user_id", "system"),
+                event_type="tech_debt_tagged",
+                feedback={
+                    "clean": sentinel_result.get("clean", False),
+                    "errors_fixed": sentinel_result.get("errors_fixed", 0),
+                    "remaining_count": len(sentinel_result.get("remaining_errors", [])),
+                },
+                agent="red_team_sentinel",
+                prompt=state["prompt"],
+                response_summary=f"Sentinel: {'clean' if sentinel_result.get('clean') else f'{len(sentinel_result.get(\"remaining_errors\", []))} errors remain'}",
+            )
+        except Exception as nexus_err:
+            import logging
+            logging.getLogger(__name__).warning("Sentinel->Nexus feedback failed: %s", nexus_err)
+
     # --- AST graph: rebuild and persist after patches ---
     all_files = {**state.get("existing_files", {}), **state.get("scaffold_files", {})}
     if all_files:
         graph = build_dependency_graph(all_files)
         persist_graph(state["tenant_id"], state["project_id"], graph, settings)
+
+    # --- Phase 2B: Index components for RAG ---
+    if all_files:
+        try:
+            from ..services.component_rag import index_components
+            indexed = index_components(
+                state["tenant_id"], state["project_id"], all_files, settings
+            )
+            if indexed:
+                state["event_seq"] = _emit_event(
+                    state, "info", None,
+                    {"message": f"Indexed {indexed} components for RAG"},
+                    settings,
+                )
+        except Exception as rag_err:
+            import logging
+            logging.getLogger(__name__).warning("Component indexing failed: %s", rag_err)
 
     # --- Store file summaries for vector memory ---
     for path, content in state.get("scaffold_files", {}).items():
@@ -724,6 +839,13 @@ def deployer_node(state: BuildState) -> dict:
         {"message": "Deploy complete", "preview_url": result["preview_url"]},
         settings,
     )
+
+    # --- Phase 3C: Refresh observability metrics ---
+    try:
+        from ..services.observability import compute_build_stats
+        compute_build_stats(state["tenant_id"], state["project_id"], settings)
+    except Exception:
+        pass
 
     # Mark build as succeeded
     db = _get_db(settings)
@@ -782,11 +904,12 @@ def review_decision(state: BuildState) -> str:
 # ---------------------------------------------------------------------------
 
 def build_graph() -> StateGraph:
-    """Construct the LangGraph agent pipeline."""
+    """Construct the LangGraph agent pipeline with HITL gate."""
     graph = StateGraph(BuildState)
 
     # Add nodes
     graph.add_node("planner", planner_node)
+    graph.add_node("hitl_gate", hitl_gate_node)
     graph.add_node("scaffolder", scaffolder_node)
     graph.add_node("coder", coder_node)
     graph.add_node("reviewer", reviewer_node)
@@ -796,11 +919,16 @@ def build_graph() -> StateGraph:
     # Entry point
     graph.set_entry_point("planner")
 
-    # Edges
-    graph.add_conditional_edges("planner", should_scaffold, {
+    # Planner -> HITL gate
+    graph.add_edge("planner", "hitl_gate")
+
+    # HITL gate -> scaffolder/coder/end (waits for approval)
+    graph.add_conditional_edges("hitl_gate", hitl_decision, {
         "scaffolder": "scaffolder",
         "coder": "coder",
+        "__end__": END,
     })
+
     graph.add_edge("scaffolder", "coder")
     graph.add_edge("coder", "reviewer")
     graph.add_conditional_edges("reviewer", review_decision, {
@@ -859,10 +987,15 @@ async def run_build(
         tenant_id, project_id, prompt, settings, limit=5,
     )
 
+    # --- Fetch user_id from build record for Nexus persona ---
+    build_record = db.table("builds").select("user_id").eq("id", build_id).single().execute()
+    user_id = build_record.data.get("user_id", "system") or "system"
+
     initial_state: BuildState = {
         "build_id": build_id,
         "tenant_id": tenant_id,
         "project_id": project_id,
+        "user_id": user_id,
         "prompt": prompt,
         "settings": settings.model_dump(),
         # Context Prism layers
@@ -884,6 +1017,9 @@ async def run_build(
         "patches": [],
         "review_result": None,
         "review_iterations": 0,
+        # HITL checkpoint
+        "hitl_approved": False,
+        "hitl_modified_plan": None,
         # Sentinel
         "sentinel_result": None,
         # Deployment
@@ -904,13 +1040,108 @@ async def run_build(
     await compiled.ainvoke(initial_state)
 
 
+async def run_build_resume(
+    build_id: str,
+    tenant_id: str,
+    project_id: str,
+    approved_plan: dict,
+    settings: Settings,
+):
+    """Resume a build after HITL approval."""
+    db = _get_db(settings)
+
+    # Load the build data
+    build = db.table("builds").select("*").eq("id", build_id).single().execute()
+
+    # Load project data
+    project = (
+        db.table("projects")
+        .select("architecture_md, api_contracts_md, project_manifest, stack")
+        .eq("id", project_id)
+        .single()
+        .execute()
+    )
+
+    # Reload context layers
+    ast_graph = load_graph(tenant_id, project_id, settings)
+    existing_files = _load_project_files(tenant_id, project_id, settings)
+    ledger_ctx = get_ledger_context(tenant_id, project_id, settings)
+    vector_ctx = get_vector_context(tenant_id, project_id, build.data.get("prompt", ""), settings, limit=5)
+
+    # Run discriminator on the approved plan
+    disc_result = classify_build(tenant_id, project_id, approved_plan, existing_files, settings)
+    if disc_result["overall_mode"] == "genesis":
+        approved_plan["needs_scaffold"] = True
+    else:
+        approved_plan["needs_scaffold"] = False
+
+    resume_state: BuildState = {
+        "build_id": build_id,
+        "tenant_id": tenant_id,
+        "project_id": project_id,
+        "user_id": build.data.get("user_id", "system") or "system",
+        "prompt": build.data.get("prompt", ""),
+        "settings": settings.model_dump(),
+        "architecture_md": project.data.get("architecture_md", ""),
+        "api_contracts_md": project.data.get("api_contracts_md", ""),
+        "project_manifest": project.data.get("project_manifest", {}),
+        "existing_files": existing_files,
+        "ast_graph": ast_graph,
+        "ledger_context": ledger_ctx,
+        "vector_context": vector_ctx,
+        "build_mode": disc_result["overall_mode"],
+        "genesis_files": disc_result["genesis_files"],
+        "surgical_files": disc_result["surgical_files"],
+        "plan": approved_plan,
+        "plan_from_cache": False,
+        "scaffold_files": {},
+        "patches": [],
+        "review_result": None,
+        "review_iterations": 0,
+        "hitl_approved": True,  # Key: already approved
+        "hitl_modified_plan": None,
+        "sentinel_result": None,
+        "commit_sha": None,
+        "image_tag": None,
+        "deploy_url": None,
+        "event_seq": build.data.get("event_seq", 0) or 0,
+        "total_tokens_in": build.data.get("total_tokens_in", 0) or 0,
+        "total_tokens_out": build.data.get("total_tokens_out", 0) or 0,
+        "total_cost_usd": float(build.data.get("total_cost_usd", 0) or 0),
+        "model_usage": build.data.get("model_usage", {}) or {},
+        "error": None,
+    }
+
+    graph = build_graph()
+    compiled = graph.compile()
+    await compiled.ainvoke(resume_state)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _build_context(state: BuildState) -> str:
-    """Build context using all 3 Context Prism layers."""
+    """Build context using all 3 Context Prism layers + Neural Nexus."""
     parts = []
+
+    # --- CRITICAL: Neural Nexus context (UPP + PSM + BLL + Dims 4,5) ---
+    try:
+        _settings = Settings(**state["settings"])
+        from ..nexus.engine import NexusEngine
+        nexus = NexusEngine(_settings)
+        nexus_ctx = nexus.get_context(
+            state["tenant_id"],
+            state["project_id"],
+            state.get("user_id", "system"),
+            "principal_builder",
+            query=state.get("prompt", ""),
+        )
+        nexus_section = nexus_ctx.to_prompt_section()
+        if nexus_section:
+            parts.append(nexus_section)
+    except Exception as nexus_err:
+        logger.warning("Nexus context load failed: %s", nexus_err)
 
     # Layer 2: WARM — Architectural Ledger (read first, per spec)
     ledger = state.get("ledger_context", "")
@@ -985,6 +1216,20 @@ def _parse_json_response(content: str) -> dict:
             except json.JSONDecodeError:
                 pass
     return {"error": "Failed to parse LLM response", "raw": content[:500]}
+
+
+def _extract_file_from_error(error_msg: str) -> str | None:
+    """Extract file path from ESLint or TypeScript error message."""
+    import re
+    # ESLint format: "path:line:col: message"
+    match = re.search(r'([^\s:]+\.\w+):\d+:\d+', error_msg)
+    if match:
+        return match.group(1)
+    # TypeScript format: "path(line,col): error TS..."
+    match = re.search(r'([^\s(]+\.\w+)\(\d+,\d+\)', error_msg)
+    if match:
+        return match.group(1)
+    return None
 
 
 def _extract_files_from_patch(patch: str) -> list[str]:

@@ -53,7 +53,7 @@ TASK_ROUTING: dict[TaskType, ModelTier] = {
     TaskType.BACKEND: ModelTier.SONNET,
     TaskType.DIFF: ModelTier.SONNET,
     TaskType.REPAIR: ModelTier.SONNET,
-    TaskType.REVIEW: ModelTier.HAIKU,
+    TaskType.REVIEW: ModelTier.SONNET,
     # DeepSeek handles: UI components, styling, layout
     TaskType.UI_COMPONENT: ModelTier.DEEPSEEK,
     TaskType.STYLING: ModelTier.DEEPSEEK,

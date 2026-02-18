@@ -953,7 +953,19 @@ export function Workspace({ projectId }: { projectId: string }) {
         timestamp: Date.now(),
       },
     ]);
-  }, []);
+
+    // Record rejection feedback to Nexus (learning loop)
+    if (token && resolvedTenantId && projectId) {
+      api.nexus
+        .recordFeedback(token, resolvedTenantId, projectId, {
+          event_type: "code_rejected",
+          feedback: { reason: "Plan rejected by user", stage: "planning" },
+          agent: "shadow_cto",
+          prompt: lastPromptRef.current,
+        })
+        .catch(() => {});
+    }
+  }, [token, resolvedTenantId, projectId]);
 
   function handleChatSubmit() {
     const trimmed = chatValue.trim();
