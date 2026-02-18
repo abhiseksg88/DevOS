@@ -30,6 +30,7 @@ class ProjectStatus(str, Enum):
 class BuildStatus(str, Enum):
     queued = "queued"
     planning = "planning"
+    awaiting_approval = "awaiting_approval"
     scaffolding = "scaffolding"
     coding = "coding"
     reviewing = "reviewing"
@@ -126,6 +127,13 @@ class IntegrationUpdate(BaseModel):
     credentials: Optional[dict] = None
     config: Optional[dict] = None
     status: Optional[IntegrationStatus] = None
+
+
+class BuildApproval(BaseModel):
+    """User approves, modifies, or rejects a build plan (HITL checkpoint)."""
+    action: str = Field(..., pattern=r"^(approve|modify|reject)$")
+    modified_plan: Optional[dict] = None
+    notes: Optional[str] = None
 
 
 class PublishRequest(BaseModel):

@@ -37,7 +37,7 @@ def _get_db(settings: Settings):
 # ============================================================================
 
 class NexusContext:
-    """Assembled context from all three dimensions for an agent call."""
+    """Assembled context from all five dimensions for an agent call."""
 
     def __init__(
         self,
@@ -46,12 +46,16 @@ class NexusContext:
         business_logic: list[dict],
         recent_feedback: list[dict],
         agent_role: str,
+        component_context: str = "",
+        observability_context: str = "",
     ):
         self.user_persona = user_persona
         self.project_state = project_state
         self.business_logic = business_logic
         self.recent_feedback = recent_feedback
         self.agent_role = agent_role
+        self.component_context = component_context
+        self.observability_context = observability_context
 
     def to_prompt_section(self) -> str:
         """Render the context as a prompt section for the agent."""
@@ -193,6 +197,14 @@ class NexusContext:
                     fb_lines.append(f"  - LIBRARY: {json.dumps(feedback)}")
             sections.append("\n".join(fb_lines))
 
+        # --- Component Library (Dimension 4) ---
+        if self.component_context:
+            sections.append(self.component_context)
+
+        # --- Build Observability (Dimension 5) ---
+        if self.observability_context:
+            sections.append(self.observability_context)
+
         if not sections:
             return ""
 
@@ -224,8 +236,9 @@ class NexusEngine:
         project_id: str,
         user_id: str,
         agent_role: str,
+        query: str = "",
     ) -> NexusContext:
-        """Assemble full context from all three dimensions for an agent."""
+        """Assemble full context from all five dimensions for an agent."""
 
         # 1. User Persona
         persona = self._get_or_create_persona(tenant_id, user_id)
@@ -239,12 +252,31 @@ class NexusEngine:
         # 4. Recent Feedback
         feedback = self._get_recent_feedback(project_id, user_id, limit=10)
 
+        # 5. Component Library (Dimension 4)
+        component_ctx = ""
+        if query:
+            try:
+                from ..services.component_rag import get_component_context
+                component_ctx = get_component_context(project_id, query, self.settings)
+            except Exception as e:
+                logger.warning("Component RAG failed: %s", e)
+
+        # 6. Observability Metrics (Dimension 5)
+        obs_ctx = ""
+        try:
+            from ..services.observability import get_observability_context
+            obs_ctx = get_observability_context(project_id, self.settings)
+        except Exception as e:
+            logger.warning("Observability context failed: %s", e)
+
         return NexusContext(
             user_persona=persona,
             project_state=psm,
             business_logic=bl,
             recent_feedback=feedback,
             agent_role=agent_role,
+            component_context=component_ctx,
+            observability_context=obs_ctx,
         )
 
     # -----------------------------------------------------------------------
