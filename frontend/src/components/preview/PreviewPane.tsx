@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   RefreshCw,
   ExternalLink,
@@ -1197,6 +1197,39 @@ export function PreviewPane({ url, files, onError, isGenerating, tenantId, proje
 
     window.addEventListener("message", handleCredentialRequest);
     return () => window.removeEventListener("message", handleCredentialRequest);
+  }, [userToken, tenantId, projectId]);
+
+  // ──────────────────────────────────────────────────────────────
+  // Proactively push fresh token to iframe when it changes
+  // (e.g. after Supabase auto-refreshes the JWT).
+  // This prevents "JWT expired" errors in long-running sessions.
+  // ──────────────────────────────────────────────────────────────
+  const prevTokenRef = useRef(userToken);
+  useEffect(() => {
+    // Only push if token actually changed (not on initial render)
+    if (!userToken || userToken === prevTokenRef.current) {
+      prevTokenRef.current = userToken;
+      return;
+    }
+    prevTokenRef.current = userToken;
+
+    const payload = {
+      type: "SUPABASE_INIT",
+      url: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+      anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
+      token: userToken,
+      tenantId: tenantId || "",
+      projectId: projectId || "",
+    };
+
+    const iframes = document.getElementsByTagName("iframe");
+    for (let i = 0; i < iframes.length; i++) {
+      try {
+        iframes[i].contentWindow?.postMessage(payload, "*");
+      } catch {
+        // srcdoc iframes — silently ignore
+      }
+    }
   }, [userToken, tenantId, projectId]);
 
   // Clear errors on new content / refresh
