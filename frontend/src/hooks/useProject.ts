@@ -75,20 +75,27 @@ export function useProject(projectId: string) {
 
       let tid = tenantParam;
 
-      // If no tenant param, resolve via the backend API (correctly filtered by
-      // tenant_members) rather than direct Supabase (which uses potentially
-      // permissive RLS that can return tenants the user is not a member of).
-      if (!tid) {
-        const currentToken = tokenRef.current;
-        if (currentToken) {
-          try {
-            const tenants = await api.tenants.list(currentToken);
-            if (!cancelled && tenants.length > 0) {
-              tid = tenants[0].id;
-              setResolvedTenantId(tid);
-            }
-          } catch {
-            // Backend not reachable — fall back to direct Supabase
+      // ALWAYS validate the tenant via the backend API.
+      // The API's list_tenants endpoint filters strictly by tenant_members rows,
+      // so it is authoritative regardless of RLS state on the database.
+      // The URL ?tenant= param is used only as a preference hint (i.e. which
+      // tenant to pick when the user belongs to multiple), NOT as ground truth.
+      const currentToken = tokenRef.current;
+      if (currentToken) {
+        try {
+          const apiTenants = await api.tenants.list(currentToken);
+          if (!cancelled && apiTenants.length > 0) {
+            // If the URL hint points to a tenant the user actually belongs to,
+            // keep it. Otherwise fall back to the first valid tenant.
+            const hintIsValid = tid && apiTenants.some(t => t.id === tid);
+            tid = hintIsValid ? tid : apiTenants[0].id;
+            setResolvedTenantId(tid);
+          }
+        } catch {
+          // Backend unreachable — fall back to direct Supabase as last resort.
+          // Direct Supabase may return incorrect results if RLS is not fully
+          // configured, so only use it when the API is completely unavailable.
+          if (!tid) {
             try {
               const tenants = await db.listTenants();
               if (!cancelled && tenants.length > 0) {
@@ -98,21 +105,14 @@ export function useProject(projectId: string) {
             } catch {
               // DB not ready either — load workspace in offline mode
             }
-          }
-        } else {
-          // No token yet — try Supabase directly
-          try {
-            const tenants = await db.listTenants();
-            if (!cancelled && tenants.length > 0) {
-              tid = tenants[0].id;
-              setResolvedTenantId(tid);
-            }
-          } catch {
-            // DB not ready — offline mode
+          } else {
+            if (!cancelled) setResolvedTenantId(tid);
           }
         }
       } else {
-        if (!cancelled) setResolvedTenantId(tid);
+        // No token yet — use URL param as-is (loading state will protect builds
+        // since handleSendMessage guards on !token)
+        if (tid && !cancelled) setResolvedTenantId(tid);
       }
 
       if (!tid) {
