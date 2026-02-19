@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     gcp_project: str = "nimbusforge"
     gcp_region: str = "us-central1"
     fly_org: str = "nimbusforge"
+    # Set SKIP_DOCKER_BUILD=true in environments where Docker is unavailable
+    # (e.g. Railway). The pipeline will still generate code, commit, and store
+    # files in Supabase Storage; only the image build/push and container deploy
+    # steps are skipped. A storage-backed preview URL is returned instead.
+    skip_docker_build: bool = False
 
     # --- Preview ---
     preview_domain: str = "preview.nimbusforge.dev"

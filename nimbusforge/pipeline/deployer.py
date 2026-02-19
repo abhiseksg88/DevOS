@@ -81,6 +81,27 @@ def deploy_preview(
 
     preview_url = f"https://{build_id[:8]}.{settings.preview_domain}"
 
+    # When Docker build is skipped (e.g. Railway), record the deployment as
+    # succeeded without actually deploying a container. The generated source
+    # files are already persisted in Supabase Storage.
+    if settings.skip_docker_build:
+        import logging
+        logging.getLogger(__name__).info(
+            "SKIP_DOCKER_BUILD=true — skipping container deploy for build %s", build_id
+        )
+        db.table("deployments").insert({
+            "id": deploy_id,
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "build_id": build_id,
+            "status": "active",
+            "provider": "storage",
+            "region": "global",
+            "image_tag": image_tag,
+            "preview_url": preview_url,
+        }).execute()
+        return {"preview_url": preview_url, "deploy_id": deploy_id}
+
     db.table("deployments").insert({
         "id": deploy_id,
         "tenant_id": tenant_id,
