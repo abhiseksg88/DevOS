@@ -211,8 +211,8 @@ export function useGenerate(options: UseGenerateOptions = {}) {
       setState(prev => ({ ...prev, buildId: build.id }));
       connectStream(token, tenantId, projectId, build.id);
 
-    } catch (err: any) {
-      const msg = err.message || "Failed to start build";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to start build";
       setState(prev => ({ ...prev, isGenerating: false, error: msg, pipelinePhase: "error" }));
       options.onError?.(msg);
     }
@@ -239,8 +239,8 @@ export function useGenerate(options: UseGenerateOptions = {}) {
 
       connectStream(token, tenantId, projectId, buildId);
 
-    } catch (err: any) {
-      const msg = err.message || "Failed to approve build";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to approve build";
       setState(prev => ({ ...prev, error: msg }));
       options.onError?.(msg);
     }
