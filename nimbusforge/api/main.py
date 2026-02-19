@@ -62,6 +62,7 @@ from .models import (
     PublishResponse,
     PublishStatusResponse,
     RollbackRequest,
+    SubdomainCheckResponse,
     TenantCreate,
     TenantResponse,
     TenantUpdate,
@@ -1021,6 +1022,43 @@ async def _execute_rollback(deploy_data: dict, settings: Settings):
 # NETLIFY PUBLISH (One-Click Deploy)
 # ===========================================================================
 
+@app.get(
+    "/tenants/{tenant_id}/projects/{project_id}/check-subdomain",
+    response_model=SubdomainCheckResponse,
+)
+async def check_subdomain(
+    tenant_id: UUID,
+    project_id: UUID,
+    subdomain: str = Query(..., min_length=1, max_length=40),
+    user: AuthUser = Depends(get_current_user),
+    db: Client = Depends(get_supabase_service),
+    settings: Settings = Depends(get_settings),
+):
+    """Check if a subdomain is available for publishing."""
+    user.assert_tenant_access(tenant_id)
+
+    custom_domain_base = settings.netlify_custom_domain or "vedaa.io"
+    full_domain = f"{subdomain}.{custom_domain_base}"
+
+    # Check if any other project already uses this custom_domain
+    result = (
+        db.table("projects")
+        .select("id, custom_domain")
+        .eq("custom_domain", full_domain)
+        .neq("id", str(project_id))  # Exclude current project
+        .limit(1)
+        .execute()
+    )
+
+    taken = bool(result.data)
+    return SubdomainCheckResponse(
+        available=not taken,
+        subdomain=subdomain,
+        domain=full_domain,
+        reason="This subdomain is already in use." if taken else None,
+    )
+
+
 @app.post(
     "/tenants/{tenant_id}/projects/{project_id}/publish",
     response_model=PublishResponse,
@@ -1069,11 +1107,14 @@ async def publish_project(
         .execute()
     )
 
+    # Use custom subdomain if provided, otherwise fall back to project slug
+    subdomain_slug = body.custom_subdomain or project.data["slug"]
+
     # Create or reuse Netlify site
     site_id = project.data.get("netlify_site_id")
     if not site_id:
         try:
-            site = netlify.create_site(project.data["slug"])
+            site = netlify.create_site(subdomain_slug)
             site_id = site["site_id"]
             db.table("projects").update({
                 "netlify_site_id": site_id,
@@ -1127,7 +1168,7 @@ async def publish_project(
     # Add custom domain if configured
     custom_domain = None
     if settings.netlify_custom_domain:
-        custom_domain = f"{project.data['slug']}.{settings.netlify_custom_domain}"
+        custom_domain = f"{subdomain_slug}.{settings.netlify_custom_domain}"
         try:
             netlify.add_custom_domain(site_id, custom_domain)
             deploy_url = f"https://{custom_domain}"  # Use custom domain as primary URL
@@ -1145,6 +1186,9 @@ async def publish_project(
     }
     if custom_domain:
         update_data["custom_domain"] = custom_domain
+    # Update slug to match chosen subdomain so serve-app can resolve it
+    if body.custom_subdomain:
+        update_data["slug"] = subdomain_slug
 
     db.table("projects").update(update_data).eq("id", str(project_id)).execute()
 
@@ -1163,6 +1207,7 @@ async def publish_project(
         url=deploy_url,
         status=deploy_status,
         netlify_site_id=site_id,
+        custom_domain=custom_domain,
     )
 
 

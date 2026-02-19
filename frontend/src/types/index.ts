@@ -31,6 +31,7 @@ export interface PublishResult {
   url: string;
   status: string;
   netlify_site_id: string;
+  custom_domain?: string | null;
 }
 
 export interface PublishStatus {

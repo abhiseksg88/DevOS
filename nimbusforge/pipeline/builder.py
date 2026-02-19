@@ -84,7 +84,28 @@ def apply_and_build(
         # Step 8: Upload source back to storage
         _sync_to_storage(repo_dir, tenant_id, project_id, settings)
 
-        return {"commit_sha": commit_sha, "image_tag": image_tag}
+        # Step 9: Capture final file contents for SSE streaming to frontend
+        final_files: dict[str, str] = {}
+        _source_extensions = {
+            ".ts", ".tsx", ".js", ".jsx", ".py", ".html", ".css",
+            ".json", ".md", ".yaml", ".yml", ".toml", ".sql", ".sh",
+            ".env", ".txt", ".cfg", ".ini",
+        }
+        for root, _dirs, filenames in os.walk(repo_dir):
+            # Skip git internals, node_modules, __pycache__
+            rel_root = os.path.relpath(root, repo_dir)
+            if any(part.startswith(".") or part in ("node_modules", "__pycache__", "dist", "build") for part in rel_root.split(os.sep)):
+                continue
+            for fname in filenames:
+                if Path(fname).suffix in _source_extensions or fname in ("Dockerfile", "Makefile", ".gitignore"):
+                    fpath = os.path.join(root, fname)
+                    rel_path = os.path.relpath(fpath, repo_dir)
+                    try:
+                        final_files[rel_path] = Path(fpath).read_text(errors="replace")
+                    except Exception:
+                        pass
+
+        return {"commit_sha": commit_sha, "image_tag": image_tag, "final_files": final_files}
 
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

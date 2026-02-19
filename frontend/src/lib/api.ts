@@ -116,12 +116,18 @@ export const publish = {
       };
     }
   },
-  deploy: (token: string, tenantId: string, projectId: string, html: string) =>
+  deploy: (token: string, tenantId: string, projectId: string, html: string, customSubdomain?: string) =>
     request<PublishResult>(
       "POST",
       `/tenants/${tenantId}/projects/${projectId}/publish`,
       token,
-      { html },
+      { html, custom_subdomain: customSubdomain },
+    ),
+  checkSubdomain: (token: string, tenantId: string, projectId: string, subdomain: string) =>
+    request<{ available: boolean; subdomain: string; domain: string; reason?: string }>(
+      "GET",
+      `/tenants/${tenantId}/projects/${projectId}/check-subdomain?subdomain=${encodeURIComponent(subdomain)}`,
+      token,
     ),
   status: (token: string, tenantId: string, projectId: string, deployId: string) =>
     request<PublishStatus>(

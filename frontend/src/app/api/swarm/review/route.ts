@@ -1,4 +1,9 @@
 /**
+ * @deprecated — This route calls Claude Haiku directly from the frontend.
+ * The primary pipeline now uses the backend FastAPI/LangGraph reviewer_node
+ * via builds.create() → streamBuildEvents() in api.ts.
+ * Kept as fallback for legacy build() calls in useGenerate.
+ *
  * Reviewer Agent — Uses Claude Haiku to review generated code against the PRD.
  *
  * This is the third agent in the swarm pipeline. It checks generated code for:

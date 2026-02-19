@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { useProject } from "@/hooks/useProject";
-import { useGenerate, type PipelineEvent } from "@/hooks/useGenerate";
+import { useGenerate, type PipelineEvent, type UseGenerateOptions } from "@/hooks/useGenerate";
 import { useAutoFix } from "@/hooks/useAutoFix";
 import { useCodePersistence } from "@/hooks/useCodePersistence";
 import { CodeEditor } from "@/components/editor/CodeEditor";
@@ -131,7 +131,11 @@ export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const { project, loading, userId, tenantId: resolvedTenantId, token } = useProject(projectId);
-  const generator = useGenerate();
+  const generator = useGenerate({
+    token,
+    tenantId: resolvedTenantId,
+    projectId,
+  });
   const persistence = useCodePersistence(projectId, userId);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -533,6 +537,11 @@ export function Workspace({ projectId }: { projectId: string }) {
     ]);
   }, []);
 
+  // Keep the generator's onFileGenerated callback in sync with addFileToTree
+  useEffect(() => {
+    generator.setOnFileGenerated((path: string, content: string) => addFileToTree(path, content));
+  }, [generator.setOnFileGenerated, addFileToTree]);
+
   const handleFileSelect = useCallback((file: FileNode) => {
     if (file.type !== "file") return;
     setActiveFile(file);
@@ -680,6 +689,85 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }, [generator.isGenerating, generator.files.length, persistence]);
 
+  // When backend pipeline reaches "done", finalize the build UI
+  const prevPhaseRef = useRef(generator.pipelinePhase);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = generator.pipelinePhase;
+
+    if (generator.pipelinePhase === "done" && prev !== "done") {
+      // Update pipeline message
+      if (generatingMsgIdRef.current) {
+        updateMessageById(generatingMsgIdRef.current, {
+          status: "succeeded",
+          pipelineStages: mapPipelineToStages(),
+        });
+        generatingMsgIdRef.current = null;
+      }
+
+      // Add summary message
+      if (generator.files.length > 0) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            type: "summary",
+            content: `Generated ${generator.files.length} files`,
+            timestamp: Date.now(),
+            status: "succeeded",
+            buildFiles: generator.files.map((f) => ({ path: f.path })),
+            pipelineStages: mapPipelineToStages(),
+          },
+        ]);
+        persistence.saveMessage("assistant", `Generated ${generator.files.length} files`);
+      }
+
+      // Mark plan card as completed
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "building");
+        if (idx === -1) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], planStatus: "completed" };
+        return updated;
+      });
+
+      setRightTab("preview");
+    }
+
+    // Handle error state — update pipeline message
+    if (generator.pipelinePhase === "error" && prev !== "error" && generator.error) {
+      if (generatingMsgIdRef.current) {
+        updateMessageById(generatingMsgIdRef.current, {
+          status: "failed",
+          pipelineStages: mapPipelineToStages(),
+        });
+        generatingMsgIdRef.current = null;
+      }
+      persistence.saveMessage("assistant", `Error: ${generator.error}`);
+    }
+  }, [generator.pipelinePhase, generator.files, generator.error, updateMessageById, mapPipelineToStages, persistence]);
+
+  // When backend pipeline re-plans after modify, update the plan card
+  useEffect(() => {
+    if (generator.pipelinePhase === "awaiting_approval" && generator.currentPrd) {
+      setMessages((prev) => {
+        const idx = prev.findIndex(
+          (m) => m.type === "plan" && (m.planStatus === "modified" || m.planStatus === "pending"),
+        );
+        if (idx === -1) return prev;
+        const updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          prd: generator.currentPrd!,
+          planStatus: "pending",
+          status: "succeeded",
+        };
+        return updated;
+      });
+    }
+  }, [generator.pipelinePhase, generator.currentPrd]);
+
   const isInputDisabled = generator.isGenerating || generator.isAnalyzing || !!pendingPlan;
   const isPlanCardDisabled = generator.isGenerating || generator.isAnalyzing;
 
@@ -730,46 +818,25 @@ export function Workspace({ projectId }: { projectId: string }) {
         },
       ]);
 
-      const history = messages
-        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      const result = await generator.analyze(
-        content,
-        fileTree,
-        history.length > 1 ? history.slice(0, -1) : undefined,
-      );
-
-      if (result.prd) {
-        updateMessageById(planningMsgId, {
-          type: "plan",
-          content: "Here's the build plan:",
-          prd: result.prd,
-          planStatus: "pending",
-          status: "succeeded",
-        });
-        generatingMsgIdRef.current = null;
-      } else {
-        // Analyzer unavailable — show degraded plan card, still require approval
-        const fallbackPrd: Record<string, unknown> = {
-          intent: "build",
-          summary: content.slice(0, 200) + (content.length > 200 ? "..." : ""),
-          changes: [],
-          new_components: [],
-          integration_notes: "Detailed analysis was unavailable. The build will proceed using your prompt directly.",
-        };
-        updateMessageById(planningMsgId, {
-          type: "plan",
-          content: "Ready to build — review and approve:",
-          prd: fallbackPrd,
-          planStatus: "pending",
-          status: "succeeded",
-        });
-        generatingMsgIdRef.current = null;
-      }
+      // Start build via backend pipeline — SSE events will drive state
+      await generator.startBuild(content, (path, fileContent) => addFileToTree(path, fileContent));
     },
-    [generator, fileTree, persistence, autoFix, updateMessageById, messages],
+    [generator, persistence, autoFix, addFileToTree],
   );
+
+  // When backend pipeline reaches HITL gate, update the planning message to a PlanCard
+  useEffect(() => {
+    if (generator.pipelinePhase === "awaiting_approval" && generator.currentPrd && generatingMsgIdRef.current) {
+      updateMessageById(generatingMsgIdRef.current, {
+        type: "plan",
+        content: "Here's the build plan:",
+        prd: generator.currentPrd,
+        planStatus: "pending",
+        status: "succeeded",
+      });
+      generatingMsgIdRef.current = null;
+    }
+  }, [generator.pipelinePhase, generator.currentPrd, updateMessageById]);
 
   // Keep ref in sync so the initial-prompt useEffect always calls the latest version
   handleSendMessageRef.current = handleSendMessage;
@@ -811,70 +878,23 @@ export function Workspace({ projectId }: { projectId: string }) {
         build_id: "",
         kind: "agent_start",
         agent: null,
-        payload: { message: "Starting build — Code → Review → Fix..." },
+        payload: { message: "Starting build — Scaffold → Code → Review..." },
         seq: 1,
         created_at: new Date().toISOString(),
       },
     ]);
     seqRef.current = 1;
 
-    const history = messages
-      .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
-      .map((m) => ({ role: m.role, content: m.content }));
-
-    const result = await generator.build(
-      lastPromptRef.current,
-      fileTree,
-      (path, fileContent) => addFileToTree(path, fileContent),
-      history.length > 1 ? history.slice(0, -1) : undefined,
-      generator.currentPrd ?? undefined,
-    );
-
-    if (generatingMsgIdRef.current) {
-      updateMessageById(generatingMsgIdRef.current, {
-        status: result.error ? "failed" : "succeeded",
-        pipelineStages: mapPipelineToStages(),
-      });
-      generatingMsgIdRef.current = null;
-    }
-
-    if (result.error) {
-      persistence.saveMessage("assistant", `Error: ${result.error}`);
-    } else if (result.files.length > 0) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          type: "summary",
-          content: `Generated ${result.files.length} files`,
-          timestamp: Date.now(),
-          status: "succeeded",
-          buildFiles: result.files.map((f) => ({ path: f.path })),
-          pipelineStages: mapPipelineToStages(),
-        },
-      ]);
-
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "building");
-        if (idx === -1) return prev;
-        const updated = [...prev];
-        updated[idx] = { ...updated[idx], planStatus: "completed" };
-        return updated;
-      });
-
-      persistence.saveMessage("assistant", `Generated ${result.files.length} files`);
-      setRightTab("preview");
-    }
-  }, [generator, fileTree, addFileToTree, persistence, updateMessageById, mapPipelineToStages, messages]);
+    // Approve via backend pipeline — SSE events will drive state changes
+    await generator.approveBuild();
+  }, [generator, mapPipelineToStages]);
 
   // ---------------------------------------------------------------
   // handleModifyPlan
   // ---------------------------------------------------------------
   const handleModifyPlan = useCallback(
     async (notes: string) => {
-      const modifiedPrompt = `${lastPromptRef.current}\n\nAdditional requirements: ${notes}`;
-      lastPromptRef.current = modifiedPrompt;
+      lastPromptRef.current = `${lastPromptRef.current}\n\nAdditional requirements: ${notes}`;
 
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
@@ -889,32 +909,17 @@ export function Workspace({ projectId }: { projectId: string }) {
         return updated;
       });
 
-      const result = await generator.analyze(modifiedPrompt, fileTree);
-      if (result.prd) {
-        setMessages((prev) => {
-          const idx = prev.findIndex(
-            (m) => m.type === "plan" && (m.planStatus === "modified" || m.planStatus === "pending"),
-          );
-          if (idx === -1) return prev;
-          const updated = [...prev];
-          updated[idx] = {
-            ...updated[idx],
-            prd: result.prd!,
-            planStatus: "pending",
-            status: "succeeded",
-          };
-          return updated;
-        });
-      }
+      // Modify via backend pipeline — SSE events will deliver new plan
+      await generator.modifyBuild(notes);
     },
-    [generator, fileTree],
+    [generator],
   );
 
   // ---------------------------------------------------------------
   // handleRejectPlan
   // ---------------------------------------------------------------
   const handleRejectPlan = useCallback(() => {
-    generator.stop(); // Reset pipelinePhase to idle so mode exits "awaiting_approval"
+    generator.rejectBuild(); // Cancel build on backend + reset pipelinePhase to idle
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
       if (idx === -1) return prev;

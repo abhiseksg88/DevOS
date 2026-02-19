@@ -139,16 +139,29 @@ class BuildApproval(BaseModel):
 class PublishRequest(BaseModel):
     """Frontend sends the fully-built HTML document to deploy."""
     html: str = Field(..., min_length=1, description="Complete HTML to deploy to Netlify")
+    custom_subdomain: Optional[str] = Field(
+        None,
+        max_length=40,
+        pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$",
+        description="Custom subdomain slug (e.g. 'my-app' for my-app.vedaa.io)",
+    )
 
 class PublishResponse(BaseModel):
     deploy_id: str
     url: str
     status: str  # 'deploying' | 'ready' | 'failed'
     netlify_site_id: str
+    custom_domain: Optional[str] = None
 
 class PublishStatusResponse(BaseModel):
     state: str  # 'preparing' | 'uploading' | 'uploaded' | 'ready' | 'error'
     url: str
+
+class SubdomainCheckResponse(BaseModel):
+    available: bool
+    subdomain: str
+    domain: str
+    reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
