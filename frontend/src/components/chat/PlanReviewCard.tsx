@@ -18,7 +18,7 @@ import {
 interface PlanReviewCardProps {
   proposal: NonNullable<ChatMessage["proposal"]>;
   criticalQuestion?: string;
-  status: "pending" | "approved" | "building" | "completed";
+  status: "pending" | "approved" | "modified" | "building" | "completed";
   onApprove: () => void;
   onModify: (feedback: string) => void;
   disabled?: boolean;
