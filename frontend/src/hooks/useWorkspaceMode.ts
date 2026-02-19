@@ -11,6 +11,7 @@ import type { PipelineEvent } from "@/hooks/useGenerate";
 export type WorkspaceMode =
   | "idle"
   | "plan"
+  | "awaiting_approval"
   | "build"
   | "review"
   | "deploy"
@@ -29,6 +30,7 @@ interface GeneratorState {
   isGenerating: boolean;
   pipelineEvents: PipelineEvent[];
   files: Array<{ path: string; content: string }>;
+  pipelinePhase: string;
 }
 
 interface AutoFixState {
@@ -88,6 +90,16 @@ export function useWorkspaceMode(
       };
     }
 
+    // Awaiting user approval → plan review mode
+    if (generator.pipelinePhase === "awaiting_approval") {
+      return {
+        mode: "awaiting_approval",
+        autoTab: null,
+        statusLabel: "Review Plan",
+        statusColor: "bg-amber-500/10 border-amber-500/20 text-amber-400",
+      };
+    }
+
     // Generating code → build mode
     if (generator.isGenerating) {
       return {
@@ -128,6 +140,7 @@ export function useWorkspaceMode(
   }, [
     generator.isAnalyzing,
     generator.isGenerating,
+    generator.pipelinePhase,
     generator.pipelineEvents,
     autoFix.isFixing,
     deploymentStatus,

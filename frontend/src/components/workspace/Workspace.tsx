@@ -673,7 +673,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     (m) => m.type === "plan" && m.planStatus === "pending",
   );
 
-  const isDisabled = generator.isGenerating || generator.isAnalyzing;
+  const isDisabled = generator.isGenerating || generator.isAnalyzing || !!pendingPlan;
 
   // ---------------------------------------------------------------
   // handleSendMessage — Phase 1: Analyze only, show PlanCard
@@ -742,11 +742,22 @@ export function Workspace({ projectId }: { projectId: string }) {
         });
         generatingMsgIdRef.current = null;
       } else {
+        // Analyzer unavailable — show degraded plan card, still require approval
+        const fallbackPrd: Record<string, unknown> = {
+          intent: "build",
+          summary: content.slice(0, 200) + (content.length > 200 ? "..." : ""),
+          changes: [],
+          new_components: [],
+          integration_notes: "Detailed analysis was unavailable. The build will proceed using your prompt directly.",
+        };
         updateMessageById(planningMsgId, {
-          content: "Analyzer unavailable — building directly...",
-          status: "coding",
+          type: "plan",
+          content: "Ready to build — review and approve:",
+          prd: fallbackPrd,
+          planStatus: "pending",
+          status: "succeeded",
         });
-        await handleDirectBuild(content, planningMsgId);
+        generatingMsgIdRef.current = null;
       }
     },
     [generator, fileTree, persistence, autoFix, updateMessageById, messages],
@@ -754,48 +765,6 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   // Keep ref in sync so the initial-prompt useEffect always calls the latest version
   handleSendMessageRef.current = handleSendMessage;
-
-  // ---------------------------------------------------------------
-  // handleDirectBuild — Fallback when analyzer fails
-  // ---------------------------------------------------------------
-  const handleDirectBuild = useCallback(
-    async (content: string, msgId: string) => {
-      generatingMsgIdRef.current = msgId;
-      setRightTab("console");
-
-      const history = messages
-        .filter((m) => m.role === "user" || (m.role === "assistant" && m.status === "succeeded"))
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      const result = await generator.build(
-        content,
-        fileTree,
-        (path, fileContent) => addFileToTree(path, fileContent),
-        history.length > 1 ? history.slice(0, -1) : undefined,
-      );
-
-      if (result.error) {
-        if (generatingMsgIdRef.current) {
-          updateMessageById(generatingMsgIdRef.current, {
-            content: `Error: ${result.error}`,
-            status: "failed",
-          });
-          generatingMsgIdRef.current = null;
-        }
-      } else {
-        const successContent = `Done! Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}. Check the Preview tab.`;
-        if (generatingMsgIdRef.current) {
-          updateMessageById(generatingMsgIdRef.current, {
-            content: successContent,
-            status: "succeeded",
-          });
-          generatingMsgIdRef.current = null;
-        }
-        if (result.files.length > 0) setRightTab("preview");
-      }
-    },
-    [generator, fileTree, addFileToTree, updateMessageById, messages],
-  );
 
   // ---------------------------------------------------------------
   // handleApprovePlan — Phase 2: Build with the approved PRD
@@ -937,6 +906,7 @@ export function Workspace({ projectId }: { projectId: string }) {
   // handleRejectPlan
   // ---------------------------------------------------------------
   const handleRejectPlan = useCallback(() => {
+    generator.stop(); // Reset pipelinePhase to idle so mode exits "awaiting_approval"
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.type === "plan" && m.planStatus === "pending");
       if (idx === -1) return prev;
@@ -965,7 +935,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         })
         .catch(() => {});
     }
-  }, [token, resolvedTenantId, projectId]);
+  }, [generator, token, resolvedTenantId, projectId]);
 
   function handleChatSubmit() {
     const trimmed = chatValue.trim();
@@ -1127,7 +1097,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                       statusColor,
                     )}
                   >
-                    {(mode === "build" || mode === "plan") && (
+                    {(mode === "build" || mode === "plan" || mode === "awaiting_approval") && (
                       <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse-dot" />
                     )}
                     {statusLabel}
@@ -1201,9 +1171,9 @@ export function Workspace({ projectId }: { projectId: string }) {
                       </div>
                     )}
 
-                    {/* Plan card */}
-                    {m.type === "plan" && m.prd && m.planStatus === "pending" && (
-                      <div className="animate-slide-up">
+                    {/* Plan card — visible in all statuses (pending, building, completed) */}
+                    {m.type === "plan" && m.prd && (
+                      <div className={cn("animate-slide-up", m.planStatus === "completed" && "opacity-60")}>
                         <PlanCard
                           prd={m.prd}
                           status={m.planStatus || "pending"}
@@ -1263,7 +1233,9 @@ export function Workspace({ projectId }: { projectId: string }) {
                   }}
                   placeholder={
                     isDisabled
-                      ? statusLabel ? `${statusLabel}...` : "Building..."
+                      ? pendingPlan
+                        ? "Review the plan above to continue..."
+                        : statusLabel ? `${statusLabel}...` : "Building..."
                       : "Describe what you want to build..."
                   }
                   disabled={isDisabled}

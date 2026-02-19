@@ -44,9 +44,9 @@ export function CommandBar({
   const [showHistory, setShowHistory] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Find the latest pending plan message
+  // Find the latest active plan message (pending or building)
   const pendingPlan = messages.find(
-    (m) => m.type === "plan" && m.planStatus === "pending",
+    (m) => m.type === "plan" && (m.planStatus === "pending" || m.planStatus === "building"),
   );
 
   // Auto-resize textarea (max 3 lines)
@@ -65,7 +65,7 @@ export function CommandBar({
     setShowHistory(false);
   }
 
-  const disabled = isStreaming || isAnalyzing;
+  const disabled = isStreaming || isAnalyzing || !!(pendingPlan && pendingPlan.planStatus === "pending");
 
   return (
     <div className="relative">
@@ -145,7 +145,7 @@ export function CommandBar({
                 statusColor,
               )}
             >
-              {(mode === "build" || mode === "plan") && (
+              {(mode === "build" || mode === "plan" || mode === "awaiting_approval") && (
                 <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse-dot" />
               )}
               {statusLabel}
@@ -166,7 +166,9 @@ export function CommandBar({
               }}
               placeholder={
                 disabled
-                  ? statusLabel ? `${statusLabel}...` : "Building..."
+                  ? pendingPlan && pendingPlan.planStatus === "pending"
+                    ? "Review the plan above..."
+                    : statusLabel ? `${statusLabel}...` : "Building..."
                   : "Describe what you want to build..."
               }
               disabled={disabled}
