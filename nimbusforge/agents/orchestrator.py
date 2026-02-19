@@ -641,6 +641,14 @@ def scaffolder_node(state: BuildState) -> dict:
     _log_usage(state, "deepseek", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     state["event_seq"] = _emit_event(state, "agent_end", "deepseek", {"agent": "scaffolder", "files_created": list(files.keys())}, settings)
 
+    # Emit file contents for frontend preview (SSE file_content events)
+    for path, content in files.items():
+        state["event_seq"] = _emit_event(
+            state, "file_content", "deepseek",
+            {"path": path, "content": content},
+            settings,
+        )
+
     return {
         "scaffold_files": files,
         "event_seq": state["event_seq"],
@@ -843,6 +851,16 @@ def committer_node(state: BuildState) -> dict:
         model_usage=state["model_usage"],
         settings=settings,
     )
+
+    # --- Emit final file contents for frontend preview ---
+    final_files = result.get("final_files", {})
+    if final_files:
+        for path, content in final_files.items():
+            state["event_seq"] = _emit_event(
+                state, "file_content", "sonnet",
+                {"path": path, "content": content},
+                settings,
+            )
 
     # --- Phase 6: Sentinel auto-heal loop ---
     sentinel_result = None

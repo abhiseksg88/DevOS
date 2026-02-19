@@ -1,4 +1,9 @@
 /**
+ * @deprecated — This route calls Anthropic directly from the frontend.
+ * The primary pipeline now uses the backend FastAPI/LangGraph control plane
+ * via builds.create() → streamBuildEvents() → builds.approve() in api.ts.
+ * Kept as fallback for auto-fix path (useAutoFix) which still uses direct calls.
+ *
  * Code generation API route using Anthropic Claude.
  *
  * Uses the standard Node.js serverless runtime (NOT Edge) so that Netlify

@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { FileNode } from "@/types";
 import { createClient } from "@/lib/supabase/client";
+import * as api from "@/lib/api";
 
 interface GeneratedFile {
   path: string;
@@ -47,7 +48,21 @@ interface GenerateState {
   pipelineEvents: PipelineEvent[];
   currentPrd: Record<string, unknown> | null;
   pipelinePhase: PipelinePhase;
+  buildId: string | null;
 }
+
+// =====================================================================
+// Auth context for backend API calls
+// =====================================================================
+export interface UseGenerateOptions {
+  token: string | null;
+  tenantId: string | null;
+  projectId: string;
+}
+
+// =====================================================================
+// Utility functions (kept for auto-fix fallback path)
+// =====================================================================
 
 /**
  * Sanitize a file path from LLM output to prevent directory traversal
@@ -80,6 +95,7 @@ function sanitizePath(path: string): string | null {
 
 /**
  * Parsed file operation — either a full file create or a search/replace edit.
+ * @deprecated Used only by legacy streamGenerate path
  */
 interface FileOperation {
   type: "create" | "edit";
@@ -90,6 +106,7 @@ interface FileOperation {
 
 /**
  * Apply search/replace edits to existing file content.
+ * @deprecated Used only by legacy streamGenerate path
  */
 function applyEdits(original: string, edits: { search: string; replace: string }[]): string {
   let content = original;
@@ -103,59 +120,42 @@ function applyEdits(original: string, edits: { search: string; replace: string }
 
 /**
  * Pre-process LLM text to normalize common formatting variations.
- * - Strips markdown code blocks wrapping ===FILE=== delimiters
- * - Removes backticks around file paths in delimiters
- * - Normalizes whitespace in delimiters
+ * @deprecated Used only by legacy streamGenerate path
  */
 function preprocessLLMText(text: string): string {
   let cleaned = text;
-
-  // Strip outer markdown code blocks that wrap ===FILE=== delimiters
-  // e.g. ```\n===FILE: path===\n...\n===END_FILE===\n```
   cleaned = cleaned.replace(/```[\w]*\s*\n(===(?:FILE|EDIT):)/g, "$1");
   cleaned = cleaned.replace(/(===END_(?:FILE|EDIT)===)\s*\n```/g, "$1");
-
-  // Remove backticks around file paths: ===FILE: `src/app/page.tsx`=== → ===FILE: src/app/page.tsx===
   cleaned = cleaned.replace(/===FILE:\s*`([^`]+)`\s*===/g, "===FILE: $1===");
   cleaned = cleaned.replace(/===EDIT:\s*`([^`]+)`\s*===/g, "===EDIT: $1===");
-
-  // Handle ** bold ** around file paths: ===FILE: **src/app/page.tsx**=== → ===FILE: src/app/page.tsx===
   cleaned = cleaned.replace(/===FILE:\s*\*\*([^*]+)\*\*\s*===/g, "===FILE: $1===");
-
   return cleaned;
 }
 
 /**
- * Parse files from Claude's response. Supports multiple formats:
- * 1. ===FILE: path=== ... ===END_FILE===  (full file, new or rewrite)
- * 2. ===EDIT: path=== <<<SEARCH ... >>>REPLACE ... ===END_EDIT===  (search & replace)
- * 3. ```tsx // path/to/file.tsx ... ```  (legacy)
- * 4. // File: path/to/file.tsx ... (next file or end)  (legacy)
+ * Parse files from Claude's response.
+ * @deprecated Used only by legacy streamGenerate/auto-fix path
  */
 function parseFiles(text: string, allowTruncated = false, existingFiles?: { path: string; content: string }[]): GeneratedFile[] {
   const files: GeneratedFile[] = [];
-
-  // Pre-process to handle common LLM formatting variations
   const cleanText = preprocessLLMText(text);
 
-  // Format 1: ===FILE: path=== ... ===END_FILE=== (handles \r\n and \n)
+  // Format 1: ===FILE: path=== ... ===END_FILE===
   const delimiterRegex = /===FILE:\s*(.+?)===\s*\n([\s\S]*?)===END_FILE===/g;
   let match;
   while ((match = delimiterRegex.exec(cleanText)) !== null) {
     const safePath = sanitizePath(match[1].trim());
     if (safePath) {
-      console.log('[parseFiles] Found file via delimiter format:', safePath, 'content length:', match[2].trimEnd().length);
       files.push({ path: safePath, content: match[2].trimEnd() });
     }
   }
 
-  // Format 1.5: ===EDIT: path=== with SEARCH/REPLACE blocks (safety net)
+  // Format 1.5: ===EDIT: path=== with SEARCH/REPLACE blocks
   const editRegex = /===EDIT:\s*(.+?)===\r?\n([\s\S]*?)===END_EDIT===/g;
   while ((match = editRegex.exec(cleanText)) !== null) {
     const editPath = match[1]?.trim();
     const safePath = editPath ? sanitizePath(editPath) : null;
     if (!safePath) continue;
-    // Skip if we already have this file from ===FILE=== format
     if (files.some(f => f.path === safePath)) continue;
 
     const editBody = match[2];
@@ -173,24 +173,16 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
       const existing = existingFiles.find(f => f.path === safePath);
       if (existing) {
         const result = applyEdits(existing.content, edits);
-        console.log('[parseFiles] Applied EDIT block for:', safePath, 'edits:', edits.length);
         files.push({ path: safePath, content: result });
-      } else {
-        console.warn('[parseFiles] EDIT block for unknown file:', safePath);
       }
     }
   }
 
-  // Format 1b: Truncated file — has ===FILE: path=== but NO ===END_FILE===
-  // This happens when the response hits max_tokens and gets cut off.
-  // BUG FIX: The old regex `([\s\S]+?)$` with `g` only matched the FIRST ===FILE:
-  // block, not the LAST truncated one. Now we find the last ===FILE: without a
-  // matching ===END_FILE=== by searching backwards from the end.
+  // Format 1b: Truncated file recovery
   if (allowTruncated) {
     const lastFileIdx = cleanText.lastIndexOf("===FILE:");
     if (lastFileIdx !== -1) {
       const tail = cleanText.substring(lastFileIdx);
-      // Only process if this block has NO closing delimiter (truly truncated)
       if (!tail.includes("===END_FILE===")) {
         const headerMatch = tail.match(/^===FILE:\s*(.+?)===\n([\s\S]+)$/);
         if (headerMatch) {
@@ -198,10 +190,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
           if (safePath && !files.some(f => f.path === safePath)) {
             const content = headerMatch[2].trimEnd();
             if (content.length >= 100) {
-              console.log('[parseFiles] Found TRUNCATED file (last block):', safePath, 'content length:', content.length);
               files.push({ path: safePath, content });
-            } else {
-              console.warn('[parseFiles] Truncated file too short to recover:', safePath, 'length:', content.length);
             }
           }
         }
@@ -209,12 +198,9 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
     }
   }
 
-  if (files.length > 0) {
-    console.log('[parseFiles] Returning', files.length, 'files from delimiter format');
-    return files;
-  }
+  if (files.length > 0) return files;
 
-  // Format 3: ```language\n// filepath\n...``` or ```language:filepath\n...```
+  // Format 3: ```language\n// filepath\n...```
   const codeBlockRegex = /```(?:\w+)?\s*\n?\s*(?:\/\/\s*|\/\*\s*|#\s*)?(?:file:\s*|File:\s*|path:\s*)?([^\n*]+\.\w+)\s*\n([\s\S]*?)```/gi;
   while ((match = codeBlockRegex.exec(cleanText)) !== null) {
     const path = match[1].trim().replace(/^\*\//, "").replace(/\s*\*\/$/, "");
@@ -225,7 +211,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
   }
   if (files.length > 0) return files;
 
-  // Format 4: Look for code blocks with file paths mentioned before them
+  // Format 4: Code blocks with file paths mentioned before them
   const sections = cleanText.split(/(?=###?\s|(?:^|\n)(?:\*\*)?(?:File|`)[:\s])/);
   for (const section of sections) {
     const pathMatch = section.match(
@@ -239,9 +225,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
   }
   if (files.length > 0) return files;
 
-  // Format 5 (LAST RESORT): Extract the largest code block as page.tsx.
-  // If Claude completely ignored the ===FILE=== format but still wrote valid React code,
-  // grab the biggest code block (must be >200 chars and look like React/JSX).
+  // Format 5 (LAST RESORT): Extract largest code block as page.tsx
   const allCodeBlocks: { content: string; lang: string }[] = [];
   const anyCodeBlock = /```(\w*)\n([\s\S]*?)```/g;
   while ((match = anyCodeBlock.exec(cleanText)) !== null) {
@@ -251,21 +235,16 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
     }
   }
   if (allCodeBlocks.length > 0) {
-    // Sort by size (largest first) — the biggest block is likely the main page
     allCodeBlocks.sort((a, b) => b.content.length - a.content.length);
     const biggest = allCodeBlocks[0];
-    // Sanity check: must look like React code (has export, function, or return with JSX)
     const looksLikeReact = /(?:export\s+default|function\s+\w+|return\s*\()/.test(biggest.content);
     if (looksLikeReact) {
-      console.warn('[parseFiles] LAST RESORT: Extracting largest code block as page.tsx (' + biggest.content.length + ' chars)');
       files.push({ path: "src/app/page.tsx", content: biggest.content });
-      // Try to extract additional smaller blocks as components
       for (let i = 1; i < allCodeBlocks.length && i < 5; i++) {
         const block = allCodeBlocks[i];
         const exportMatch = block.content.match(/export\s+default\s+function\s+(\w+)/);
         if (exportMatch) {
-          const compName = exportMatch[1];
-          files.push({ path: `src/components/${compName}.tsx`, content: block.content });
+          files.push({ path: `src/components/${exportMatch[1]}.tsx`, content: block.content });
         }
       }
     }
@@ -276,8 +255,7 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
 
 /**
  * Fire-and-forget: record generation telemetry to Neural Nexus tables.
- * Extracts projectId from the URL and auth token from the Supabase session.
- * Non-blocking — failures are logged but never surface to the user.
+ * @deprecated Backend pipeline records to Nexus automatically
  */
 function recordToNexus(
   prompt: string,
@@ -287,13 +265,11 @@ function recordToNexus(
 ) {
   (async () => {
     try {
-      // Extract projectId from URL: /project/{id}
       const pathParts = window.location.pathname.split("/");
       const projIdx = pathParts.indexOf("project");
       const projectId = projIdx >= 0 ? pathParts[projIdx + 1] : null;
       if (!projectId) return;
 
-      // Get auth token from Supabase session
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
@@ -326,7 +302,10 @@ function flattenForContext(nodes: FileNode[]): { path: string; content: string }
   return result;
 }
 
-/** Stream code generation from /api/generate and return parsed files */
+/**
+ * Stream code generation from /api/generate and return parsed files.
+ * @deprecated Used only by legacy auto-fix path. Primary pipeline uses backend SSE.
+ */
 async function streamGenerate(
   prompt: string,
   existingFiles: { path: string; content: string }[],
@@ -337,7 +316,6 @@ async function streamGenerate(
   onStreamUpdate: (text: string, files: GeneratedFile[]) => void,
   signal: AbortSignal,
 ): Promise<GenerateResult> {
-  // If there are review findings, prepend them to the prompt
   const effectivePrompt = reviewFindings
     ? `${prompt}\n\nThe reviewer found these issues with the previous code. Fix them:\n${reviewFindings}`
     : prompt;
@@ -388,7 +366,7 @@ async function streamGenerate(
   let rawBytes = 0;
   let lastParsedCount = 0;
   let buffer = "";
-  let stopReason = "end_turn"; // Track whether response was truncated
+  let stopReason = "end_turn";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -417,7 +395,6 @@ async function streamGenerate(
           onStreamUpdate(fullText, parsed);
         } else if (event.type === "stop") {
           stopReason = event.stop_reason || "end_turn";
-          console.log('[useGenerate] Stream stop_reason:', stopReason);
         } else if (event.type === "error") {
           return { files: [], error: event.error || "Generation error" };
         }
@@ -435,43 +412,29 @@ async function streamGenerate(
   }
 
   const wasTruncated = stopReason === "max_tokens";
-  if (wasTruncated) {
-    console.warn('[useGenerate] Response was TRUNCATED (hit max_tokens). Attempting to recover partial files...');
-  }
 
-  // =====================================================================
-  // AUTO-CLOSE: If the last ===FILE: block has no ===END_FILE===, close it.
-  // This is the DEFINITIVE fix for "could not be parsed into files" errors.
-  // It works regardless of prefill, truncation, or Claude forgetting to
-  // output the closing delimiter. Simple text surgery before parsing.
-  // =====================================================================
+  // AUTO-CLOSE: If the last ===FILE: block has no ===END_FILE===, close it
   let textForParsing = fullText;
   const lastFileStart = fullText.lastIndexOf("===FILE:");
   if (lastFileStart !== -1) {
     const textAfterLastFile = fullText.substring(lastFileStart);
     if (!textAfterLastFile.includes("===END_FILE===")) {
-      console.warn('[useGenerate] AUTO-CLOSE: Last ===FILE: block has no ===END_FILE===. Appending closing delimiter.');
       textForParsing = fullText.trimEnd() + "\n===END_FILE===";
     }
   }
 
-  // Parse with auto-closed text — standard parser now handles ALL files
   let finalFiles = parseFiles(textForParsing, false, existingFiles);
 
-  // Fallback: also try recovery parser on original text (belt + suspenders)
   if (finalFiles.length === 0) {
     const withRecovery = parseFiles(fullText, true, existingFiles);
     for (const rf of withRecovery) {
       if (!finalFiles.some(f => f.path === rf.path)) {
-        console.log('[useGenerate] Recovered unclosed file:', rf.path, 'length:', rf.content.length);
         finalFiles.push(rf);
       }
     }
   }
 
-  // --- "Vanishing Keystone" safety net ---
-  // If we have component files but page.tsx is MISSING (truncated away),
-  // auto-scaffold a minimal page.tsx that imports and renders the available components.
+  // "Vanishing Keystone" safety net
   const hasPageFile = finalFiles.some(f =>
     f.path.includes("page.tsx") || f.path.includes("page.jsx") ||
     f.path.includes("App.tsx") || f.path.includes("App.jsx")
@@ -482,13 +445,9 @@ async function streamGenerate(
   );
 
   if (!hasPageFile && componentFiles.length > 0) {
-    console.warn('[useGenerate] VANISHING KEYSTONE detected: page.tsx missing but', componentFiles.length, 'components exist. Auto-scaffolding page.tsx...');
-
-    // Build import lines and component render lines
     const imports: string[] = [];
     const renders: string[] = [];
     for (const cf of componentFiles) {
-      // Extract component name from file name (e.g., "src/components/TodoList.tsx" → "TodoList")
       const name = cf.path.split("/").pop()?.replace(/\.(tsx|jsx)$/, "") ?? "Component";
       const importPath = "@/" + cf.path.replace(/^src\//, "").replace(/\.(tsx|jsx)$/, "");
       imports.push(`import ${name} from "${importPath}";`);
@@ -511,14 +470,10 @@ ${renders.join("\n")}
 `;
     finalFiles.push({ path: "src/app/page.tsx", content: scaffoldPage });
     onFileGenerated("src/app/page.tsx", scaffoldPage);
-    console.log('[useGenerate] Auto-scaffolded page.tsx with', componentFiles.length, 'component imports');
   }
 
-  console.log('[useGenerate] Stream complete. Final parse:', { totalFiles: finalFiles.length, lastParsedCount, fullTextLength: fullText.length, stopReason });
   if (finalFiles.length > lastParsedCount) {
-    console.log('[useGenerate] Sending remaining files to onFileGenerated');
     for (let i = lastParsedCount; i < finalFiles.length; i++) {
-      console.log('[useGenerate] Final onFileGenerated:', finalFiles[i].path);
       onFileGenerated(finalFiles[i].path, finalFiles[i].content);
     }
   }
@@ -530,27 +485,94 @@ ${renders.join("\n")}
     } else if (fullText.length === 0) {
       errMsg = `Received ${rawBytes} bytes but no text content extracted.`;
     } else if (wasTruncated) {
-      errMsg = `Response was truncated (hit token limit). The app may be too complex for a single generation. Try a simpler prompt or break it into steps.`;
+      errMsg = `Response was truncated (hit token limit). The app may be too complex for a single generation.`;
     } else {
-      // Log extensive diagnostic info
       const hasFileDelimiter = fullText.includes("===FILE:");
       const hasEndFile = fullText.includes("===END_FILE===");
       const autoCloseUsed = textForParsing !== fullText;
-      const first500 = fullText.substring(0, 500);
-      const last500 = fullText.substring(Math.max(0, fullText.length - 500));
-      console.error('[useGenerate] PARSE FAILURE — Could not extract files.');
-      console.error('[useGenerate] Diagnostic:', { length: fullText.length, hasFileDelimiter, hasEndFile, autoCloseUsed, stopReason });
-      console.error('[useGenerate] First 500 chars:', first500);
-      console.error('[useGenerate] Last 500 chars:', last500);
       errMsg = `Could not parse files (${fullText.length} chars). ${hasFileDelimiter ? 'Has ===FILE: delimiter.' : 'No ===FILE: found.'} ${hasEndFile ? '' : 'No ===END_FILE=== found.'} ${autoCloseUsed ? 'Auto-close was attempted.' : ''}`.trim();
     }
     return { files: [], error: errMsg };
   }
 
-  return { files: finalFiles, error: wasTruncated ? null : null };
+  return { files: finalFiles, error: null };
 }
 
-export function useGenerate() {
+
+// =====================================================================
+// Map backend agent names to frontend pipeline agent names
+// =====================================================================
+function mapBackendAgent(agent: string | null): PipelineEvent["agent"] {
+  switch (agent) {
+    case "planner":
+    case "opus":
+      return "analyzer";
+    case "scaffolder":
+    case "deepseek":
+      return "coder";
+    case "coder":
+    case "sonnet":
+      return "coder";
+    case "reviewer":
+      return "reviewer";
+    case "fixer":
+      return "fixer";
+    default:
+      return "coder";
+  }
+}
+
+// Map backend agent names to model display strings
+function mapBackendModel(agent: string | null): string {
+  switch (agent) {
+    case "planner":
+    case "opus":
+      return "claude-opus";
+    case "scaffolder":
+    case "deepseek":
+      return "deepseek";
+    case "coder":
+    case "sonnet":
+      return "claude-sonnet";
+    case "reviewer":
+      return "claude-sonnet";
+    default:
+      return agent || "unknown";
+  }
+}
+
+// Map backend build status to pipeline phase
+function mapBuildStatusToPhase(status: string): PipelinePhase {
+  switch (status) {
+    case "queued":
+    case "planning":
+      return "analyzing";
+    case "awaiting_approval":
+      return "awaiting_approval";
+    case "scaffolding":
+    case "coding":
+      return "building";
+    case "reviewing":
+      return "reviewing";
+    case "building":
+    case "deploying":
+      return "building";
+    case "succeeded":
+      return "done";
+    case "failed":
+      return "error";
+    case "cancelled":
+      return "idle";
+    default:
+      return "building";
+  }
+}
+
+
+// =====================================================================
+// Main hook — uses backend FastAPI pipeline as single control plane
+// =====================================================================
+export function useGenerate(options?: UseGenerateOptions) {
   const [state, setState] = useState<GenerateState>({
     isGenerating: false,
     isAnalyzing: false,
@@ -560,8 +582,15 @@ export function useGenerate() {
     pipelineEvents: [],
     currentPrd: null,
     pipelinePhase: "idle",
+    buildId: null,
   });
+
+  const cancelSseRef = useRef<(() => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Ref to always have latest onFileGenerated callback
+  const onFileGeneratedRef = useRef<((path: string, content: string) => void) | null>(null);
+  // Track last SSE seq for reconnection
+  const lastSeqRef = useRef(0);
 
   const addPipelineEvent = useCallback((event: PipelineEvent) => {
     setState((prev) => ({
@@ -580,15 +609,462 @@ export function useGenerate() {
   }, []);
 
   // -----------------------------------------------------------------
-  // analyze() — Run ONLY the Analyzer stage. Returns PRD for user review.
+  // handleBackendEvent — Process SSE events from the backend pipeline
   // -----------------------------------------------------------------
+  const handleBackendEvent = useCallback((event: Record<string, unknown>) => {
+    const kind = event.kind as string;
+    const payload = (event.payload || {}) as Record<string, unknown>;
+    const agent = event.agent as string | null;
+    const seq = event.seq as number | undefined;
+
+    if (seq !== undefined) {
+      lastSeqRef.current = seq;
+    }
+
+    switch (kind) {
+      case "agent_start": {
+        const eventId = crypto.randomUUID();
+        const mappedAgent = mapBackendAgent(payload.agent as string || agent);
+        addPipelineEvent({
+          id: eventId,
+          agent: mappedAgent,
+          model: mapBackendModel(payload.agent as string || agent),
+          status: "running",
+          message: (payload.message as string) || `${mappedAgent} started`,
+        });
+        // Update phase based on which agent started
+        const agentName = (payload.agent as string) || agent || "";
+        if (agentName === "planner" || agentName === "opus") {
+          setState((prev) => ({ ...prev, pipelinePhase: "analyzing", isAnalyzing: true }));
+        } else if (agentName === "scaffolder" || agentName === "coder" || agentName === "deepseek" || agentName === "sonnet") {
+          setState((prev) => ({ ...prev, pipelinePhase: "building", isGenerating: true, isAnalyzing: false }));
+        } else if (agentName === "reviewer") {
+          setState((prev) => ({ ...prev, pipelinePhase: "reviewing" }));
+        }
+        break;
+      }
+
+      case "agent_end": {
+        // Find the last running event for this agent and mark completed
+        setState((prev) => {
+          const agentName = (payload.agent as string) || agent || "";
+          const mappedAgent = mapBackendAgent(agentName);
+          const idx = [...prev.pipelineEvents].reverse().findIndex(
+            (e) => e.agent === mappedAgent && e.status === "running"
+          );
+          if (idx === -1) return prev;
+          const realIdx = prev.pipelineEvents.length - 1 - idx;
+          const updated = [...prev.pipelineEvents];
+          updated[realIdx] = {
+            ...updated[realIdx],
+            status: "completed",
+            message: (payload.message as string) || updated[realIdx].message,
+          };
+          return { ...prev, pipelineEvents: updated };
+        });
+        break;
+      }
+
+      case "info": {
+        if (payload.hitl_required) {
+          // HITL gate — planner has produced a plan, needs user approval
+          const plan = payload.plan as Record<string, unknown> | undefined;
+          setState((prev) => ({
+            ...prev,
+            isAnalyzing: false,
+            currentPrd: plan || prev.currentPrd,
+            pipelinePhase: "awaiting_approval",
+          }));
+        }
+        break;
+      }
+
+      case "architectural_proposal": {
+        // Rich proposal from the Lead Product Architect planner
+        setState((prev) => ({
+          ...prev,
+          currentPrd: {
+            ...(prev.currentPrd || {}),
+            proposal: payload.proposal,
+            critical_question: payload.critical_question,
+          },
+        }));
+        break;
+      }
+
+      case "file_content": {
+        // Backend emitted a generated file — update tree + preview
+        const filePath = payload.path as string;
+        const fileContent = payload.content as string;
+        if (filePath && fileContent) {
+          // Sanitize the path before passing through
+          const safePath = sanitizePath(filePath);
+          if (safePath) {
+            onFileGeneratedRef.current?.(safePath, fileContent);
+            setState((prev) => ({
+              ...prev,
+              files: [
+                ...prev.files.filter(f => f.path !== safePath),
+                { path: safePath, content: fileContent },
+              ],
+            }));
+          }
+        }
+        break;
+      }
+
+      case "build_progress": {
+        const status = payload.status as string | undefined;
+        if (status) {
+          const phase = mapBuildStatusToPhase(status);
+          setState((prev) => ({ ...prev, pipelinePhase: phase }));
+        }
+        break;
+      }
+
+      case "error": {
+        const errorMsg = (payload.message as string) || "Build error";
+        setState((prev) => ({
+          ...prev,
+          error: errorMsg,
+          pipelinePhase: "error",
+          isGenerating: false,
+          isAnalyzing: false,
+        }));
+        break;
+      }
+
+      case "warning": {
+        // Log warnings but don't change state
+        console.warn("[useGenerate] Backend warning:", payload.message);
+        break;
+      }
+
+      default:
+        // Unknown event kind — log for debugging
+        console.log("[useGenerate] Unhandled backend event:", kind, payload);
+    }
+  }, [addPipelineEvent]);
+
+  // -----------------------------------------------------------------
+  // startBuild() — Create a build and start SSE streaming
+  // -----------------------------------------------------------------
+  const startBuild = useCallback(
+    async (prompt: string, onFileGenerated?: (path: string, content: string) => void) => {
+      if (!options?.token || !options?.tenantId) {
+        setState((prev) => ({
+          ...prev,
+          error: "Not authenticated. Please sign in.",
+          pipelinePhase: "error",
+        }));
+        return;
+      }
+
+      // Store callback ref
+      if (onFileGenerated) {
+        onFileGeneratedRef.current = onFileGenerated;
+      }
+
+      // Cancel any existing SSE/operations
+      cancelSseRef.current?.();
+      abortRef.current?.abort();
+      lastSeqRef.current = 0;
+
+      // Reset state for new build
+      setState({
+        isGenerating: false,
+        isAnalyzing: true,
+        streamedText: "",
+        files: [],
+        error: null,
+        pipelineEvents: [],
+        currentPrd: null,
+        pipelinePhase: "analyzing",
+        buildId: null,
+      });
+
+      try {
+        // Step 1: Create the build via backend API
+        const build = await api.builds.create(
+          options.token,
+          options.tenantId,
+          options.projectId,
+          prompt,
+        );
+
+        setState((prev) => ({ ...prev, buildId: build.id }));
+
+        // Step 2: Start SSE event stream
+        const cancel = api.streamBuildEvents(
+          options.token,
+          options.tenantId,
+          options.projectId,
+          build.id,
+          0,
+          // onEvent
+          handleBackendEvent,
+          // onEnd
+          () => {
+            setState((prev) => {
+              // If we're still in a running state when stream ends, mark as done
+              if (prev.pipelinePhase === "building" || prev.pipelinePhase === "reviewing" || prev.pipelinePhase === "fixing") {
+                return {
+                  ...prev,
+                  isGenerating: false,
+                  isAnalyzing: false,
+                  pipelinePhase: "done",
+                };
+              }
+              // If awaiting_approval, keep that state (stream paused, not ended)
+              return prev;
+            });
+          },
+          // onError
+          (err: Error) => {
+            console.error("[useGenerate] SSE error:", err);
+            setState((prev) => ({
+              ...prev,
+              error: `Stream error: ${err.message}`,
+              pipelinePhase: "error",
+              isGenerating: false,
+              isAnalyzing: false,
+            }));
+          },
+        );
+
+        cancelSseRef.current = cancel;
+
+        // Add initial pipeline event
+        addPipelineEvent({
+          id: crypto.randomUUID(),
+          agent: "analyzer",
+          model: "claude-opus",
+          status: "running",
+          message: "Starting build pipeline...",
+        });
+
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : "Failed to create build";
+        setState((prev) => ({
+          ...prev,
+          error: errMsg,
+          pipelinePhase: "error",
+          isGenerating: false,
+          isAnalyzing: false,
+        }));
+      }
+    },
+    [options?.token, options?.tenantId, options?.projectId, handleBackendEvent, addPipelineEvent],
+  );
+
+  // -----------------------------------------------------------------
+  // approveBuild() — Resume the pipeline after HITL approval
+  // -----------------------------------------------------------------
+  const approveBuild = useCallback(async () => {
+    if (!options?.token || !options?.tenantId || !state.buildId) {
+      console.error("[useGenerate] Cannot approve: missing auth or buildId");
+      return;
+    }
+
+    setState((prev) => ({
+      ...prev,
+      isGenerating: true,
+      isAnalyzing: false,
+      pipelinePhase: "building",
+    }));
+
+    try {
+      await api.builds.approve(
+        options.token,
+        options.tenantId,
+        options.projectId,
+        state.buildId,
+        { action: "approve" },
+      );
+
+      // Resume SSE from where we left off (the backend will emit new events)
+      cancelSseRef.current?.();
+      const cancel = api.streamBuildEvents(
+        options.token,
+        options.tenantId,
+        options.projectId,
+        state.buildId,
+        lastSeqRef.current,
+        handleBackendEvent,
+        () => {
+          setState((prev) => ({
+            ...prev,
+            isGenerating: false,
+            isAnalyzing: false,
+            pipelinePhase: prev.pipelinePhase === "error" ? "error" : "done",
+          }));
+        },
+        (err: Error) => {
+          console.error("[useGenerate] SSE error after approve:", err);
+          setState((prev) => ({
+            ...prev,
+            error: `Stream error: ${err.message}`,
+            pipelinePhase: "error",
+            isGenerating: false,
+          }));
+        },
+      );
+      cancelSseRef.current = cancel;
+
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Failed to approve build";
+      setState((prev) => ({
+        ...prev,
+        error: errMsg,
+        pipelinePhase: "error",
+        isGenerating: false,
+      }));
+    }
+  }, [options?.token, options?.tenantId, options?.projectId, state.buildId, handleBackendEvent]);
+
+  // -----------------------------------------------------------------
+  // modifyBuild() — Re-plan with user feedback
+  // -----------------------------------------------------------------
+  const modifyBuild = useCallback(async (notes: string) => {
+    if (!options?.token || !options?.tenantId || !state.buildId) {
+      console.error("[useGenerate] Cannot modify: missing auth or buildId");
+      return;
+    }
+
+    setState((prev) => ({
+      ...prev,
+      isAnalyzing: true,
+      pipelinePhase: "analyzing",
+      currentPrd: null,
+    }));
+
+    try {
+      const result = await api.builds.approve(
+        options.token,
+        options.tenantId,
+        options.projectId,
+        state.buildId,
+        { action: "modify", notes },
+      );
+
+      // If the backend returned a new build_id (re-plan creates new build)
+      const newBuildId = result.build_id || state.buildId;
+      setState((prev) => ({ ...prev, buildId: newBuildId }));
+
+      // Resume SSE on the (possibly new) build
+      cancelSseRef.current?.();
+      lastSeqRef.current = 0;
+      const cancel = api.streamBuildEvents(
+        options.token,
+        options.tenantId,
+        options.projectId,
+        newBuildId,
+        0,
+        handleBackendEvent,
+        () => {
+          setState((prev) => {
+            if (prev.pipelinePhase === "building" || prev.pipelinePhase === "reviewing") {
+              return { ...prev, isGenerating: false, isAnalyzing: false, pipelinePhase: "done" };
+            }
+            return prev;
+          });
+        },
+        (err: Error) => {
+          setState((prev) => ({
+            ...prev,
+            error: `Stream error: ${err.message}`,
+            pipelinePhase: "error",
+            isGenerating: false,
+            isAnalyzing: false,
+          }));
+        },
+      );
+      cancelSseRef.current = cancel;
+
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Failed to modify build";
+      setState((prev) => ({
+        ...prev,
+        error: errMsg,
+        pipelinePhase: "error",
+        isAnalyzing: false,
+      }));
+    }
+  }, [options?.token, options?.tenantId, options?.projectId, state.buildId, handleBackendEvent]);
+
+  // -----------------------------------------------------------------
+  // rejectBuild() — Cancel the build
+  // -----------------------------------------------------------------
+  const rejectBuild = useCallback(async () => {
+    cancelSseRef.current?.();
+
+    if (options?.token && options?.tenantId && state.buildId) {
+      try {
+        await api.builds.approve(
+          options.token,
+          options.tenantId,
+          options.projectId,
+          state.buildId,
+          { action: "reject" },
+        );
+      } catch {
+        // Best effort — build may already be cancelled
+      }
+    }
+
+    setState((prev) => ({
+      ...prev,
+      isGenerating: false,
+      isAnalyzing: false,
+      pipelinePhase: "idle",
+      buildId: null,
+    }));
+  }, [options?.token, options?.tenantId, options?.projectId, state.buildId]);
+
+  // -----------------------------------------------------------------
+  // stop() — Abort everything (SSE + any pending operations)
+  // -----------------------------------------------------------------
+  const stop = useCallback(() => {
+    cancelSseRef.current?.();
+    abortRef.current?.abort();
+
+    // Best effort cancel on backend
+    if (options?.token && options?.tenantId && state.buildId) {
+      api.builds.cancel(
+        options.token,
+        options.tenantId,
+        options.projectId,
+        state.buildId,
+      ).catch(() => {});
+    }
+
+    setState((prev) => ({
+      ...prev,
+      isGenerating: false,
+      isAnalyzing: false,
+      pipelinePhase: "idle",
+    }));
+  }, [options?.token, options?.tenantId, options?.projectId, state.buildId]);
+
+  // -----------------------------------------------------------------
+  // setOnFileGenerated — Update the callback ref
+  // -----------------------------------------------------------------
+  const setOnFileGenerated = useCallback((cb: (path: string, content: string) => void) => {
+    onFileGeneratedRef.current = cb;
+  }, []);
+
+  // -----------------------------------------------------------------
+  // Legacy methods — @deprecated, kept for auto-fix path compatibility
+  // -----------------------------------------------------------------
+
+  /** @deprecated Use startBuild() instead. Kept for auto-fix backward compat. */
   const analyze = useCallback(
     async (
       prompt: string,
       existingFiles: FileNode[],
       chatHistory?: Array<{ role: string; content: string }>
     ): Promise<AnalyzeResult> => {
-      void chatHistory; // reserved for future use
+      void chatHistory;
 
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -682,9 +1158,7 @@ export function useGenerate() {
     [addPipelineEvent, updatePipelineEvent],
   );
 
-  // -----------------------------------------------------------------
-  // build() — Run Coder → Reviewer → Fixer stages with an approved PRD.
-  // -----------------------------------------------------------------
+  /** @deprecated Use approveBuild() instead. Kept for auto-fix backward compat. */
   const build = useCallback(
     async (
       prompt: string,
@@ -697,7 +1171,6 @@ export function useGenerate() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Local event tracker for Nexus recording (avoids stale state in useCallback)
       const localEvents: PipelineEvent[] = [];
 
       setState((prev) => ({
@@ -714,7 +1187,6 @@ export function useGenerate() {
         (f) => !f.content.includes("// Your generated code will appear here")
       );
 
-      // STAGE 2: Coder (Claude Sonnet)
       const coderId = crypto.randomUUID();
       addPipelineEvent({
         id: coderId,
@@ -766,7 +1238,7 @@ export function useGenerate() {
       });
       localEvents.push({ id: coderId, agent: "coder", model: "claude-sonnet", status: "completed", message: `Generated ${result.files.length} files`, meta: coderMeta });
 
-      // STAGE 3: Reviewer (Claude Haiku)
+      // Reviewer
       setState((prev) => ({ ...prev, pipelinePhase: "reviewing" }));
       const reviewId = crypto.randomUUID();
       addPipelineEvent({
@@ -823,22 +1295,16 @@ export function useGenerate() {
             localEvents.push({ id: reviewId, agent: "reviewer", model: "claude-haiku", status: "failed", message: rejectMsg, meta });
           }
         } else {
-          updatePipelineEvent(reviewId, {
-            status: "skipped",
-            message: "Reviewer unavailable, proceeding",
-          });
+          updatePipelineEvent(reviewId, { status: "skipped", message: "Reviewer unavailable, proceeding" });
         }
       } catch (err) {
         if ((err as Error).name === "AbortError") {
           return { files: [], error: null };
         }
-        updatePipelineEvent(reviewId, {
-          status: "skipped",
-          message: "Reviewer unavailable, proceeding",
-        });
+        updatePipelineEvent(reviewId, { status: "skipped", message: "Reviewer unavailable, proceeding" });
       }
 
-      // STAGE 4: Fix (Claude Sonnet) — if review rejected
+      // Fix stage
       if (!reviewApproved && reviewFindings) {
         setState((prev) => ({ ...prev, pipelinePhase: "fixing" }));
         const fixId = crypto.randomUUID();
@@ -852,47 +1318,27 @@ export function useGenerate() {
 
         try {
           const fixResult = await streamGenerate(
-            prompt,
-            contextFiles,
-            chatHistory,
-            prd,
-            reviewFindings,
+            prompt, contextFiles, chatHistory, prd, reviewFindings,
             onFileGenerated,
-            (text, files) => {
-              setState((prev) => ({ ...prev, streamedText: text, files }));
-            },
+            (text, files) => { setState((prev) => ({ ...prev, streamedText: text, files })); },
             controller.signal,
           );
-
           if (fixResult.error) {
-            updatePipelineEvent(fixId, {
-              status: "failed",
-              message: `Fix failed: ${fixResult.error}`,
-            });
+            updatePipelineEvent(fixId, { status: "failed", message: `Fix failed: ${fixResult.error}` });
           } else {
             result = fixResult;
-            updatePipelineEvent(fixId, {
-              status: "completed",
-              message: `Fixed ${fixResult.files.length} file${fixResult.files.length !== 1 ? "s" : ""}`,
-            });
+            updatePipelineEvent(fixId, { status: "completed", message: `Fixed ${fixResult.files.length} file${fixResult.files.length !== 1 ? "s" : ""}` });
           }
         } catch (err) {
-          if ((err as Error).name === "AbortError") {
-            return { files: [], error: null };
-          }
-          updatePipelineEvent(fixId, {
-            status: "failed",
-            message: "Fix attempt failed",
-          });
+          if ((err as Error).name === "AbortError") return { files: [], error: null };
+          updatePipelineEvent(fixId, { status: "failed", message: "Fix attempt failed" });
         }
       }
 
-      // Record to Neural Nexus (fire-and-forget, non-blocking)
       if (result.files.length > 0) {
         recordToNexus(prompt, result.files, localEvents, prd);
       }
 
-      // DONE
       setState((prev) => ({
         ...prev,
         isGenerating: false,
@@ -906,10 +1352,7 @@ export function useGenerate() {
     [addPipelineEvent, updatePipelineEvent],
   );
 
-  // -----------------------------------------------------------------
-  // generate() — Legacy wrapper: runs analyze + build sequentially.
-  // Kept for backward compat (auto-fix path and existing callers).
-  // -----------------------------------------------------------------
+  /** @deprecated Use startBuild() + approveBuild() instead. */
   const generate = useCallback(
     async (
       prompt: string,
@@ -917,7 +1360,6 @@ export function useGenerate() {
       onFileGenerated: (path: string, content: string) => void,
       chatHistory?: Array<{ role: string; content: string }>
     ): Promise<GenerateResult> => {
-      // Reset full state for legacy path
       setState({
         isGenerating: true,
         isAnalyzing: true,
@@ -927,23 +1369,29 @@ export function useGenerate() {
         pipelineEvents: [],
         currentPrd: null,
         pipelinePhase: "analyzing",
+        buildId: null,
       });
 
-      // Phase 1: Analyze
       const analyzeResult = await analyze(prompt, existingFiles, chatHistory);
       const prd = analyzeResult.prd ?? undefined;
-
-      // Phase 2: Build (proceed even if analyzer failed)
       const buildResult = await build(prompt, existingFiles, onFileGenerated, chatHistory, prd);
       return buildResult;
     },
     [analyze, build],
   );
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-    setState((prev) => ({ ...prev, isGenerating: false, isAnalyzing: false, pipelinePhase: "idle" }));
-  }, []);
-
-  return { ...state, analyze, build, generate, stop };
+  return {
+    ...state,
+    // Primary API — backend pipeline
+    startBuild,
+    approveBuild,
+    modifyBuild,
+    rejectBuild,
+    stop,
+    setOnFileGenerated,
+    // Legacy API — @deprecated, kept for backward compat
+    analyze,
+    build,
+    generate,
+  };
 }

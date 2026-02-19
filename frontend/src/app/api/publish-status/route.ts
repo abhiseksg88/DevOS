@@ -1,10 +1,12 @@
 /**
- * Publish status polling route — checks Netlify deploy status.
+ * @deprecated — Thin proxy to backend FastAPI publish-status endpoint.
+ * Deploy status polling is now handled by the backend at
+ * GET /tenants/{tid}/projects/{pid}/publish-status?deploy_id=...
  */
 
 import { NextRequest, NextResponse } from "next/server";
 
-const NETLIFY_API = "https://api.netlify.com/api/v1";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export async function GET(req: NextRequest) {
   const deployId = req.nextUrl.searchParams.get("deploy_id");
@@ -12,32 +14,33 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "deploy_id is required" }, { status: 400 });
   }
 
-  const netlifyToken = process.env.NF_TOKEN;
-  if (!netlifyToken) {
-    return NextResponse.json({ error: "NF_TOKEN not configured. Set it at Site level in Netlify (Site settings > Environment variables). Visit /api/health to diagnose." }, { status: 503 });
+  const token = req.headers.get("authorization") ?? "";
+  const tenantId = req.nextUrl.searchParams.get("tenantId");
+  const projectId = req.nextUrl.searchParams.get("projectId");
+
+  if (!tenantId || !projectId) {
+    return NextResponse.json(
+      { error: "tenantId and projectId parameters are required" },
+      { status: 400 },
+    );
   }
 
   try {
-    const resp = await fetch(`${NETLIFY_API}/deploys/${deployId}`, {
-      headers: { Authorization: `Bearer ${netlifyToken}` },
-    });
-
-    if (!resp.ok) {
-      return NextResponse.json(
-        { error: `Netlify API error: ${resp.status}` },
-        { status: 502 }
-      );
-    }
+    const resp = await fetch(
+      `${API}/tenants/${tenantId}/projects/${projectId}/publish-status?deploy_id=${encodeURIComponent(deployId)}`,
+      {
+        headers: { Authorization: token },
+      },
+    );
 
     const data = await resp.json();
-    return NextResponse.json({
-      state: data.state || "unknown",
-      url: data.ssl_url || data.url || "",
-    });
+    return NextResponse.json(data, { status: resp.status });
   } catch (err) {
     return NextResponse.json(
-      { error: `Failed to check status: ${err instanceof Error ? err.message : String(err)}` },
-      { status: 502 }
+      {
+        error: `Failed to check status: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      { status: 502 },
     );
   }
 }

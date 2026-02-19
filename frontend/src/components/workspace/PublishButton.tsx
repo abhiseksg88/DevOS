@@ -116,11 +116,8 @@ export function PublishButton({
         }
 
         try {
-          const res = await fetch(
-            `/api/publish-status?deploy_id=${encodeURIComponent(deployId)}`
-          );
-          if (!res.ok) throw new Error("Status check failed");
-          const status = await res.json();
+          if (!token || !tenantId || !project?.id) throw new Error("Missing auth context");
+          const status = await api.publish.status(token, tenantId, project.id, deployId);
 
           if (status.state === "ready") {
             stopPolling();
@@ -142,10 +139,10 @@ export function PublishButton({
         }
       }, 2500);
     },
-    [stopPolling, onPublished],
+    [stopPolling, onPublished, token, tenantId, project?.id],
   );
 
-  // Check subdomain availability
+  // Check subdomain availability via backend API
   const checkSubdomain = useCallback(async (value: string) => {
     if (!value || value.length < 1) {
       setSubdomainStatus("idle");
@@ -160,13 +157,17 @@ export function PublishButton({
       return;
     }
 
+    if (!token || !tenantId || !project?.id) {
+      setSubdomainStatus("idle");
+      setSubdomainMessage("Could not check availability. You can still try to publish.");
+      return;
+    }
+
     setSubdomainStatus("checking");
     setSubdomainMessage("");
 
     try {
-      const res = await fetch(`/api/check-subdomain?subdomain=${encodeURIComponent(value)}`);
-      if (!res.ok) throw new Error("Check failed");
-      const data = await res.json();
+      const data = await api.publish.checkSubdomain(token, tenantId, project.id, value);
 
       if (data.available) {
         setSubdomainStatus("available");
@@ -179,7 +180,7 @@ export function PublishButton({
       setSubdomainStatus("idle");
       setSubdomainMessage("Could not check availability. You can still try to publish.");
     }
-  }, []);
+  }, [token, tenantId, project?.id]);
 
   // Debounced subdomain check on input change
   const handleSubdomainChange = useCallback((value: string) => {
@@ -259,30 +260,9 @@ export function PublishButton({
         project.id,
       );
 
-      // Step 2: Upload to Netlify via our API route
+      // Step 2: Upload to Netlify via backend API
       setState("uploading");
-      const res = await fetch("/api/publish", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          html,
-          projectId: project.id,
-          projectSlug: project.slug,
-          projectName: project.name,
-          tenantId,
-          customSubdomain: subdomain,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error || err.detail || `Publish failed (${res.status})`);
-      }
-
-      const result = await res.json();
+      const result = await api.publish.deploy(token, tenantId, project.id, html, subdomain);
 
       // Step 3: Check result
       if (result.status === "ready") {

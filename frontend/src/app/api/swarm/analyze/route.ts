@@ -1,4 +1,9 @@
 /**
+ * @deprecated — This route calls DeepSeek directly from the frontend.
+ * The primary pipeline now uses the backend FastAPI/LangGraph planner_node (Opus)
+ * via builds.create() → streamBuildEvents() in api.ts.
+ * Kept as fallback for legacy analyze() calls in useGenerate.
+ *
  * Analyzer Agent — Uses DeepSeek to parse user intent and generate a structured PRD.
  *
  * This is the first agent in the swarm pipeline. It analyzes the user's request

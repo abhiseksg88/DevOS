@@ -1,8 +1,18 @@
 /**
  * Supabase direct DB layer.
- * Uses the browser Supabase client to perform tenant/project CRUD
- * directly (no Python backend needed for basic operations).
- * Build/deploy operations still go through the backend API.
+ *
+ * @deprecated — Write operations for governed entities (tenants, projects)
+ * should go through the backend FastAPI API via api.ts instead.
+ * Read operations can stay browser→Supabase (RLS-protected).
+ *
+ * Governed entity writes to migrate:
+ * - createTenant() → api.tenants.create()
+ * - createProject() → api.projects.create()
+ * - updateProjectCode() → backend endpoint (TODO)
+ *
+ * Ephemeral data writes (ok to keep):
+ * - saveChatMessage() — user-scoped, RLS-protected
+ * - saveWorkspaceState() — user-scoped, RLS-protected
  */
 
 import { createClient } from "./supabase/client";
@@ -23,6 +33,7 @@ export async function listTenants(): Promise<Tenant[]> {
   return (data ?? []) as Tenant[];
 }
 
+/** @deprecated Use api.tenants.create() instead for governed entity writes */
 export async function createTenant(name: string, slug: string): Promise<Tenant> {
   const supabase = createClient();
   const { data, error } = await supabase.rpc("create_tenant_with_owner", {
@@ -62,6 +73,7 @@ export async function listProjects(tenantId: string): Promise<Project[]> {
   return (data ?? []) as Project[];
 }
 
+/** @deprecated Use api.projects.create() instead for governed entity writes */
 export async function createProject(
   tenantId: string,
   name: string,
@@ -119,6 +131,7 @@ export async function listBuilds(tenantId: string, projectId: string): Promise<B
 /**
  * Save code files to the project's current code_files column.
  * Also creates a version snapshot via RPC.
+ * @deprecated TODO: Move to backend endpoint for governed entity writes
  */
 export async function updateProjectCode(
   projectId: string,
