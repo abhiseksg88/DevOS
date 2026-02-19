@@ -435,7 +435,7 @@ const totalPages = Math.ceil((count || 0) / PAGE_SIZE);
 
 ```javascript
 function validateEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);
 }
 function validateRequired(value, fieldName) {
   if (!value?.toString().trim()) return fieldName + ' is required';
