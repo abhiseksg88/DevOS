@@ -485,6 +485,72 @@ def _ingest_proposal_to_nexus(plan: dict, state: BuildState, settings: Settings)
 
 def planner_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
+
+    # ------------------------------------------------------------------
+    # Fast-path: resume after HITL approval — skip expensive re-planning
+    # The approved plan is already in state["plan"]; no LLM call needed
+    # unless it's a proposal that needs converting to a task list.
+    # ------------------------------------------------------------------
+    if state.get("hitl_approved"):
+        plan = state.get("plan") or {}
+
+        # Case 1: Full plan with tasks — run discriminator only, no LLM call
+        if plan.get("tasks"):
+            disc_result = classify_build(
+                state["tenant_id"], state["project_id"], plan,
+                state["existing_files"], settings,
+            )
+            plan["needs_scaffold"] = disc_result["overall_mode"] == "genesis"
+            return {
+                "plan": plan,
+                "plan_from_cache": False,
+                "build_mode": disc_result["overall_mode"],
+                "genesis_files": disc_result["genesis_files"],
+                "surgical_files": disc_result["surgical_files"],
+                "event_seq": state["event_seq"],
+            }
+
+        # Case 2: Proposal approved — one LLM call to convert to task list
+        if plan.get("proposal"):
+            _update_build_status(state, "planning", settings,
+                started_at=datetime.now(timezone.utc).isoformat())
+            state["event_seq"] = _emit_event(state, "agent_start", "opus",
+                {"agent": "planner", "message": "Proposal approved — generating full task list..."}, settings)
+            context = _build_context(state)
+            messages = [
+                {"role": "system", "content": PLANNER_SYSTEM},
+                {"role": "user", "content": (
+                    f"## Project Context\n{context}\n\n"
+                    f"## PROPOSAL APPROVED\nThe following proposal was approved "
+                    f"by the user:\n```json\n"
+                    f"{json.dumps(plan['proposal'], indent=2)}\n```\n\n"
+                    f"## Original Request\n{state['prompt']}\n\n"
+                    f"Generate the full task list (MODE 2: EXECUTION). "
+                    f"Keep the proposal object intact."
+                )},
+            ]
+            response = call_llm(ModelTier.OPUS, messages, settings)
+            plan = _parse_json_response(response["content"])
+            disc_result = classify_build(
+                state["tenant_id"], state["project_id"], plan,
+                state["existing_files"], settings,
+            )
+            plan["needs_scaffold"] = disc_result["overall_mode"] == "genesis"
+            state["event_seq"] = _emit_event(state, "agent_end", "opus",
+                {"agent": "planner", "plan_summary": plan.get("summary", "")}, settings)
+            return {
+                "plan": plan,
+                "plan_from_cache": False,
+                "build_mode": disc_result["overall_mode"],
+                "genesis_files": disc_result["genesis_files"],
+                "surgical_files": disc_result["surgical_files"],
+                "event_seq": state["event_seq"],
+                "total_tokens_in": state["total_tokens_in"] + response["tokens_in"],
+                "total_tokens_out": state["total_tokens_out"] + response["tokens_out"],
+                "total_cost_usd": state["total_cost_usd"] + response["cost"],
+                "model_usage": _update_model_usage(state["model_usage"], "opus", response),
+            }
+
     _update_build_status(state, "planning", settings, started_at=datetime.now(timezone.utc).isoformat())
     state["event_seq"] = _emit_event(state, "agent_start", "opus", {"agent": "planner", "message": "Planning architecture and tasks..."}, settings)
     _planner_t0 = time.monotonic()

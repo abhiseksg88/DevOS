@@ -769,6 +769,20 @@ async def approve_build(
         except Exception:
             pass
 
+    # Atomically flip status to "running" before firing the background task.
+    # .select("id") ensures we get back the updated row(s); an empty result means
+    # the build was already moved out of awaiting_approval (duplicate click / race).
+    status_update = (
+        db.table("builds")
+        .update({"status": "running"})
+        .eq("id", str(build_id))
+        .eq("status", "awaiting_approval")
+        .select("id")
+        .execute()
+    )
+    if not status_update.data:
+        raise HTTPException(409, "Build is already being processed")
+
     # Resume the build in background
     background_tasks.add_task(
         _resume_build_pipeline,
