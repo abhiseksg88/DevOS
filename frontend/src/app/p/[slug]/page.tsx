@@ -27,7 +27,7 @@ export default async function DeploymentPage({ params }: { params: { slug: strin
       <div className="w-screen h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-950">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-foreground mb-2">App Not Found</h1>
-          <p className="text-slate-400 mb-6">The app with slug "{params.slug}" doesn't exist.</p>
+          <p className="text-slate-400 mb-6">The app with slug &quot;{params.slug}&quot; doesn&apos;t exist.</p>
           <a
             href="/"
             className="inline-block px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
