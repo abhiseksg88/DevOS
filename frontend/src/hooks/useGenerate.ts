@@ -10,15 +10,15 @@ interface GeneratedFile {
   content: string;
 }
 
-type PipelinePhase = 
-  | "idle" 
-  | "analyzing" 
-  | "awaiting_approval" 
-  | "scaffolding" 
-  | "building" 
-  | "reviewing" 
-  | "fixing" 
-  | "done" 
+type PipelinePhase =
+  | "idle"
+  | "analyzing"
+  | "awaiting_approval"
+  | "scaffolding"
+  | "building"
+  | "reviewing"
+  | "fixing"
+  | "done"
   | "error";
 
 export interface PipelineEvent {
@@ -45,7 +45,7 @@ interface GenerateState {
   files: GeneratedFile[];
   currentPrd: Record<string, unknown> | null;
   error: string | null;
-  pipelineEvents: PipelineEvent[]; 
+  pipelineEvents: PipelineEvent[];
 }
 
 export interface UseGenerateOptions {
@@ -70,7 +70,10 @@ export function useGenerate(options: UseGenerateOptions = {}) {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const eventSeqRef = useRef(0);
-  
+  // Keep a stable ref to options callbacks to avoid stale closures
+  const optionsRef = useRef(options);
+  useEffect(() => { optionsRef.current = options; }, [options]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -91,97 +94,78 @@ export function useGenerate(options: UseGenerateOptions = {}) {
     }
   };
 
-  const handleStreamEvent = useCallback((event: PipelineEvent) => {
+  // -----------------------------------------------------------------
+  // handleBackendEvent — process each SSE event from the pipeline
+  // Updates phase, stores events, extracts files, handles HITL gate
+  // -----------------------------------------------------------------
+  const handleBackendEvent = useCallback((event: PipelineEvent) => {
+    // Track sequence for resuming streams
     if (typeof event.seq === "number") {
       eventSeqRef.current = event.seq;
     }
-  }, [addPipelineEvent]);
+
+    // HITL checkpoint — plan is ready for user review
+    if (event.payload?.hitl_required) {
+      const plan = (event.payload?.plan as Record<string, unknown>) ?? null;
+      setState(prev => ({
+        ...prev,
+        pipelinePhase: "awaiting_approval",
+        currentPrd: plan,
+        pipelineEvents: [...prev.pipelineEvents, event],
+        streamedText: event.payload?.message as string || prev.streamedText,
+      }));
+      optionsRef.current.onPhaseChange?.("awaiting_approval");
+      return;
+    }
+
+    // Update phase based on which agent is running
+    let nextPhase: PipelinePhase | null = null;
+    if (event.agent) {
+      nextPhase = mapAgentToPhase(event.agent);
+    }
+
+    // File patch — extract generated file content
+    const patchPath = event.payload?.path as string | undefined;
+    const patchContent = event.payload?.content as string | undefined;
+    if (patchPath && patchContent !== undefined) {
+      optionsRef.current.onFileGenerated?.(patchPath, patchContent);
+      setState(prev => ({
+        ...prev,
+        files: [...prev.files, { path: patchPath, content: patchContent }],
+        pipelineEvents: [...prev.pipelineEvents, event],
+        ...(nextPhase ? { pipelinePhase: nextPhase } : {}),
+        ...(event.payload?.message ? { streamedText: event.payload.message as string } : {}),
+      }));
+      if (nextPhase) optionsRef.current.onPhaseChange?.(nextPhase);
+      return;
+    }
+
+    // Error event
+    if (event.kind === "error" || event.error) {
+      const errMsg = (event.payload?.message as string) || event.error || "Build error occurred";
+      setState(prev => ({
+        ...prev,
+        error: errMsg,
+        pipelineEvents: [...prev.pipelineEvents, event],
+      }));
+      optionsRef.current.onError?.(errMsg);
+      return;
+    }
+
+    // Generic event — update phase and streamed text
+    setState(prev => ({
+      ...prev,
+      pipelineEvents: [...prev.pipelineEvents, event],
+      ...(nextPhase ? { pipelinePhase: nextPhase } : {}),
+      ...(event.payload?.message ? { streamedText: event.payload.message as string } : {}),
+    }));
+    if (nextPhase) optionsRef.current.onPhaseChange?.(nextPhase);
+  }, []);
 
   // -----------------------------------------------------------------
-  // openSseStream — (Re-)open the SSE stream for a given build.
-  // Cancels any existing stream first so there is always at most one
-  // active connection. Used by startBuild, approveBuild, modifyBuild.
-  // Step 3 compliance: approveBuild explicitly calls this to
-  // re-establish the stream after the backend pauses at the HITL gate.
+  // connectStream — open SSE connection for a given build
+  // Cancels any existing connection first so at most one is active.
   // -----------------------------------------------------------------
-  const openSseStream = useCallback(
-    (authToken: string, buildId: string, fromSeq: number) => {
-      cancelSseRef.current?.();
-      const cancel = api.streamBuildEvents(
-        authToken,
-        options!.tenantId!,
-        options!.projectId,
-        buildId,
-        fromSeq,
-        handleBackendEvent,
-        // onEnd — stream closed; build_status tells us the terminal state
-        (buildStatus?: string) => {
-          setState((prev) => {
-            // Already in a terminal or paused state — nothing to do
-            if (
-              prev.pipelinePhase === "done" ||
-              prev.pipelinePhase === "error" ||
-              prev.pipelinePhase === "idle" ||
-              prev.pipelinePhase === "awaiting_approval" // intentional pause
-            ) {
-              return prev;
-            }
-            // Build failed or was cancelled → show error
-            if (buildStatus === "failed" || buildStatus === "cancelled") {
-              return {
-                ...prev,
-                isGenerating: false,
-                isAnalyzing: false,
-                pipelinePhase: "error",
-                error: prev.error || `Build ${buildStatus}. Check your API keys and try again.`,
-              };
-            }
-            // Any active phase (analyzing, building, reviewing, fixing) → done
-            return {
-              ...prev,
-              isGenerating: false,
-              isAnalyzing: false,
-              pipelinePhase: "done",
-            };
-          });
-        },
-        // onError
-        (err: Error) => {
-          console.error("[useGenerate] SSE error:", err);
-          setState((prev) => ({
-            ...prev,
-            error: `Stream error: ${err.message}`,
-            pipelinePhase: "error",
-            isGenerating: false,
-            isAnalyzing: false,
-          }));
-        },
-      );
-      cancelSseRef.current = cancel;
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [options?.tenantId, options?.projectId, handleBackendEvent],
-  );
-
-  // -----------------------------------------------------------------
-  // startBuild() — Create a build and start SSE streaming
-  // -----------------------------------------------------------------
-  const startBuild = useCallback(
-    async (prompt: string, onFileGenerated?: (path: string, content: string) => void) => {
-      // Resolve auth token — use passed token, or fetch fresh one via getToken()
-      let authToken = options?.token || "";
-      if (!authToken && options?.getToken) {
-        try {
-          authToken = await options.getToken();
-        } catch {
-          // getToken failed — fall through to the guard below
-        }
-      }
-
-      return newState;
-    });
-  }, [options]);
-
   const connectStream = useCallback((
     token: string,
     tenantId: string,
@@ -197,19 +181,47 @@ export function useGenerate(options: UseGenerateOptions = {}) {
       projectId,
       buildId,
       eventSeqRef.current,
-      handleStreamEvent,
-      () => { /* onEnd */ },
-      (err) => {
-        console.error("Stream connection lost:", err);
-        setState(prev => ({ 
-          ...prev, 
-          error: `Connection lost: ${err.message}`, 
-          isGenerating: false, 
-          pipelinePhase: "error"
+      handleBackendEvent,
+      // onEnd — stream closed; build_status tells us the terminal state
+      (buildStatus?: string) => {
+        setState(prev => {
+          // Intentional pause at HITL gate — don't transition
+          if (prev.pipelinePhase === "awaiting_approval") return prev;
+          // Already in a terminal state
+          if (prev.pipelinePhase === "done" || prev.pipelinePhase === "error" || prev.pipelinePhase === "idle") return prev;
+
+          if (buildStatus === "failed" || buildStatus === "cancelled") {
+            const errMsg = `Build ${buildStatus}. Check your API keys and try again.`;
+            optionsRef.current.onError?.(errMsg);
+            return {
+              ...prev,
+              isGenerating: false,
+              pipelinePhase: "error",
+              error: prev.error || errMsg,
+            };
+          }
+          optionsRef.current.onPhaseChange?.("done");
+          return {
+            ...prev,
+            isGenerating: false,
+            pipelinePhase: "done",
+          };
+        });
+      },
+      // onError
+      (err: Error) => {
+        console.error("[useGenerate] SSE error:", err);
+        const errMsg = `Stream error: ${err.message}`;
+        optionsRef.current.onError?.(errMsg);
+        setState(prev => ({
+          ...prev,
+          error: errMsg,
+          pipelinePhase: "error",
+          isGenerating: false,
         }));
       }
     );
-  }, [handleStreamEvent]);
+  }, [handleBackendEvent]);
 
   // --- Public API ---
 
@@ -230,19 +242,19 @@ export function useGenerate(options: UseGenerateOptions = {}) {
         pipelineEvents: [],
         streamedText: "Initializing Neural Nexus..."
       }));
-      eventSeqRef.current = 0; 
+      eventSeqRef.current = 0;
 
       const build = await builds.create(token, tenantId, projectId, prompt);
-      
+
       setState(prev => ({ ...prev, buildId: build.id }));
       connectStream(token, tenantId, projectId, build.id);
 
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to start build";
       setState(prev => ({ ...prev, isGenerating: false, error: msg, pipelinePhase: "error" }));
-      options.onError?.(msg);
+      optionsRef.current.onError?.(msg);
     }
-  }, [connectStream, options]);
+  }, [connectStream]);
 
   const approvePlan = useCallback(async (
     token: string,
@@ -252,10 +264,10 @@ export function useGenerate(options: UseGenerateOptions = {}) {
     modifiedPlan?: Record<string, unknown>
   ) => {
     try {
-      setState(prev => ({ 
-        ...prev, 
-        pipelinePhase: "scaffolding", 
-        streamedText: "Plan approved. Resuming build..." 
+      setState(prev => ({
+        ...prev,
+        pipelinePhase: "scaffolding",
+        streamedText: "Plan approved. Resuming build..."
       }));
 
       await builds.approve(token, tenantId, projectId, buildId, {
@@ -268,9 +280,9 @@ export function useGenerate(options: UseGenerateOptions = {}) {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to approve build";
       setState(prev => ({ ...prev, error: msg }));
-      options.onError?.(msg);
+      optionsRef.current.onError?.(msg);
     }
-  }, [connectStream, options]);
+  }, [connectStream]);
 
   const modifyBuild = useCallback(async (
     token: string,
@@ -284,9 +296,9 @@ export function useGenerate(options: UseGenerateOptions = {}) {
 
   const stop = useCallback(() => {
     abortControllerRef.current?.abort();
-    setState(prev => ({ 
-      ...prev, 
-      isGenerating: false, 
+    setState(prev => ({
+      ...prev,
+      isGenerating: false,
       pipelinePhase: "idle",
       streamedText: "Build stopped by user."
     }));
