@@ -53,9 +53,9 @@ export function useWorkspaceMode(
   hasPreviewContent?: boolean,
   hasPendingPlan?: boolean,
 ): ModeResult {
-  const prevModeRef = useRef               ("idle");
+  const prevModeRef = useRef("idle");
 
-  const result = useMemo            (() => {
+  const result = useMemo(() => {
     // Deploying takes priority
     if (deploymentStatus === "deploying") {
       return {
