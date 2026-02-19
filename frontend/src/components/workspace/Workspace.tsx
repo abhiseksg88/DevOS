@@ -30,6 +30,12 @@ import {
   Sparkles,
   PanelLeft,
   PanelLeftClose,
+  Play,
+  Pencil,
+  X,
+  CheckCircle2,
+  Shield,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -1015,37 +1021,48 @@ export function Workspace({ projectId }: { projectId: string }) {
               {project?.name ?? "Project"}
             </span>
           </div>
-          {(generator.isGenerating || generator.isAnalyzing) && (() => {
+          {/* Mode badge — always visible during active phases */}
+          {mode === "plan" && (
+            <div className="flex items-center gap-1.5 ml-3 px-3 py-1 rounded-full border bg-amber-500/10 border-amber-500/20 text-amber-400">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span className="text-2xs font-semibold uppercase tracking-wider">Planning</span>
+            </div>
+          )}
+          {mode === "awaiting_approval" && (
+            <div className="flex items-center gap-1.5 ml-3 px-3 py-1 rounded-full border bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse">
+              <AlertTriangle className="w-3 h-3" />
+              <span className="text-2xs font-semibold uppercase tracking-wider">Awaiting Approval</span>
+            </div>
+          )}
+          {mode === "build" && (() => {
             const activeEvent = [...generator.pipelineEvents].reverse().find(
               (e) => e.status === "running"
             );
             const stageLabel = activeEvent
-              ? { analyzer: "Analyzing", coder: "Coding", reviewer: "Reviewing", fixer: "Fixing" }[activeEvent.agent] || "Generating"
-              : "Generating";
+              ? { analyzer: "Analyzing", coder: "Coding", reviewer: "Reviewing", fixer: "Fixing" }[activeEvent.agent] || "Building"
+              : "Building";
             const stageStyles: Record<string, string> = {
-              analyzer: "bg-amber-500/10 border-amber-500/20 text-amber-400",
               coder: "bg-blue-500/10 border-blue-500/20 text-blue-400",
               reviewer: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
               fixer: "bg-violet-500/10 border-violet-500/20 text-violet-400",
             };
-            const dotStyles: Record<string, string> = {
-              analyzer: "bg-amber-400",
-              coder: "bg-blue-400",
-              reviewer: "bg-emerald-400",
-              fixer: "bg-violet-400",
-            };
             const agent = activeEvent?.agent || "";
-            const badgeClass = stageStyles[agent] || "bg-amber-500/10 border-amber-500/20 text-amber-400";
-            const dotClass = dotStyles[agent] || "bg-amber-400";
+            const badgeClass = stageStyles[agent] || "bg-blue-500/10 border-blue-500/20 text-blue-400";
             return (
-              <div className={cn("flex items-center gap-1.5 ml-3 px-2.5 py-1 rounded-full border", badgeClass)}>
-                <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse-dot", dotClass)} />
-                <span className="text-2xs font-medium uppercase tracking-wider">
+              <div className={cn("flex items-center gap-1.5 ml-3 px-3 py-1 rounded-full border", badgeClass)}>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span className="text-2xs font-semibold uppercase tracking-wider">
                   {stageLabel}
                 </span>
               </div>
             );
           })()}
+          {mode === "review" && (
+            <div className="flex items-center gap-1.5 ml-3 px-3 py-1 rounded-full border bg-emerald-500/10 border-emerald-500/20 text-emerald-400">
+              <Shield className="w-3 h-3" />
+              <span className="text-2xs font-semibold uppercase tracking-wider">Reviewing</span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -1327,8 +1344,94 @@ export function Workspace({ projectId }: { projectId: string }) {
             )}
           </div>
 
+          {/* Planning progress bar */}
+          {mode === "plan" && (
+            <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 flex items-center gap-3 shrink-0">
+              <Brain className="w-3.5 h-3.5 text-amber-400 animate-pulse shrink-0" />
+              <span className="text-xs text-amber-400 font-medium">Analyzing your request...</span>
+              <div className="flex-1 h-1 bg-surface-3 rounded-full overflow-hidden ml-2">
+                <div className="h-full bg-amber-400/50 rounded-full animate-pulse" style={{ width: "60%" }} />
+              </div>
+            </div>
+          )}
+
+          {/* Build progress bar — shown during active build */}
+          {mode === "build" && (
+            <div className="border-b border-blue-500/20 bg-blue-500/5 px-4 py-2 flex items-center gap-3 shrink-0">
+              <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin shrink-0" />
+              <div className="flex items-center gap-2 overflow-x-auto">
+                {generator.pipelineEvents.map((ev) => (
+                  <div
+                    key={ev.id}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium whitespace-nowrap border",
+                      ev.status === "running"
+                        ? "bg-blue-500/10 border-blue-500/30 text-blue-400"
+                        : ev.status === "completed"
+                        ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                        : ev.status === "failed"
+                        ? "bg-red-500/10 border-red-500/20 text-red-400"
+                        : "bg-surface-2 border-surface-3 text-slate-500"
+                    )}
+                  >
+                    {ev.status === "running" && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                    {ev.status === "completed" && <CheckCircle2 className="w-2.5 h-2.5" />}
+                    {ev.agent === "analyzer" ? "Planner" : ev.agent === "coder" ? "Builder" : ev.agent === "reviewer" ? "Reviewer" : ev.agent === "fixer" ? "Fixer" : ev.agent}
+                  </div>
+                ))}
+              </div>
+              <span className="text-2xs text-slate-500 ml-auto shrink-0">Agents working...</span>
+            </div>
+          )}
+
           {/* Tab content */}
           <div className="flex-1 overflow-hidden flex">
+            {/* ====== PLAN REVIEW OVERLAY — shown when awaiting approval ====== */}
+            {mode === "awaiting_approval" && pendingPlan?.prd ? (
+              <div className="flex-1 flex flex-col overflow-y-auto bg-surface-0">
+                {/* Plan review banner */}
+                <div className="border-b border-amber-500/20 bg-amber-500/5 px-6 py-3 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                    <Shield className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">Plan Review Required</div>
+                    <div className="text-xs text-slate-400">Review the build plan below and approve to start building</div>
+                  </div>
+                </div>
+
+                {/* Centered plan card */}
+                <div className="flex-1 flex items-start justify-center p-8 overflow-y-auto">
+                  <div className="w-full max-w-2xl">
+                    <PlanCard
+                      prd={pendingPlan.prd}
+                      status={pendingPlan.planStatus || "pending"}
+                      onApprove={handleApprovePlan}
+                      onModify={handleModifyPlan}
+                      onReject={handleRejectPlan}
+                      disabled={isPlanCardDisabled}
+                    />
+
+                    {/* Extra context below the card */}
+                    <div className="mt-4 flex items-center justify-center gap-6 text-xs text-slate-500">
+                      <div className="flex items-center gap-1.5">
+                        <Play className="w-3 h-3 text-brand-400" />
+                        <span><strong className="text-slate-300">Approve</strong> to start building</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Pencil className="w-3 h-3 text-blue-400" />
+                        <span><strong className="text-slate-300">Modify</strong> to revise the plan</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <X className="w-3 h-3 text-red-400" />
+                        <span><strong className="text-slate-300">Cancel</strong> to start over</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+            <>
             {/* File sidebar */}
             {fileSidebarOpen && (
               <div className="w-[200px] shrink-0 border-r border-surface-3 flex flex-col bg-surface-1 overflow-y-auto">
@@ -1437,6 +1540,8 @@ export function Workspace({ projectId }: { projectId: string }) {
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
         </div>
       </div>
