@@ -853,6 +853,11 @@ def coder_node(state: BuildState) -> dict:
 
 def hitl_gate_node(state: BuildState) -> dict:
     """HITL checkpoint: pause pipeline and wait for user approval of the plan."""
+    # Resume path: plan was already approved via the /approve endpoint.
+    # Pass through immediately so hitl_decision routes to scaffolder/coder.
+    if state.get("hitl_approved"):
+        return {}
+
     settings = Settings(**state["settings"])
     _update_build_status(state, "awaiting_approval", settings)
 
