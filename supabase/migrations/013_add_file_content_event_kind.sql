@@ -2,18 +2,8 @@
 -- Emitted by the scaffolder and coder nodes to stream file contents to the
 -- frontend for preview.
 --
--- NOTE: ALTER TYPE ... ADD VALUE cannot run inside a transaction block (which
--- supabase db push uses). Insert directly into pg_enum instead — idempotent
--- and transaction-safe.
-INSERT INTO pg_enum (enumtypid, enumlabel, enumsortorder)
-SELECT
-    (SELECT oid FROM pg_type WHERE typname = 'build_event_kind'),
-    'file_content',
-    (SELECT MAX(enumsortorder) + 1
-       FROM pg_enum
-      WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = 'build_event_kind'))
-WHERE NOT EXISTS (
-    SELECT 1 FROM pg_enum
-     WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = 'build_event_kind')
-       AND enumlabel = 'file_content'
-);
+-- Must be run outside a transaction (autocommit mode).
+-- In Supabase SQL Editor this works as-is.
+-- Via supabase db push: add `set transaction_mode = autocommit;` if your
+-- CLI version wraps migrations in a transaction.
+ALTER TYPE build_event_kind ADD VALUE IF NOT EXISTS 'file_content';
