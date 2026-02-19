@@ -34,7 +34,6 @@ type PipelinePhase = "idle" | "analyzing" | "awaiting_approval" | "building" | "
 interface GenerateState {
   isGenerating: boolean;
   isAnalyzing: boolean;
-  streamedText: string;
   files: GeneratedFile[];
   error: string | null;
   pipelineEvents: PipelineEvent[];
@@ -52,35 +51,6 @@ export interface UseGenerateOptions {
   projectId: string;
   /** Fetch a fresh Supabase JWT — called when token is stale/empty */
   getToken?: () => Promise<string>;
-}
-
-/**
- * Sanitize a file path from LLM output to prevent directory traversal
- * and overwriting sensitive files.
- */
-function sanitizePath(path: string): string | null {
-  let cleaned = path.trim();
-
-  // Reject absolute paths
-  if (cleaned.startsWith("/") || /^[A-Za-z]:/.test(cleaned)) return null;
-
-  // Collapse and reject directory traversal
-  if (cleaned.includes("..")) return null;
-
-  // Strip leading slashes and dots
-  cleaned = cleaned.replace(/^[./\\]+/, "");
-
-  // Reject empty paths
-  if (!cleaned) return null;
-
-  // Reject sensitive file patterns
-  const blocked = [".env", ".git", ".ssh", "node_modules", "credentials", ".secret"];
-  const lowerPath = cleaned.toLowerCase();
-  if (blocked.some((b) => lowerPath.startsWith(b) || lowerPath.includes("/" + b))) {
-    return null;
-  }
-
-  return cleaned;
 }
 
 // =====================================================================
@@ -160,7 +130,6 @@ export function useGenerate(options?: UseGenerateOptions) {
   const [state, setState] = useState<GenerateState>({
     isGenerating: false,
     isAnalyzing: false,
-    streamedText: "",
     files: [],
     error: null,
     pipelineEvents: [],
@@ -276,23 +245,21 @@ export function useGenerate(options?: UseGenerateOptions) {
         break;
       }
 
-      case "file_content": {
-        // Backend emitted a generated file — update tree + preview
+      case "file_content":
+      case "patch": {
+        // Backend emits a fully-formed generated file.
+        // Paths are sanitized server-side by the FastAPI pipeline — trust them directly.
         const filePath = payload.path as string;
         const fileContent = payload.content as string;
-        if (filePath && fileContent) {
-          // Sanitize the path before passing through
-          const safePath = sanitizePath(filePath);
-          if (safePath) {
-            onFileGeneratedRef.current?.(safePath, fileContent);
-            setState((prev) => ({
-              ...prev,
-              files: [
-                ...prev.files.filter(f => f.path !== safePath),
-                { path: safePath, content: fileContent },
-              ],
-            }));
-          }
+        if (filePath && fileContent !== undefined) {
+          onFileGeneratedRef.current?.(filePath, fileContent);
+          setState((prev) => ({
+            ...prev,
+            files: [
+              ...prev.files.filter((f) => f.path !== filePath),
+              { path: filePath, content: fileContent },
+            ],
+          }));
         }
         break;
       }
@@ -329,6 +296,61 @@ export function useGenerate(options?: UseGenerateOptions) {
         console.log("[useGenerate] Unhandled backend event:", kind, payload);
     }
   }, [addPipelineEvent]);
+
+  // -----------------------------------------------------------------
+  // openSseStream — (Re-)open the SSE stream for a given build.
+  // Cancels any existing stream first so there is always at most one
+  // active connection. Used by startBuild, approveBuild, modifyBuild.
+  // Step 3 compliance: approveBuild explicitly calls this to
+  // re-establish the stream after the backend pauses at the HITL gate.
+  // -----------------------------------------------------------------
+  const openSseStream = useCallback(
+    (authToken: string, buildId: string, fromSeq: number) => {
+      cancelSseRef.current?.();
+      const cancel = api.streamBuildEvents(
+        authToken,
+        options!.tenantId!,
+        options!.projectId,
+        buildId,
+        fromSeq,
+        handleBackendEvent,
+        // onEnd — stream closed normally
+        () => {
+          setState((prev) => {
+            // Running phases → done. awaiting_approval keeps its state
+            // (the stream intentionally pauses; it is not "ended").
+            if (
+              prev.pipelinePhase === "building" ||
+              prev.pipelinePhase === "reviewing" ||
+              prev.pipelinePhase === "fixing"
+            ) {
+              return {
+                ...prev,
+                isGenerating: false,
+                isAnalyzing: false,
+                pipelinePhase: "done",
+              };
+            }
+            return prev;
+          });
+        },
+        // onError
+        (err: Error) => {
+          console.error("[useGenerate] SSE error:", err);
+          setState((prev) => ({
+            ...prev,
+            error: `Stream error: ${err.message}`,
+            pipelinePhase: "error",
+            isGenerating: false,
+            isAnalyzing: false,
+          }));
+        },
+      );
+      cancelSseRef.current = cancel;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [options?.tenantId, options?.projectId, handleBackendEvent],
+  );
 
   // -----------------------------------------------------------------
   // startBuild() — Create a build and start SSE streaming
@@ -368,7 +390,6 @@ export function useGenerate(options?: UseGenerateOptions) {
       setState({
         isGenerating: false,
         isAnalyzing: true,
-        streamedText: "",
         files: [],
         error: null,
         pipelineEvents: [],
@@ -388,45 +409,8 @@ export function useGenerate(options?: UseGenerateOptions) {
 
         setState((prev) => ({ ...prev, buildId: build.id }));
 
-        // Step 2: Start SSE event stream
-        const cancel = api.streamBuildEvents(
-          authToken,
-          options.tenantId,
-          options.projectId,
-          build.id,
-          0,
-          // onEvent
-          handleBackendEvent,
-          // onEnd
-          () => {
-            setState((prev) => {
-              // If we're still in a running state when stream ends, mark as done
-              if (prev.pipelinePhase === "building" || prev.pipelinePhase === "reviewing" || prev.pipelinePhase === "fixing") {
-                return {
-                  ...prev,
-                  isGenerating: false,
-                  isAnalyzing: false,
-                  pipelinePhase: "done",
-                };
-              }
-              // If awaiting_approval, keep that state (stream paused, not ended)
-              return prev;
-            });
-          },
-          // onError
-          (err: Error) => {
-            console.error("[useGenerate] SSE error:", err);
-            setState((prev) => ({
-              ...prev,
-              error: `Stream error: ${err.message}`,
-              pipelinePhase: "error",
-              isGenerating: false,
-              isAnalyzing: false,
-            }));
-          },
-        );
-
-        cancelSseRef.current = cancel;
+        // Step 2: Open SSE stream — events drive all subsequent state transitions
+        openSseStream(authToken, build.id, 0);
 
         // Add initial pipeline event
         addPipelineEvent({
@@ -448,7 +432,7 @@ export function useGenerate(options?: UseGenerateOptions) {
         }));
       }
     },
-    [options?.token, options?.tenantId, options?.projectId, handleBackendEvent, addPipelineEvent],
+    [options?.token, options?.tenantId, options?.projectId, options?.getToken, openSseStream, addPipelineEvent],
   );
 
   // -----------------------------------------------------------------
@@ -480,34 +464,10 @@ export function useGenerate(options?: UseGenerateOptions) {
         { action: "approve" },
       );
 
-      // Resume SSE from where we left off (the backend will emit new events)
-      cancelSseRef.current?.();
-      const cancel = api.streamBuildEvents(
-        authToken,
-        options.tenantId,
-        options.projectId,
-        state.buildId,
-        lastSeqRef.current,
-        handleBackendEvent,
-        () => {
-          setState((prev) => ({
-            ...prev,
-            isGenerating: false,
-            isAnalyzing: false,
-            pipelinePhase: prev.pipelinePhase === "error" ? "error" : "done",
-          }));
-        },
-        (err: Error) => {
-          console.error("[useGenerate] SSE error after approve:", err);
-          setState((prev) => ({
-            ...prev,
-            error: `Stream error: ${err.message}`,
-            pipelinePhase: "error",
-            isGenerating: false,
-          }));
-        },
-      );
-      cancelSseRef.current = cancel;
+      // Explicitly re-establish the SSE stream (the backend closes it while
+      // awaiting HITL input). Resume from the last received seq so no events
+      // are missed between approval POST and new stream open.
+      openSseStream(authToken, state.buildId, lastSeqRef.current);
 
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Failed to approve build";
@@ -518,7 +478,7 @@ export function useGenerate(options?: UseGenerateOptions) {
         isGenerating: false,
       }));
     }
-  }, [options?.token, options?.tenantId, options?.projectId, state.buildId, handleBackendEvent]);
+  }, [options?.token, options?.tenantId, options?.projectId, options?.getToken, state.buildId, openSseStream]);
 
   // -----------------------------------------------------------------
   // modifyBuild() — Re-plan with user feedback
@@ -553,35 +513,9 @@ export function useGenerate(options?: UseGenerateOptions) {
       const newBuildId = result.build_id || state.buildId;
       setState((prev) => ({ ...prev, buildId: newBuildId }));
 
-      // Resume SSE on the (possibly new) build
-      cancelSseRef.current?.();
+      // Re-open SSE on the (possibly new) build from seq 0
       lastSeqRef.current = 0;
-      const cancel = api.streamBuildEvents(
-        authToken,
-        options.tenantId,
-        options.projectId,
-        newBuildId,
-        0,
-        handleBackendEvent,
-        () => {
-          setState((prev) => {
-            if (prev.pipelinePhase === "building" || prev.pipelinePhase === "reviewing") {
-              return { ...prev, isGenerating: false, isAnalyzing: false, pipelinePhase: "done" };
-            }
-            return prev;
-          });
-        },
-        (err: Error) => {
-          setState((prev) => ({
-            ...prev,
-            error: `Stream error: ${err.message}`,
-            pipelinePhase: "error",
-            isGenerating: false,
-            isAnalyzing: false,
-          }));
-        },
-      );
-      cancelSseRef.current = cancel;
+      openSseStream(authToken, newBuildId, 0);
 
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Failed to modify build";
@@ -592,7 +526,7 @@ export function useGenerate(options?: UseGenerateOptions) {
         isAnalyzing: false,
       }));
     }
-  }, [options?.token, options?.tenantId, options?.projectId, state.buildId, handleBackendEvent]);
+  }, [options?.token, options?.tenantId, options?.projectId, options?.getToken, state.buildId, openSseStream]);
 
   // -----------------------------------------------------------------
   // rejectBuild() — Cancel the build

@@ -147,8 +147,6 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [generationEvents, setGenerationEvents] = useState<BuildEvent[]>([]);
   const [showIntegrations, setShowIntegrations] = useState(false);
   const [showNexus, setShowNexus] = useState(false);
-  const [integrationContext, setIntegrationContext] = useState<string>("");
-  const [nexusContext, setNexusContext] = useState<string>("");
   const [consoleView, setConsoleView] = useState<"log" | "timeline">("timeline");
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [fileSidebarOpen, setFileSidebarOpen] = useState(false);
@@ -158,24 +156,6 @@ export function Workspace({ projectId }: { projectId: string }) {
   const [chatValue, setChatValue] = useState("");
   const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
-
-  // Load integration context (what APIs are available) for code generation
-  useEffect(() => {
-    if (!token || !resolvedTenantId || !projectId) return;
-    api.integrations
-      .context(token, resolvedTenantId, projectId)
-      .then((ctx) => setIntegrationContext(ctx.context))
-      .catch(() => setIntegrationContext(""));
-  }, [token, resolvedTenantId, projectId]);
-
-  // Load Neural Nexus context (persona + project state + business logic) for code generation
-  useEffect(() => {
-    if (!token || !resolvedTenantId || !projectId) return;
-    api.nexus
-      .getContext(token, resolvedTenantId, projectId)
-      .then((ctx) => setNexusContext(ctx.context))
-      .catch(() => setNexusContext(""));
-  }, [token, resolvedTenantId, projectId]);
 
   // File tree — updated from Claude output or editor changes
   const [fileTree, setFileTree] = useState<FileNode[]>(defaultFileTree);
@@ -1570,15 +1550,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         tenantId={resolvedTenantId}
         token={token}
         open={showIntegrations}
-        onClose={() => {
-          setShowIntegrations(false);
-          if (token && resolvedTenantId && projectId) {
-            api.integrations
-              .context(token, resolvedTenantId, projectId)
-              .then((ctx) => setIntegrationContext(ctx.context))
-              .catch(() => {});
-          }
-        }}
+        onClose={() => setShowIntegrations(false)}
       />
 
       {/* Neural Nexus drawer */}
@@ -1587,15 +1559,7 @@ export function Workspace({ projectId }: { projectId: string }) {
         tenantId={resolvedTenantId}
         token={token}
         open={showNexus}
-        onClose={() => {
-          setShowNexus(false);
-          if (token && resolvedTenantId && projectId) {
-            api.nexus
-              .getContext(token, resolvedTenantId, projectId)
-              .then((ctx) => setNexusContext(ctx.context))
-              .catch(() => {});
-          }
-        }}
+        onClose={() => setShowNexus(false)}
       />
     </div>
   );
