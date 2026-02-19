@@ -130,11 +130,12 @@ function updateInTree(nodes: FileNode[], path: string, content: string): FileNod
 export function Workspace({ projectId }: { projectId: string }) {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
-  const { project, loading, userId, tenantId: resolvedTenantId, token } = useProject(projectId);
+  const { project, loading, userId, tenantId: resolvedTenantId, token, getToken } = useProject(projectId);
   const generator = useGenerate({
     token,
     tenantId: resolvedTenantId,
     projectId,
+    getToken,
   });
   const persistence = useCodePersistence(projectId, userId);
 

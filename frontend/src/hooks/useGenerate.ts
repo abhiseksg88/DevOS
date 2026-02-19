@@ -58,6 +58,8 @@ export interface UseGenerateOptions {
   token: string | null;
   tenantId: string | null;
   projectId: string;
+  /** Fetch a fresh Supabase JWT — called when token is stale/empty */
+  getToken?: () => Promise<string>;
 }
 
 // =====================================================================
@@ -751,7 +753,17 @@ export function useGenerate(options?: UseGenerateOptions) {
   // -----------------------------------------------------------------
   const startBuild = useCallback(
     async (prompt: string, onFileGenerated?: (path: string, content: string) => void) => {
-      if (!options?.token || !options?.tenantId) {
+      // Resolve auth token — use passed token, or fetch fresh one via getToken()
+      let authToken = options?.token || "";
+      if (!authToken && options?.getToken) {
+        try {
+          authToken = await options.getToken();
+        } catch {
+          // getToken failed — fall through to the guard below
+        }
+      }
+
+      if (!authToken || !options?.tenantId) {
         setState((prev) => ({
           ...prev,
           error: "Not authenticated. Please sign in.",
@@ -786,7 +798,7 @@ export function useGenerate(options?: UseGenerateOptions) {
       try {
         // Step 1: Create the build via backend API
         const build = await api.builds.create(
-          options.token,
+          authToken,
           options.tenantId,
           options.projectId,
           prompt,
@@ -796,7 +808,7 @@ export function useGenerate(options?: UseGenerateOptions) {
 
         // Step 2: Start SSE event stream
         const cancel = api.streamBuildEvents(
-          options.token,
+          authToken,
           options.tenantId,
           options.projectId,
           build.id,
@@ -861,7 +873,11 @@ export function useGenerate(options?: UseGenerateOptions) {
   // approveBuild() — Resume the pipeline after HITL approval
   // -----------------------------------------------------------------
   const approveBuild = useCallback(async () => {
-    if (!options?.token || !options?.tenantId || !state.buildId) {
+    let authToken = options?.token || "";
+    if (!authToken && options?.getToken) {
+      try { authToken = await options.getToken(); } catch { /* fall through */ }
+    }
+    if (!authToken || !options?.tenantId || !state.buildId) {
       console.error("[useGenerate] Cannot approve: missing auth or buildId");
       return;
     }
@@ -875,7 +891,7 @@ export function useGenerate(options?: UseGenerateOptions) {
 
     try {
       await api.builds.approve(
-        options.token,
+        authToken,
         options.tenantId,
         options.projectId,
         state.buildId,
@@ -885,7 +901,7 @@ export function useGenerate(options?: UseGenerateOptions) {
       // Resume SSE from where we left off (the backend will emit new events)
       cancelSseRef.current?.();
       const cancel = api.streamBuildEvents(
-        options.token,
+        authToken,
         options.tenantId,
         options.projectId,
         state.buildId,
@@ -926,7 +942,11 @@ export function useGenerate(options?: UseGenerateOptions) {
   // modifyBuild() — Re-plan with user feedback
   // -----------------------------------------------------------------
   const modifyBuild = useCallback(async (notes: string) => {
-    if (!options?.token || !options?.tenantId || !state.buildId) {
+    let authToken = options?.token || "";
+    if (!authToken && options?.getToken) {
+      try { authToken = await options.getToken(); } catch { /* fall through */ }
+    }
+    if (!authToken || !options?.tenantId || !state.buildId) {
       console.error("[useGenerate] Cannot modify: missing auth or buildId");
       return;
     }
@@ -940,7 +960,7 @@ export function useGenerate(options?: UseGenerateOptions) {
 
     try {
       const result = await api.builds.approve(
-        options.token,
+        authToken,
         options.tenantId,
         options.projectId,
         state.buildId,
@@ -955,7 +975,7 @@ export function useGenerate(options?: UseGenerateOptions) {
       cancelSseRef.current?.();
       lastSeqRef.current = 0;
       const cancel = api.streamBuildEvents(
-        options.token,
+        authToken,
         options.tenantId,
         options.projectId,
         newBuildId,
