@@ -769,20 +769,22 @@ async def approve_build(
         except Exception:
             pass
 
-    # Atomically flip status to "running" before firing the background task.
-    # In postgrest-py/supabase-py v2 the .select() MUST come before .eq() filters
-    # on an update query — it enables Prefer: return=representation so we get
-    # the updated rows back.  An empty result means the conditional filter found
-    # no row in "awaiting_approval", i.e. a duplicate click already won the race.
-    status_update = (
-        db.table("builds")
-        .update({"status": "running"})
-        .select("id")
-        .eq("id", str(build_id))
-        .eq("status", "awaiting_approval")
-        .execute()
+    # Flip status to "running" before firing the background task.
+    # postgrest-py 0.19 / supabase-py 2.x: .update() returns SyncFilterRequestBuilder
+    # which does NOT support .select() — use a plain update + separate re-read.
+    # The conditional .eq("status", "awaiting_approval") makes the UPDATE a no-op
+    # if a concurrent request already moved the status (duplicate-click guard).
+    db.table("builds").update({"status": "running"}).eq("id", str(build_id)).eq(
+        "status", "awaiting_approval"
+    ).execute()
+
+    # Re-read to verify we actually own the "running" state — if the status is
+    # still "awaiting_approval" the conditional update matched nothing, meaning
+    # another concurrent request got here first.
+    current = (
+        db.table("builds").select("status").eq("id", str(build_id)).single().execute()
     )
-    if not status_update.data:
+    if current.data.get("status") == "awaiting_approval":
         raise HTTPException(409, "Build is already being processed")
 
     # Resume the build in background
