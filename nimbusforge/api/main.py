@@ -82,24 +82,29 @@ app = FastAPI(
 _startup_settings = get_settings()
 setup_logging(debug=_startup_settings.debug_mode)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_startup_settings.cors_allowed_origins,
-    # Allow all Netlify, Vercel, and Railway origins (API is auth-protected)
-    allow_origin_regex=r"https://.*\.(netlify\.app|vercel\.app|railway\.app)",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Log every request with method, path, status, and duration. Adds X-Request-ID header."""
 
     async def dispatch(self, request: Request, call_next):
+        from starlette.responses import JSONResponse
+
         request_id = str(uuid4())
         start = time.time()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Catch unhandled exceptions so they return a proper Response object.
+            # Without this, Starlette 0.41 BaseHTTPMiddleware re-raises through
+            # the middleware stack, causing the response to bypass the CORS send
+            # wrapper — resulting in "No Access-Control-Allow-Origin" on 500s.
+            logger.exception(
+                "Unhandled exception for %s %s [request_id=%s]",
+                request.method,
+                request.url.path,
+                request_id,
+            )
+            response = JSONResponse({"detail": "Internal server error"}, status_code=500)
         duration_ms = round((time.time() - start) * 1000)
         logger.info(
             "%s %s -> %d (%dms) [request_id=%s]",
@@ -113,7 +118,19 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Middleware is applied in LIFO order: last added = outermost.
+# CORSMiddleware MUST be outermost so its send-wrapper is used even when
+# RequestLoggingMiddleware catches an exception and short-circuits the response.
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_startup_settings.cors_allowed_origins,
+    # Also allow all Netlify / Vercel / Railway preview URLs
+    allow_origin_regex=r"https://.*\.(netlify\.app|vercel\.app|railway\.app)",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -722,8 +739,16 @@ async def approve_build(
     """Approve, modify, or reject a build plan (HITL checkpoint)."""
     user.assert_tenant_access(tenant_id)
 
-    # Verify build is awaiting approval
-    build = db.table("builds").select("*").eq("id", str(build_id)).single().execute()
+    # Verify build is awaiting approval.
+    # .single() raises APIError (not returns None) when no row is found in
+    # supabase-py v2 — catch it so it becomes a proper 404 HTTPException rather
+    # than an unhandled exception that bypasses the CORS send wrapper.
+    try:
+        build = db.table("builds").select("*").eq("id", str(build_id)).single().execute()
+    except Exception:
+        raise HTTPException(404, "Build not found")
+    if not build.data:
+        raise HTTPException(404, "Build not found")
     if build.data["status"] != "awaiting_approval":
         raise HTTPException(400, "Build is not awaiting approval")
 

@@ -224,14 +224,19 @@ async def check_budget(
     db: Client,
 ) -> None:
     """Raise 402 if tenant has exceeded monthly budget."""
-    result = (
-        db.table("tenants")
-        .select("monthly_budget_usd, monthly_spent_usd, plan")
-        .eq("id", str(tenant_id))
-        .single()
-        .execute()
-    )
+    try:
+        result = (
+            db.table("tenants")
+            .select("monthly_budget_usd, monthly_spent_usd, plan")
+            .eq("id", str(tenant_id))
+            .single()
+            .execute()
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     tenant = result.data
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     if tenant["monthly_spent_usd"] >= tenant["monthly_budget_usd"]:
         raise HTTPException(
             status_code=402,
