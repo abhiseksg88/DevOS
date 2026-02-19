@@ -21,6 +21,22 @@ type PipelinePhase =
   | "done" 
   | "error";
 
+export interface PipelineEvent {
+  seq?: number;
+  kind?: string;
+  agent?: string;
+  payload?: {
+    message?: string;
+    hitl_required?: boolean;
+    plan?: Record<string, unknown>;
+    path?: string;
+    content?: string;
+    [key: string]: unknown;
+  };
+  status?: string;
+  error?: string;
+}
+
 interface GenerateState {
   buildId: string | null;
   isGenerating: boolean;
@@ -29,7 +45,7 @@ interface GenerateState {
   files: GeneratedFile[];
   currentPrd: Record<string, unknown> | null;
   error: string | null;
-  pipelineEvents: any[]; 
+  pipelineEvents: PipelineEvent[]; 
 }
 
 export interface UseGenerateOptions {
@@ -75,7 +91,7 @@ export function useGenerate(options: UseGenerateOptions = {}) {
     }
   };
 
-  const handleStreamEvent = useCallback((event: any) => {
+  const handleStreamEvent = useCallback((event: PipelineEvent) => {
     if (typeof event.seq === "number") {
       eventSeqRef.current = event.seq;
     }
@@ -88,7 +104,7 @@ export function useGenerate(options: UseGenerateOptions = {}) {
 
       switch (event.kind) {
         case "agent_start":
-          newState.pipelinePhase = mapAgentToPhase(event.agent);
+          newState.pipelinePhase = mapAgentToPhase(event.agent || "");
           newState.streamedText = event.payload?.message || newState.streamedText;
           options.onPhaseChange?.(newState.pipelinePhase);
           break;
@@ -96,7 +112,7 @@ export function useGenerate(options: UseGenerateOptions = {}) {
         case "info":
           if (event.payload?.hitl_required) {
             newState.pipelinePhase = "awaiting_approval";
-            newState.currentPrd = event.payload.plan;
+            newState.currentPrd = event.payload.plan || null;
             newState.streamedText = "Plan ready for review.";
             options.onPhaseChange?.("awaiting_approval");
           } else if (event.payload?.message) {
@@ -195,8 +211,8 @@ export function useGenerate(options: UseGenerateOptions = {}) {
       setState(prev => ({ ...prev, buildId: build.id }));
       connectStream(token, tenantId, projectId, build.id);
 
-    } catch (err: any) {
-      const msg = err.message || "Failed to start build";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to start build";
       setState(prev => ({ ...prev, isGenerating: false, error: msg, pipelinePhase: "error" }));
       options.onError?.(msg);
     }
@@ -223,8 +239,8 @@ export function useGenerate(options: UseGenerateOptions = {}) {
 
       connectStream(token, tenantId, projectId, buildId);
 
-    } catch (err: any) {
-      const msg = err.message || "Failed to approve build";
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to approve build";
       setState(prev => ({ ...prev, error: msg }));
       options.onError?.(msg);
     }
