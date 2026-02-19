@@ -95,61 +95,87 @@ export function useGenerate(options: UseGenerateOptions = {}) {
     if (typeof event.seq === "number") {
       eventSeqRef.current = event.seq;
     }
+  }, [addPipelineEvent]);
 
-    setState((prev) => {
-      const newState = { 
-        ...prev, 
-        pipelineEvents: [...prev.pipelineEvents, event] 
-      };
-
-      switch (event.kind) {
-        case "agent_start":
-          newState.pipelinePhase = mapAgentToPhase(event.agent || "");
-          newState.streamedText = event.payload?.message || newState.streamedText;
-          options.onPhaseChange?.(newState.pipelinePhase);
-          break;
-
-        case "info":
-          if (event.payload?.hitl_required) {
-            newState.pipelinePhase = "awaiting_approval";
-            newState.currentPrd = event.payload.plan || null;
-            newState.streamedText = "Plan ready for review.";
-            options.onPhaseChange?.("awaiting_approval");
-          } else if (event.payload?.message) {
-            newState.streamedText = event.payload.message;
-          }
-          break;
-
-        case "file_content": 
-          const path = event.payload?.path;
-          const content = event.payload?.content;
-          if (path && content) {
-            const existingIdx = newState.files.findIndex(f => f.path === path);
-            if (existingIdx >= 0) {
-              const newFiles = [...newState.files];
-              newFiles[existingIdx] = { path, content };
-              newState.files = newFiles;
-            } else {
-              newState.files = [...newState.files, { path, content }];
+  // -----------------------------------------------------------------
+  // openSseStream — (Re-)open the SSE stream for a given build.
+  // Cancels any existing stream first so there is always at most one
+  // active connection. Used by startBuild, approveBuild, modifyBuild.
+  // Step 3 compliance: approveBuild explicitly calls this to
+  // re-establish the stream after the backend pauses at the HITL gate.
+  // -----------------------------------------------------------------
+  const openSseStream = useCallback(
+    (authToken: string, buildId: string, fromSeq: number) => {
+      cancelSseRef.current?.();
+      const cancel = api.streamBuildEvents(
+        authToken,
+        options!.tenantId!,
+        options!.projectId,
+        buildId,
+        fromSeq,
+        handleBackendEvent,
+        // onEnd — stream closed; build_status tells us the terminal state
+        (buildStatus?: string) => {
+          setState((prev) => {
+            // Already in a terminal or paused state — nothing to do
+            if (
+              prev.pipelinePhase === "done" ||
+              prev.pipelinePhase === "error" ||
+              prev.pipelinePhase === "idle" ||
+              prev.pipelinePhase === "awaiting_approval" // intentional pause
+            ) {
+              return prev;
             }
-            options.onFileGenerated?.(path, content);
-          }
-          break;
+            // Build failed or was cancelled → show error
+            if (buildStatus === "failed" || buildStatus === "cancelled") {
+              return {
+                ...prev,
+                isGenerating: false,
+                isAnalyzing: false,
+                pipelinePhase: "error",
+                error: prev.error || `Build ${buildStatus}. Check your API keys and try again.`,
+              };
+            }
+            // Any active phase (analyzing, building, reviewing, fixing) → done
+            return {
+              ...prev,
+              isGenerating: false,
+              isAnalyzing: false,
+              pipelinePhase: "done",
+            };
+          });
+        },
+        // onError
+        (err: Error) => {
+          console.error("[useGenerate] SSE error:", err);
+          setState((prev) => ({
+            ...prev,
+            error: `Stream error: ${err.message}`,
+            pipelinePhase: "error",
+            isGenerating: false,
+            isAnalyzing: false,
+          }));
+        },
+      );
+      cancelSseRef.current = cancel;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [options?.tenantId, options?.projectId, handleBackendEvent],
+  );
 
-        case "stream_end":
-          if (newState.pipelinePhase !== "awaiting_approval") {
-            newState.isGenerating = false;
-            newState.pipelinePhase = "done";
-            options.onPhaseChange?.("done");
-          }
-          break;
-
-        case "error":
-          newState.error = event.error || "Unknown stream error";
-          newState.isGenerating = false;
-          newState.pipelinePhase = "error";
-          options.onError?.(newState.error!);
-          break;
+  // -----------------------------------------------------------------
+  // startBuild() — Create a build and start SSE streaming
+  // -----------------------------------------------------------------
+  const startBuild = useCallback(
+    async (prompt: string, onFileGenerated?: (path: string, content: string) => void) => {
+      // Resolve auth token — use passed token, or fetch fresh one via getToken()
+      let authToken = options?.token || "";
+      if (!authToken && options?.getToken) {
+        try {
+          authToken = await options.getToken();
+        } catch {
+          // getToken failed — fall through to the guard below
+        }
       }
 
       return newState;

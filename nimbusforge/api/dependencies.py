@@ -38,24 +38,35 @@ class AuthUser:
         self,
         user_id: UUID,
         email: str,
-        tenant_ids: list[UUID],
         raw_token: str,
+        db: Client,
         is_service_role: bool = False,
     ):
         self.user_id = user_id
         self.email = email
-        self.tenant_ids = tenant_ids
         self.raw_token = raw_token
+        self._db = db
         self.is_service_role = is_service_role
 
     def assert_tenant_access(self, tenant_id: UUID):
-        # Service-role has unrestricted access (used for testing / internal calls)
+        """Raise 403 if the user is not a member of the given tenant.
+
+        Uses a targeted single-row query rather than a pre-fetched list so that
+        newly-created memberships are always visible and there is no window where
+        a missing tenant_members row causes a spurious 403.
+        """
         if self.is_service_role:
             return
-        if tenant_id not in self.tenant_ids:
-            # VIP BYPASS: Temporarily disabling the 403 block to unblock generation!
-            # raise HTTPException(status_code=403, detail="Access denied to this tenant")
-            pass
+        result = (
+            self._db.table("tenant_members")
+            .select("tenant_id")
+            .eq("user_id", str(self.user_id))
+            .eq("tenant_id", str(tenant_id))
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            raise HTTPException(status_code=403, detail="Access denied to this tenant")
 
 
 async def get_current_user(
@@ -72,20 +83,11 @@ async def get_current_user(
     # Service-role bypass: when the token IS the service-role key itself
     # (used by --skip-auth test mode and internal service calls)
     if token == settings.supabase_service_role_key:
-        try:
-            memberships = (
-                db.table("tenant_members")
-                .select("tenant_id")
-                .execute()
-            )
-            tenant_ids = [UUID(m["tenant_id"]) for m in memberships.data]
-        except Exception:
-            tenant_ids = []
         return AuthUser(
             user_id=UUID("00000000-0000-0000-0000-000000000000"),
             email="service-role@nimbusforge.internal",
-            tenant_ids=tenant_ids,
             raw_token=token,
+            db=db,
             is_service_role=True,
         )
 
@@ -100,20 +102,13 @@ async def get_current_user(
     except Exception:
         raise HTTPException(status_code=401, detail="Token verification failed")
 
-    # Fetch tenant memberships (service-role bypasses RLS)
-    memberships = (
-        db.table("tenant_members")
-        .select("tenant_id")
-        .eq("user_id", str(user.id))
-        .execute()
-    )
-    tenant_ids = [UUID(m["tenant_id"]) for m in memberships.data]
-
+    # tenant_ids are no longer pre-fetched here — assert_tenant_access does a
+    # targeted single-row query per request, which is safer and more up-to-date.
     return AuthUser(
-        user_id=UUID(user.id),
+        user_id=UUID(str(user.id)),
         email=user.email or "",
-        tenant_ids=tenant_ids,
         raw_token=token,
+        db=db,
     )
 
 

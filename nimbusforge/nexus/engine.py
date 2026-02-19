@@ -783,8 +783,8 @@ class NexusEngine:
             result = (
                 self.db.table("agent_executions")
                 .select("*")
-                .eq("project_id", str(project_id))
-                .order("created_at", desc=True)
+                .eq("project_id", project_id)
+                .order("started_at", desc=True)
                 .limit(limit)
                 .execute()
             )

@@ -130,6 +130,11 @@ def call_llm(
     """
     Route an LLM call to the appropriate provider with retry and fallback.
 
+    Each tier gets up to MAX_RETRIES attempts.  When a tier exhausts all
+    retries the fallback chain is consulted and the counter resets — so the
+    fallback tier is always actually tried (unlike the previous `for` loop
+    implementation where `continue` at the last iteration silently exited).
+
     Returns:
         {
             "content": str,        # response text
@@ -142,8 +147,9 @@ def call_llm(
         }
     """
     current_tier = tier
+    attempt = 0
 
-    for attempt in range(MAX_RETRIES + 1):
+    while True:
         try:
             start = time.monotonic()
             result = _dispatch(current_tier, messages, settings, max_tokens, temperature)
@@ -167,12 +173,14 @@ def call_llm(
         except (anthropic.APIStatusError, anthropic.APIConnectionError, httpx.HTTPError) as e:
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)])
+                attempt += 1
                 continue
 
-            # All retries exhausted — try fallback
+            # All retries for current_tier exhausted — try fallback tier
             fallback = FALLBACK_CHAIN.get(current_tier)
             if fallback and fallback != current_tier:
                 current_tier = fallback
+                attempt = 0   # reset retry counter for the new tier
                 continue
 
             raise RuntimeError(f"LLM call failed after {MAX_RETRIES} retries with fallback: {e}") from e

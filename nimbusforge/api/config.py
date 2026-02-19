@@ -29,10 +29,10 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
 
     # --- Model IDs ---
-    model_opus: str = "claude-opus-4"
-    model_sonnet: str = "claude-sonnet-4"
-    model_haiku: str = "claude-haiku-4"
-    model_deepseek: str = "deepseek-coder"
+    model_opus: str = "claude-opus-4-6"
+    model_sonnet: str = "claude-sonnet-4-5-20250929"
+    model_haiku: str = "claude-haiku-4-5-20251001"
+    model_deepseek: str = "deepseek-chat"  # DeepSeek-V3 (unified, replaces deepseek-coder)
 
     # --- Docker / Deploy ---
     container_registry: str = "gcr.io/nimbusforge"
