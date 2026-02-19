@@ -65,7 +65,8 @@ export function CommandBar({
     setShowHistory(false);
   }
 
-  const disabled = isStreaming || isAnalyzing || !!(pendingPlan && pendingPlan.planStatus === "pending");
+  const inputDisabled = isStreaming || isAnalyzing || !!(pendingPlan && pendingPlan.planStatus === "pending");
+  const planCardDisabled = isStreaming || isAnalyzing;
 
   return (
     <div className="relative">
@@ -79,7 +80,7 @@ export function CommandBar({
               onApprove={onApprovePlan}
               onModify={onModifyPlan}
               onReject={onRejectPlan}
-              disabled={disabled}
+              disabled={planCardDisabled}
             />
           </div>
         </div>
@@ -165,22 +166,22 @@ export function CommandBar({
                 }
               }}
               placeholder={
-                disabled
+                inputDisabled
                   ? pendingPlan && pendingPlan.planStatus === "pending"
                     ? "Review the plan above..."
                     : statusLabel ? `${statusLabel}...` : "Building..."
                   : "Describe what you want to build..."
               }
-              disabled={disabled}
+              disabled={inputDisabled}
               rows={1}
               className="flex-1 bg-transparent text-foreground text-sm placeholder:text-slate-600 px-4 py-2.5 resize-none focus:outline-none disabled:opacity-50 max-h-[80px]"
             />
             <button
               onClick={handleSubmit}
-              disabled={disabled || !value.trim()}
+              disabled={inputDisabled || !value.trim()}
               className="p-2 m-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition-all disabled:opacity-30 disabled:hover:bg-brand-600 shrink-0"
             >
-              {disabled ? (
+              {inputDisabled ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Send className="w-4 h-4" />

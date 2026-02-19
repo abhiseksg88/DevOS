@@ -52,6 +52,7 @@ export function useWorkspaceMode(
   autoFix: AutoFixState,
   deploymentStatus?: string,
   hasPreviewContent?: boolean,
+  hasPendingPlan?: boolean,
 ): ModeResult {
   const prevModeRef = useRef<WorkspaceMode>("idle");
 
@@ -91,7 +92,7 @@ export function useWorkspaceMode(
     }
 
     // Awaiting user approval → plan review mode
-    if (generator.pipelinePhase === "awaiting_approval") {
+    if (generator.pipelinePhase === "awaiting_approval" || hasPendingPlan) {
       return {
         mode: "awaiting_approval",
         autoTab: null,
@@ -145,6 +146,7 @@ export function useWorkspaceMode(
     autoFix.isFixing,
     deploymentStatus,
     hasPreviewContent,
+    hasPendingPlan,
   ]);
 
   // Track transitions

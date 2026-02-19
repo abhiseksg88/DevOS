@@ -37,6 +37,7 @@ interface RecordPayload {
   prompt: string;
   files: { path: string; content: string }[];
   pipelineEvents: PipelineStage[];
+  prd?: Record<string, unknown>;
 }
 
 const AGENT_STEP_MAP: Record<string, string> = {
@@ -240,6 +241,113 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     errors.push(
       `nexus_feedback: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  // 5. Upsert business_logic — extract entities from files and PRD
+  try {
+    const logicEntries: Array<{
+      tenant_id: string;
+      project_id: string;
+      entity_type: string;
+      entity_path: string;
+      entity_name: string;
+      purpose: string;
+      domain: string | null;
+      confidence: number;
+      source: string;
+    }> = [];
+
+    // Extract from generated files
+    if (files && files.length > 0) {
+      for (const f of files) {
+        // React components: export default function ComponentName
+        const compMatch = f.content.match(
+          /export\s+default\s+function\s+(\w+)/,
+        );
+        if (compMatch) {
+          logicEntries.push({
+            tenant_id: tenantId,
+            project_id: projectId,
+            entity_type: "component",
+            entity_path: f.path,
+            entity_name: compMatch[1],
+            purpose: `React component in ${f.path}`,
+            domain: "ui",
+            confidence: 0.85,
+            source: "code_analysis",
+          });
+        }
+
+        // Custom hooks: export function useXxx
+        const hookMatches = f.content.matchAll(
+          /export\s+(?:default\s+)?function\s+(use\w+)/g,
+        );
+        for (const hm of hookMatches) {
+          logicEntries.push({
+            tenant_id: tenantId,
+            project_id: projectId,
+            entity_type: "hook",
+            entity_path: f.path,
+            entity_name: hm[1],
+            purpose: `Custom hook in ${f.path}`,
+            domain: "logic",
+            confidence: 0.85,
+            source: "code_analysis",
+          });
+        }
+      }
+    }
+
+    // Extract from PRD if provided
+    const prd = payload.prd;
+    if (prd) {
+      const newComponents = (prd.new_components as Array<{
+        name: string;
+        description: string;
+      }>) || [];
+      for (const comp of newComponents) {
+        logicEntries.push({
+          tenant_id: tenantId,
+          project_id: projectId,
+          entity_type: "component",
+          entity_path: `prd/${comp.name}`,
+          entity_name: comp.name,
+          purpose: comp.description || `Planned component: ${comp.name}`,
+          domain: "ui",
+          confidence: 0.9,
+          source: "planner_prd",
+        });
+      }
+
+      const dataModel = prd.data_model as
+        | Record<string, { fields?: string[] }>
+        | undefined;
+      if (dataModel) {
+        for (const [name, def] of Object.entries(dataModel)) {
+          logicEntries.push({
+            tenant_id: tenantId,
+            project_id: projectId,
+            entity_type: "collection",
+            entity_path: `data/${name}`,
+            entity_name: name,
+            purpose: `Collection with fields: ${def.fields?.join(", ") || "flexible"}`,
+            domain: "data",
+            confidence: 0.9,
+            source: "planner_prd",
+          });
+        }
+      }
+    }
+
+    if (logicEntries.length > 0) {
+      await db.from("business_logic").upsert(logicEntries, {
+        onConflict: "project_id,entity_type,entity_path",
+      });
+    }
+  } catch (e) {
+    errors.push(
+      `business_logic: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 

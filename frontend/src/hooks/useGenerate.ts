@@ -283,6 +283,7 @@ function recordToNexus(
   prompt: string,
   files: GeneratedFile[],
   pipelineEvents: PipelineEvent[],
+  prd?: Record<string, unknown>,
 ) {
   (async () => {
     try {
@@ -303,7 +304,7 @@ function recordToNexus(
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ projectId, prompt, files, pipelineEvents }),
+        body: JSON.stringify({ projectId, prompt, files, pipelineEvents, prd }),
       });
     } catch {
       // Silently ignore — Nexus recording is best-effort
@@ -888,7 +889,7 @@ export function useGenerate() {
 
       // Record to Neural Nexus (fire-and-forget, non-blocking)
       if (result.files.length > 0) {
-        recordToNexus(prompt, result.files, localEvents);
+        recordToNexus(prompt, result.files, localEvents, prd);
       }
 
       // DONE
