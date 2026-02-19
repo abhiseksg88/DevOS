@@ -248,6 +248,7 @@ class BuildState(TypedDict):
     ast_graph: dict | None          # Layer 1: HOT - dependency graph
     ledger_context: str             # Layer 2: WARM - architectural ledger
     vector_context: str             # Layer 3: COLD - semantic search results
+    integration_context: str        # Layer 4: active integrations (Stripe, OpenAI, etc.)
 
     # Discriminator result
     build_mode: str                 # "genesis" | "surgical"
@@ -1138,6 +1139,9 @@ async def run_build(
         tenant_id, project_id, prompt, settings, limit=5,
     )
 
+    # --- Context Prism Layer 4: Load integration context ---
+    integration_ctx = _fetch_integration_context(tenant_id, project_id, settings)
+
     # --- Fetch user_id from build record for Nexus persona ---
     build_record = db.table("builds").select("user_id").eq("id", build_id).single().execute()
     user_id = build_record.data.get("user_id", "system") or "system"
@@ -1157,6 +1161,7 @@ async def run_build(
         "ast_graph": ast_graph,
         "ledger_context": ledger_ctx,
         "vector_context": vector_ctx,
+        "integration_context": integration_ctx,
         # Discriminator (set by planner_node)
         "build_mode": "",
         "genesis_files": [],
@@ -1218,6 +1223,7 @@ async def run_build_resume(
     existing_files = _load_project_files(tenant_id, project_id, settings)
     ledger_ctx = get_ledger_context(tenant_id, project_id, settings)
     vector_ctx = get_vector_context(tenant_id, project_id, build.data.get("prompt", ""), settings, limit=5)
+    integration_ctx = _fetch_integration_context(tenant_id, project_id, settings)
 
     # Run discriminator on the approved plan
     disc_result = classify_build(tenant_id, project_id, approved_plan, existing_files, settings)
@@ -1240,6 +1246,7 @@ async def run_build_resume(
         "ast_graph": ast_graph,
         "ledger_context": ledger_ctx,
         "vector_context": vector_ctx,
+        "integration_context": integration_ctx,
         "build_mode": disc_result["overall_mode"],
         "genesis_files": disc_result["genesis_files"],
         "surgical_files": disc_result["surgical_files"],
@@ -1311,6 +1318,11 @@ def _build_context(state: BuildState) -> str:
     vector_ctx = state.get("vector_context", "")
     if vector_ctx:
         parts.append(vector_ctx)
+
+    # Layer 4: Integration context — what APIs/SDKs the user has configured
+    integration_ctx = state.get("integration_context", "")
+    if integration_ctx:
+        parts.append(integration_ctx)
 
     # Layer 1: HOT — AST graph summary (for context pruning awareness)
     graph = state.get("ast_graph")
@@ -1403,6 +1415,95 @@ def _update_model_usage(current: dict, model: str, response: dict) -> dict:
     usage[model]["cost"] += response["cost"]
     usage[model]["calls"] += 1
     return usage
+
+
+def _fetch_integration_context(tenant_id: str, project_id: str, settings: Settings) -> str:
+    """
+    Build the integration context string that the agents receive in their prompts.
+
+    Queries active project integrations and returns a prompt-ready description of
+    which APIs/SDKs are configured so that the agents can generate code that
+    actually uses them (Stripe, OpenAI, Resend, etc.).
+
+    Returns an empty string when no integrations are configured or on error,
+    so this is always safe to call.
+    """
+    try:
+        db = _get_db(settings)
+        result = (
+            db.table("project_integrations")
+            .select("provider,category,config,credentials,display_name")
+            .eq("project_id", project_id)
+            .eq("tenant_id", tenant_id)
+            .eq("status", "active")
+            .execute()
+        )
+        if not result.data:
+            return ""
+
+        lines = [
+            "## Available Integrations",
+            "The user has configured these services. Generate code that USES them:\n",
+        ]
+        for row in result.data:
+            provider = row["provider"]
+            config = row.get("config") or {}
+
+            if provider == "openai":
+                model = config.get("model", "gpt-4o")
+                lines.append(
+                    f"- **OpenAI** ({model}): API key configured. "
+                    "Use `fetch('https://api.openai.com/v1/chat/completions', ...)` "
+                    "with key from `window.__integrations?.openai?.api_key`."
+                )
+            elif provider == "anthropic":
+                lines.append(
+                    "- **Anthropic Claude**: API key configured. "
+                    "Use `fetch('https://api.anthropic.com/v1/messages', ...)` "
+                    "with `x-api-key` header from `window.__integrations?.anthropic?.api_key`."
+                )
+            elif provider == "google_ai":
+                lines.append(
+                    "- **Google AI (Gemini)**: API key configured. "
+                    "Use fetch with key from `window.__integrations?.google_ai?.api_key`."
+                )
+            elif provider == "stripe":
+                lines.append(
+                    "- **Stripe Payments**: Keys configured. Load Stripe.js via CDN and init with "
+                    "publishable key from `window.__integrations?.stripe?.publishable_key`. "
+                    "NEVER expose the secret key in frontend code."
+                )
+            elif provider == "resend":
+                lines.append(
+                    "- **Resend Email**: API key configured. Email sending requires a backend proxy — "
+                    "generate a `sendEmail()` helper that calls the preview backend."
+                )
+            elif provider == "supabase":
+                lines.append(
+                    "- **Supabase (Custom)**: URL and anon key at `window.__integrations?.supabase`. "
+                    "Use `supabase.createClient(url, key)` for auth and database."
+                )
+            elif provider == "clerk":
+                lines.append(
+                    "- **Clerk Auth**: Publishable key at `window.__integrations?.clerk?.publishable_key`. "
+                    "Load Clerk.js from CDN."
+                )
+            elif provider == "firebase":
+                lines.append(
+                    "- **Firebase**: Config at `window.__integrations?.firebase`. "
+                    "Load Firebase SDK from CDN."
+                )
+            else:
+                display = row.get("display_name") or provider
+                lines.append(
+                    f"- **{display}**: Configured. "
+                    f"Access via `window.__integrations?.{provider}`."
+                )
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning("Failed to fetch integration context for %s/%s: %s", tenant_id, project_id, e)
+        return ""
 
 
 def _load_project_files(tenant_id: str, project_id: str, settings: Settings) -> dict[str, str]:

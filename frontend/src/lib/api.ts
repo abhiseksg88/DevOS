@@ -216,8 +216,28 @@ export const preview = {
 };
 
 // --- Neural Nexus ---
-// Nexus calls are routed through a same-origin Next.js API proxy (/api/nexus)
-// to avoid CORS issues when the backend is on a different origin (e.g. Railway).
+// Nexus calls go directly to the FastAPI backend (same path as all other API
+// calls).  The backend permits this via FRONTEND_URL in its CORS config.
+// We previously routed through a Next.js proxy (/api/nexus) to avoid CORS, but
+// Netlify serverless functions time out before Railway cold-starts finish, which
+// caused the "Backend Not Connected" banner even when the API was healthy.
+
+function _nexusPath(
+  tenantId: string,
+  projectId: string,
+  action: string,
+  extra?: Record<string, string>,
+): string {
+  const base = `/tenants/${tenantId}/projects/${projectId}/nexus`;
+  switch (action) {
+    case "state":    return base;
+    case "context":  return `${base}/context`;
+    case "persona":  return `${base}/persona`;
+    case "feedback": return `${base}/feedback`;
+    case "activity": return `${base}/activity?limit=${extra?.limit ?? "20"}`;
+    default:         return base;
+  }
+}
 
 async function nexusProxy<T>(
   method: string,
@@ -228,27 +248,8 @@ async function nexusProxy<T>(
   extra?: Record<string, string>,
   body?: unknown,
 ): Promise<T> {
-  const params = new URLSearchParams({ tenantId, projectId, action, ...extra });
-  // Same-origin call — goes to the Next.js API proxy, NOT the Railway backend
-  const url = `/api/nexus?${params.toString()}`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch {
-    throw new Error("Failed to reach Neural Nexus proxy. Please reload and try again.");
-  }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? `Neural Nexus error ${res.status}`);
-  }
-  return res.json();
+  // Direct call to the backend — avoids Netlify serverless function timeout
+  return request<T>(method, _nexusPath(tenantId, projectId, action, extra), token, body);
 }
 
 export const nexus = {
