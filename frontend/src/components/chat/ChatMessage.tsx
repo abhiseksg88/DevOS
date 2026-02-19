@@ -4,6 +4,7 @@ import type { ChatMessage } from "@/types";
 import { cn } from "@/lib/utils";
 import { User, Bot, CheckCircle2, Circle, XCircle, Loader2 } from "lucide-react";
 import { PlanCard } from "./PlanCard";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { AgentPipeline } from "./AgentPipeline";
 import { BuildSummary } from "./BuildSummary";
 
@@ -47,6 +48,22 @@ export function ChatMessageBubble({
           onApprove={onApprovePlan ?? (() => {})}
           onModify={onModifyPlan ?? (() => {})}
           onReject={onRejectPlan ?? (() => {})}
+          disabled={message.planStatus === "building" || message.planStatus === "completed"}
+        />
+      </div>
+    );
+  }
+
+  // Rich message: Architecture Proposal
+  if (message.type === "proposal" && message.proposal) {
+    return (
+      <div className="animate-slide-up px-1">
+        <PlanReviewCard
+          proposal={message.proposal}
+          criticalQuestion={message.criticalQuestion}
+          status={message.planStatus ?? "pending"}
+          onApprove={onApprovePlan ?? (() => {})}
+          onModify={onModifyPlan ?? (() => {})}
           disabled={message.planStatus === "building" || message.planStatus === "completed"}
         />
       </div>

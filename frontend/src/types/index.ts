@@ -175,15 +175,31 @@ export interface ChatMessage {
   buildId?: string;
   status?: BuildStatus;
   /** Rich message discriminator */
-  type?: "text" | "plan" | "pipeline" | "summary";
+  type?: "text" | "plan" | "pipeline" | "summary" | "proposal";
   /** PRD from Analyzer (for type="plan") */
   prd?: Record<string, unknown>;
-  /** Plan review status (for type="plan") */
+  /** Plan review status (for type="plan" and type="proposal") */
   planStatus?: "pending" | "approved" | "modified" | "building" | "completed";
   /** Generated files list (for type="summary") */
   buildFiles?: Array<{ path: string }>;
   /** Pipeline stages (for type="pipeline") */
   pipelineStages?: ChatPipelineStage[];
+  /** Architecture proposal from Lead Product Architect (for type="proposal") */
+  proposal?: {
+    app_name?: string;
+    roles?: Array<{ name: string; can?: string[] }>;
+    schema?: Record<string, { fields?: string[]; owner?: string }>;
+    security?: {
+      auth_required?: boolean;
+      rbac?: boolean;
+      data_isolation?: string;
+      sensitive_fields?: string[];
+      audit_trail?: boolean;
+    };
+    screens?: string[];
+  };
+  /** Critical question from planner (for type="proposal") */
+  criticalQuestion?: string;
 }
 
 /** File node in the editor tree */
