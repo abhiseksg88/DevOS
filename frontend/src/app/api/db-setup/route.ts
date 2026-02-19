@@ -69,6 +69,27 @@ DO $$ BEGIN
         CREATE POLICY app_data_delete ON app_data FOR DELETE
             USING (tenant_id = ANY(public.get_tenant_ids()));
     END IF;
+
+    -- Permissive policies for generated app end-users (migration 011)
+    -- Generated apps call supabase.auth.signUp(), creating users NOT in tenant_members.
+    -- These policies allow any authenticated user to access app_data.
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_authenticated_select') THEN
+        CREATE POLICY app_data_authenticated_select ON app_data FOR SELECT
+            USING (auth.uid() IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_authenticated_insert') THEN
+        CREATE POLICY app_data_authenticated_insert ON app_data FOR INSERT
+            WITH CHECK (auth.uid() IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_authenticated_update') THEN
+        CREATE POLICY app_data_authenticated_update ON app_data FOR UPDATE
+            USING (auth.uid() IS NOT NULL)
+            WITH CHECK (auth.uid() IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'app_data' AND policyname = 'app_data_authenticated_delete') THEN
+        CREATE POLICY app_data_authenticated_delete ON app_data FOR DELETE
+            USING (auth.uid() IS NOT NULL);
+    END IF;
 END $$;
 `;
 
