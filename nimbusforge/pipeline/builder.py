@@ -74,12 +74,18 @@ def apply_and_build(
             _generate_dockerfile(repo_dir, settings)
             _git_commit(repo_dir, f"build: auto-generate Dockerfile [build:{build_id[:8]}]", build_id, model_usage)
 
-        # Step 6: Build Docker image
+        # Step 6: Build Docker image (skip when Docker is unavailable, e.g. Railway)
         image_tag = f"{settings.container_registry}/{tenant_id}/{project_id}:{build_id[:12]}"
-        _build_image(repo_dir, image_tag, settings)
+        if settings.skip_docker_build:
+            import logging
+            logging.getLogger(__name__).info(
+                "SKIP_DOCKER_BUILD=true — skipping image build/push for build %s", build_id
+            )
+        else:
+            _build_image(repo_dir, image_tag, settings)
 
-        # Step 7: Push image to registry
-        _push_image(image_tag, settings)
+            # Step 7: Push image to registry
+            _push_image(image_tag, settings)
 
         # Step 8: Upload source back to storage
         _sync_to_storage(repo_dir, tenant_id, project_id, settings)
