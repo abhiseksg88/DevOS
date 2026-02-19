@@ -294,7 +294,7 @@ export function streamBuildEvents(
   buildId: string,
   afterSeq = 0,
   onEvent: (event: Record<string, unknown>) => void,
-  onEnd: () => void,
+  onEnd: (buildStatus?: string) => void,
   onError: (err: Error) => void
 ): () => void {
   const url = `${API}/tenants/${tenantId}/projects/${projectId}/builds/${buildId}/events?after_seq=${afterSeq}`;
@@ -326,7 +326,7 @@ export function streamBuildEvents(
             try {
               const data = JSON.parse(line.slice(6));
               if (data.kind === "stream_end") {
-                onEnd();
+                onEnd(data.build_status as string | undefined);
                 return;
               }
               onEvent(data);

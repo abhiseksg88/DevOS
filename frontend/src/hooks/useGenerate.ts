@@ -314,24 +314,35 @@ export function useGenerate(options?: UseGenerateOptions) {
         buildId,
         fromSeq,
         handleBackendEvent,
-        // onEnd — stream closed normally
-        () => {
+        // onEnd — stream closed; build_status tells us the terminal state
+        (buildStatus?: string) => {
           setState((prev) => {
-            // Running phases → done. awaiting_approval keeps its state
-            // (the stream intentionally pauses; it is not "ended").
+            // Already in a terminal or paused state — nothing to do
             if (
-              prev.pipelinePhase === "building" ||
-              prev.pipelinePhase === "reviewing" ||
-              prev.pipelinePhase === "fixing"
+              prev.pipelinePhase === "done" ||
+              prev.pipelinePhase === "error" ||
+              prev.pipelinePhase === "idle" ||
+              prev.pipelinePhase === "awaiting_approval" // intentional pause
             ) {
+              return prev;
+            }
+            // Build failed or was cancelled → show error
+            if (buildStatus === "failed" || buildStatus === "cancelled") {
               return {
                 ...prev,
                 isGenerating: false,
                 isAnalyzing: false,
-                pipelinePhase: "done",
+                pipelinePhase: "error",
+                error: prev.error || `Build ${buildStatus}. Check your API keys and try again.`,
               };
             }
-            return prev;
+            // Any active phase (analyzing, building, reviewing, fixing) → done
+            return {
+              ...prev,
+              isGenerating: false,
+              isAnalyzing: false,
+              pipelinePhase: "done",
+            };
           });
         },
         // onError

@@ -66,6 +66,71 @@ from ..services.patch_apply import apply_all_patches
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Neural Nexus helpers — safe wrappers that never break the pipeline
+# ---------------------------------------------------------------------------
+
+def _nexus_start(
+    settings: Settings,
+    tenant_id: str,
+    project_id: str,
+    build_id: str,
+    agent_role: str,
+    agent_step: str,
+    model_tier: str,
+    model_id: str,
+    input_summary: str,
+) -> tuple:
+    """Start a Nexus agent execution record. Returns (nexus_engine | None, exec_id | '')."""
+    try:
+        from ..nexus.engine import NexusEngine
+        nexus = NexusEngine(settings)
+        exec_id = nexus.start_agent_execution(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            build_id=build_id,
+            agent_role=agent_role,
+            agent_step=agent_step,
+            model_tier=model_tier,
+            model_id=model_id,
+            input_summary=input_summary[:500] if input_summary else None,
+        )
+        return nexus, exec_id
+    except Exception as _e:
+        logger.debug("Nexus start_agent_execution skipped: %s", _e)
+        return None, ""
+
+
+def _nexus_complete(
+    nexus,
+    exec_id: str,
+    status: str,
+    output_summary: str | None = None,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    cost_usd: float = 0.0,
+    latency_ms: int = 0,
+    error: str | None = None,
+) -> None:
+    """Complete a Nexus agent execution record."""
+    if nexus is None or not exec_id:
+        return
+    try:
+        nexus.complete_agent_execution(
+            execution_id=exec_id,
+            status=status,
+            output_summary=output_summary[:500] if output_summary else None,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            error=error,
+        )
+    except Exception as _e:
+        logger.debug("Nexus complete_agent_execution skipped: %s", _e)
+
+
 # ---------------------------------------------------------------------------
 # Supabase helper (uses service-role)
 # ---------------------------------------------------------------------------
@@ -422,6 +487,12 @@ def planner_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "planning", settings, started_at=datetime.now(timezone.utc).isoformat())
     state["event_seq"] = _emit_event(state, "agent_start", "opus", {"agent": "planner", "message": "Planning architecture and tasks..."}, settings)
+    _planner_t0 = time.monotonic()
+    _nexus_eng, _nexus_eid = _nexus_start(
+        settings, state["tenant_id"], state["project_id"], state["build_id"],
+        "shadow_cto", "plan", "opus", settings.model_opus,
+        input_summary=state.get("prompt", "")[:500],
+    )
 
     # --- Plan cache check ---
     prompt_hash = hashlib.sha256(state["prompt"].strip().lower().encode()).hexdigest()
@@ -491,6 +562,10 @@ def planner_node(state: BuildState) -> dict:
         else:
             plan["needs_scaffold"] = False
 
+        _nexus_complete(_nexus_eng, _nexus_eid, "succeeded",
+            output_summary=plan.get("summary", "")[:500],
+            latency_ms=int((time.monotonic() - _planner_t0) * 1000),
+        )
         return {
             "plan": plan,
             "plan_from_cache": True,
@@ -573,6 +648,13 @@ def planner_node(state: BuildState) -> dict:
         settings,
     )
 
+    _nexus_complete(_nexus_eng, _nexus_eid, "succeeded",
+        output_summary=plan.get("summary", "")[:500],
+        tokens_in=response["tokens_in"],
+        tokens_out=response["tokens_out"],
+        cost_usd=response["cost"],
+        latency_ms=int((time.monotonic() - _planner_t0) * 1000),
+    )
     return {
         "plan": plan,
         "plan_from_cache": False,
@@ -601,6 +683,12 @@ def scaffolder_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "scaffolding", settings)
     state["event_seq"] = _emit_event(state, "agent_start", "deepseek", {"agent": "scaffolder", "message": "Generating project scaffold..."}, settings)
+    _scaff_t0 = time.monotonic()
+    _scaff_nexus, _scaff_eid = _nexus_start(
+        settings, state["tenant_id"], state["project_id"], state["build_id"],
+        "principal_builder", "scaffold", "deepseek", settings.model_deepseek,
+        input_summary=f"Scaffold for: {state.get('prompt', '')[:300]}",
+    )
 
     plan = state["plan"]
     context = _build_context(state)
@@ -650,6 +738,13 @@ def scaffolder_node(state: BuildState) -> dict:
             settings,
         )
 
+    _nexus_complete(_scaff_nexus, _scaff_eid, "succeeded",
+        output_summary=f"Scaffolded {len(files)} files: {', '.join(list(files.keys())[:5])}",
+        tokens_in=response["tokens_in"],
+        tokens_out=response["tokens_out"],
+        cost_usd=response["cost"],
+        latency_ms=int((time.monotonic() - _scaff_t0) * 1000),
+    )
     return {
         "scaffold_files": files,
         "event_seq": state["event_seq"],
@@ -668,6 +763,12 @@ def coder_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "coding", settings)
     state["event_seq"] = _emit_event(state, "agent_start", "sonnet", {"agent": "coder", "message": "Generating code patches..."}, settings)
+    _coder_t0 = time.monotonic()
+    _coder_nexus, _coder_eid = _nexus_start(
+        settings, state["tenant_id"], state["project_id"], state["build_id"],
+        "principal_builder", "code", "sonnet", settings.model_sonnet,
+        input_summary=f"Code patches for: {state.get('prompt', '')[:300]}",
+    )
 
     plan = state["plan"]
     context = _build_context(state)
@@ -729,6 +830,13 @@ def coder_node(state: BuildState) -> dict:
     _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     state["event_seq"] = _emit_event(state, "agent_end", "sonnet", {"agent": "coder", "patch_count": len(patches)}, settings)
 
+    _nexus_complete(_coder_nexus, _coder_eid, "succeeded",
+        output_summary=f"Generated {len(patches)} patches",
+        tokens_in=response["tokens_in"],
+        tokens_out=response["tokens_out"],
+        cost_usd=response["cost"],
+        latency_ms=int((time.monotonic() - _coder_t0) * 1000),
+    )
     return {
         "patches": patches,
         "event_seq": state["event_seq"],
@@ -792,6 +900,12 @@ def reviewer_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "reviewing", settings)
     state["event_seq"] = _emit_event(state, "agent_start", "sonnet", {"agent": "reviewer", "message": "Reviewing patches..."}, settings)
+    _rev_t0 = time.monotonic()
+    _rev_nexus, _rev_eid = _nexus_start(
+        settings, state["tenant_id"], state["project_id"], state["build_id"],
+        "red_team_sentinel", "review", "sonnet", settings.model_sonnet,
+        input_summary=f"Review {len(state.get('patches', []))} patches for: {state.get('prompt', '')[:200]}",
+    )
 
     messages = [
         {"role": "system", "content": REVIEWER_SYSTEM},
@@ -820,6 +934,15 @@ def reviewer_node(state: BuildState) -> dict:
         settings,
     )
 
+    _approved = review.get("approved", False)
+    _nexus_complete(_rev_nexus, _rev_eid,
+        status="succeeded" if _approved else "rejected",
+        output_summary=f"{'Approved' if _approved else 'Rejected'}: {len(review.get('findings', []))} findings",
+        tokens_in=response["tokens_in"],
+        tokens_out=response["tokens_out"],
+        cost_usd=response["cost"],
+        latency_ms=int((time.monotonic() - _rev_t0) * 1000),
+    )
     return {
         "review_result": review,
         "review_iterations": state["review_iterations"] + 1,
@@ -839,6 +962,12 @@ def committer_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "building", settings)
     state["event_seq"] = _emit_event(state, "build_progress", None, {"message": "Applying patches and building image..."}, settings)
+    _comm_t0 = time.monotonic()
+    _comm_nexus, _comm_eid = _nexus_start(
+        settings, state["tenant_id"], state["project_id"], state["build_id"],
+        "staff_engineer", "commit", "none", "none",
+        input_summary=f"Apply {len(state.get('patches', []))} patches, run sentinel",
+    )
 
     from ..pipeline.builder import apply_and_build
 
@@ -961,6 +1090,10 @@ def committer_node(state: BuildState) -> dict:
         settings,
     )
 
+    _nexus_complete(_comm_nexus, _comm_eid, "succeeded",
+        output_summary=f"Committed {result.get('commit_sha', '')[:8]}, sentinel: {'clean' if not sentinel_result or sentinel_result.get('clean') else 'issues'}",
+        latency_ms=int((time.monotonic() - _comm_t0) * 1000),
+    )
     return {
         "commit_sha": result["commit_sha"],
         "image_tag": result["image_tag"],
@@ -977,6 +1110,12 @@ def deployer_node(state: BuildState) -> dict:
     settings = Settings(**state["settings"])
     _update_build_status(state, "deploying", settings)
     state["event_seq"] = _emit_event(state, "deploy_progress", None, {"message": "Deploying to preview..."}, settings)
+    _dep_t0 = time.monotonic()
+    _dep_nexus, _dep_eid = _nexus_start(
+        settings, state["tenant_id"], state["project_id"], state["build_id"],
+        "devops_lead", "deploy", "none", "none",
+        input_summary=f"Deploy image {state.get('image_tag', 'unknown')}",
+    )
 
     from ..pipeline.deployer import deploy_preview
 
@@ -1018,6 +1157,43 @@ def deployer_node(state: BuildState) -> dict:
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", state["build_id"]).execute()
 
+    # --- Sync Project State Matrix (PSM) with final built files ---
+    try:
+        all_final_files = {**state.get("existing_files", {}), **state.get("scaffold_files", {})}
+        if all_final_files and _dep_nexus:
+            _dep_nexus.update_file_graph(state["tenant_id"], state["project_id"], all_final_files)
+    except Exception as _psm_err:
+        logger.warning("Nexus PSM sync failed (non-critical): %s", _psm_err)
+
+    # --- Feed successful build into Nexus flywheel ---
+    try:
+        if _dep_nexus:
+            files_changed = list(set(
+                f for p in state.get("patches", []) for f in _extract_files_from_patch(p)
+            ))
+            _dep_nexus.record_feedback(
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                user_id=state.get("user_id", "system"),
+                event_type="code_accepted",
+                feedback={
+                    "files_changed": files_changed,
+                    "patch_count": len(state.get("patches", [])),
+                    "commit_sha": state.get("commit_sha"),
+                    "deploy_url": result.get("preview_url"),
+                    "total_cost_usd": state.get("total_cost_usd", 0),
+                },
+                agent="principal_builder",
+                prompt=state.get("prompt", ""),
+                response_summary=f"Built {len(files_changed)} files, deployed to {result.get('preview_url', 'unknown')}",
+            )
+    except Exception as _fb_err:
+        logger.warning("Nexus feedback record failed (non-critical): %s", _fb_err)
+
+    _nexus_complete(_dep_nexus, _dep_eid, "succeeded",
+        output_summary=f"Deployed to {result.get('preview_url', 'unknown')}",
+        latency_ms=int((time.monotonic() - _dep_t0) * 1000),
+    )
     return {
         "deploy_url": result["preview_url"],
         "event_seq": state["event_seq"],

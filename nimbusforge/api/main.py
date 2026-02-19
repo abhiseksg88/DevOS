@@ -605,14 +605,37 @@ async def _run_build_pipeline(
             settings=settings,
         )
     except Exception as e:
-        # If the pipeline crashes, mark the build as failed
-        from supabase import create_client
-        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
-        db.table("builds").update({
-            "status": "failed",
-            "error_message": str(e),
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", build_id).execute()
+        # If the pipeline crashes, emit an error event and mark the build as failed
+        logger.exception("Build pipeline failed for build_id=%s: %s", build_id, e)
+        try:
+            from supabase import create_client
+            db = create_client(settings.supabase_url, settings.supabase_service_role_key)
+            # Emit an error event so the SSE stream delivers a visible error to the frontend
+            seq_res = (
+                db.table("build_events")
+                .select("seq")
+                .eq("build_id", build_id)
+                .order("seq", desc=True)
+                .limit(1)
+                .execute()
+            )
+            next_seq = (seq_res.data[0]["seq"] if seq_res.data else 0) + 1
+            db.table("build_events").insert({
+                "id": str(uuid4()),
+                "tenant_id": tenant_id,
+                "build_id": build_id,
+                "kind": "error",
+                "agent": None,
+                "payload": {"message": f"Build failed: {e}"},
+                "seq": next_seq,
+            }).execute()
+            db.table("builds").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", build_id).execute()
+        except Exception as inner_e:
+            logger.error("Failed to record pipeline failure for build_id=%s: %s", build_id, inner_e)
 
 
 @app.get(
@@ -777,13 +800,35 @@ async def _resume_build_pipeline(
             settings=settings,
         )
     except Exception as e:
-        from supabase import create_client
-        db = create_client(settings.supabase_url, settings.supabase_service_role_key)
-        db.table("builds").update({
-            "status": "failed",
-            "error_message": str(e),
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", build_id).execute()
+        logger.exception("Resume pipeline failed for build_id=%s: %s", build_id, e)
+        try:
+            from supabase import create_client
+            db = create_client(settings.supabase_url, settings.supabase_service_role_key)
+            seq_res = (
+                db.table("build_events")
+                .select("seq")
+                .eq("build_id", build_id)
+                .order("seq", desc=True)
+                .limit(1)
+                .execute()
+            )
+            next_seq = (seq_res.data[0]["seq"] if seq_res.data else 0) + 1
+            db.table("build_events").insert({
+                "id": str(uuid4()),
+                "tenant_id": tenant_id,
+                "build_id": build_id,
+                "kind": "error",
+                "agent": None,
+                "payload": {"message": f"Build failed: {e}"},
+                "seq": next_seq,
+            }).execute()
+            db.table("builds").update({
+                "status": "failed",
+                "error_message": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", build_id).execute()
+        except Exception as inner_e:
+            logger.error("Failed to record pipeline failure for build_id=%s: %s", build_id, inner_e)
 
 
 # ===========================================================================
@@ -1772,7 +1817,7 @@ async def get_nexus_state(
     try:
         from ..nexus.engine import NexusEngine
         nexus = NexusEngine(settings)
-        return nexus.get_full_state(tenant_id, project_id, user.user_id)
+        return nexus.get_full_state(tenant_id, project_id, str(user.user_id))
     except Exception as e:
         import logging
         logging.getLogger("vedaa.nexus").warning("Nexus state load failed: %s", e)
@@ -1813,7 +1858,7 @@ async def get_persona(
     try:
         from ..nexus.engine import NexusEngine
         nexus = NexusEngine(settings)
-        persona = nexus._get_or_create_persona(tenant_id, user.user_id)
+        persona = nexus._get_or_create_persona(tenant_id, str(user.user_id))
         return {
             "preferences": persona.get("preferences", {}),
             "expertise": persona.get("expertise", {}),
@@ -1842,11 +1887,11 @@ async def update_persona(
 
     if "preferences" in data:
         for key, value in data["preferences"].items():
-            nexus.update_persona_preference(tenant_id, user.user_id, key, value)
+            nexus.update_persona_preference(tenant_id, str(user.user_id), key, value)
 
     if "expertise" in data:
         for domain, level in data["expertise"].items():
-            nexus.update_persona_expertise(tenant_id, user.user_id, domain, level)
+            nexus.update_persona_expertise(tenant_id, str(user.user_id), domain, level)
 
     return {"status": "updated"}
 
@@ -1866,7 +1911,7 @@ async def record_feedback(
     nexus.record_feedback(
         tenant_id=tenant_id,
         project_id=project_id,
-        user_id=user.user_id,
+        user_id=str(user.user_id),
         event_type=data.get("event_type", "code_accepted"),
         feedback=data.get("feedback", {}),
         agent=data.get("agent"),
@@ -1901,5 +1946,5 @@ async def get_nexus_context(
     """Get the Neural Nexus context string for code generation."""
     from ..nexus.engine import NexusEngine
     nexus = NexusEngine(settings)
-    ctx = nexus.get_context(tenant_id, project_id, user.user_id, "principal_builder")
+    ctx = nexus.get_context(tenant_id, project_id, str(user.user_id), "principal_builder")
     return {"context": ctx.to_prompt_section()}
