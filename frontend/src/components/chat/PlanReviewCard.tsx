@@ -101,8 +101,8 @@ export function PlanReviewCard({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {/* Roles */}
           {roles.length > 0 && (
-            <div className="bg-surface-0/50 border border-surface-3 rounded-xl p-3">
-              <div className="flex items-center gap-1.5 text-2xs font-medium text-blue-400 uppercase tracking-wider mb-2">
+            <div className="bg-surface-0/50 border border-surface-3 rounded-xl p-3 max-h-48 overflow-y-auto">
+              <div className="flex items-center gap-1.5 text-2xs font-medium text-blue-400 uppercase tracking-wider mb-2 sticky top-0 bg-surface-0/90 -mt-1 pt-1 pb-1">
                 <Users className="w-3.5 h-3.5" /> User Roles
               </div>
               <div className="flex flex-wrap gap-1">
@@ -132,8 +132,8 @@ export function PlanReviewCard({
 
           {/* Schema / Data Model */}
           {Object.keys(schema).length > 0 && (
-            <div className="bg-surface-0/50 border border-surface-3 rounded-xl p-3">
-              <div className="flex items-center gap-1.5 text-2xs font-medium text-emerald-400 uppercase tracking-wider mb-2">
+            <div className="bg-surface-0/50 border border-surface-3 rounded-xl p-3 max-h-48 overflow-y-auto">
+              <div className="flex items-center gap-1.5 text-2xs font-medium text-emerald-400 uppercase tracking-wider mb-2 sticky top-0 bg-surface-0/90 -mt-1 pt-1 pb-1">
                 <Database className="w-3.5 h-3.5" /> Core Data
               </div>
               <div className="space-y-1.5">
