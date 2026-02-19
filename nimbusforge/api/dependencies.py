@@ -4,10 +4,13 @@ FastAPI dependencies: Supabase clients, auth, rate limiting.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from typing import Optional
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from fastapi import Depends, Header, HTTPException, Request
 from supabase import create_client, Client
@@ -64,7 +67,7 @@ class AuthUser:
         return self._db
 
     def assert_tenant_access(self, tenant_id: UUID):
-        """Raise 403 if the user is not a member of the given tenant.
+        """Raise 403 if the user is not a member of a valid tenant.
 
         Uses a targeted single-row query rather than a pre-fetched list so that
         newly-created memberships are always visible and there is no window where
@@ -73,11 +76,11 @@ class AuthUser:
         Always uses a fresh service-role client to guarantee RLS is bypassed,
         regardless of any auth state that may have been set during JWT validation.
 
-        Auto-heal: If the tenant exists but has ZERO members in tenant_members
-        (e.g., created directly in Supabase Studio without going through the API),
-        the requesting user is automatically inserted as owner.  This only fires
-        when the membership table is completely empty for that tenant — tenants
-        that have existing members still enforce the normal 403.
+        Auto-heal: If the tenant exists in the tenants table but this specific
+        user has no membership row, they are automatically inserted as owner.
+        This handles auth re-registration (e.g. switching auth providers) and
+        tenants created outside the API. Tenants that do not exist at all still
+        return 403.
         """
         if self.is_service_role:
             return
@@ -97,26 +100,39 @@ class AuthUser:
         if result.data:
             return
 
-        # --- 2. Slow path: check if the tenant has ANY members at all ---
-        any_member = (
-            db.table("tenant_members")
-            .select("tenant_id")
-            .eq("tenant_id", str(tenant_id))
+        # --- 2. Slow path: verify the tenant exists, then auto-heal membership ---
+        tenant_exists = (
+            db.table("tenants")
+            .select("id")
+            .eq("id", str(tenant_id))
             .limit(1)
             .execute()
         )
-        if not any_member.data:
-            # Tenant was created without a membership row (e.g. via Studio).
-            # Auto-insert the requesting user as owner and allow the request.
-            try:
-                db.table("tenant_members").insert({
-                    "tenant_id": str(tenant_id),
-                    "user_id": str(self.user_id),
-                    "role": "owner",
-                }).execute()
-                return
-            except Exception:
-                pass  # Fall through to 403 if insert also fails
+        if not tenant_exists.data:
+            raise HTTPException(status_code=403, detail="Access denied to this tenant")
+
+        # Tenant exists but this user has no membership row (e.g. auth provider
+        # change, Studio-created tenant, or stale member rows from a prior user).
+        # Auto-insert as owner so the user is not permanently locked out.
+        try:
+            db.table("tenant_members").insert({
+                "tenant_id": str(tenant_id),
+                "user_id": str(self.user_id),
+                "role": "owner",
+            }).execute()
+            logger.warning(
+                "Auto-healed missing tenant_members row: tenant=%s user=%s",
+                tenant_id,
+                self.user_id,
+            )
+            return
+        except Exception as exc:
+            logger.error(
+                "Auto-heal insert failed: tenant=%s user=%s error=%s",
+                tenant_id,
+                self.user_id,
+                exc,
+            )
 
         raise HTTPException(status_code=403, detail="Access denied to this tenant")
 
