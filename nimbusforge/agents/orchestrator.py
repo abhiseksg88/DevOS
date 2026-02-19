@@ -336,6 +336,84 @@ def _log_usage(state: BuildState, model: str, tokens_in: int, tokens_out: int, c
 
 
 # ---------------------------------------------------------------------------
+# Helper: Ingest planner proposal into Neural Nexus Business Logic Layer
+# ---------------------------------------------------------------------------
+
+def _ingest_proposal_to_nexus(plan: dict, state: BuildState, settings: Settings):
+    """Write the planner's domain proposal (roles, schema, security) to Nexus.
+
+    Uses NexusEngine.upsert_business_logic() which is idempotent
+    (on_conflict=project_id,entity_type,entity_path), so cached plans
+    can safely re-ingest without duplicates.
+    """
+    proposal = plan.get("proposal", {})
+    if not proposal:
+        return
+
+    try:
+        from ..nexus.engine import NexusEngine
+        nexus = NexusEngine(settings)
+
+        # Ingest roles as business logic entries
+        for role in proposal.get("roles", []):
+            nexus.upsert_business_logic(
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                entity_type="role",
+                entity_path=f"auth/roles/{role['name']}",
+                entity_name=role["name"],
+                purpose=f"Role with permissions: {', '.join(role.get('can', []))}",
+                domain="auth",
+                business_rules=role.get("can", []),
+                confidence=0.9,
+                source="planner_proposal",
+            )
+
+        # Ingest schema entities as business logic entries
+        for entity_name, entity_def in proposal.get("schema", {}).items():
+            fields = entity_def.get("fields", []) if isinstance(entity_def, dict) else []
+            owner = entity_def.get("owner", "any") if isinstance(entity_def, dict) else "any"
+            nexus.upsert_business_logic(
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                entity_type="collection",
+                entity_path=f"data/{entity_name}",
+                entity_name=entity_name,
+                purpose=f"Collection with fields: {', '.join(fields)}",
+                domain="data",
+                business_rules=[f"owner: {owner}"],
+                confidence=0.9,
+                source="planner_proposal",
+            )
+
+        # Ingest security posture
+        security = proposal.get("security", {})
+        if security and isinstance(security, dict):
+            nexus.upsert_business_logic(
+                tenant_id=state["tenant_id"],
+                project_id=state["project_id"],
+                entity_type="security_policy",
+                entity_path="security/posture",
+                entity_name="app_security",
+                purpose=(
+                    f"Auth: {security.get('auth_required', False)}, "
+                    f"RBAC: {security.get('rbac', False)}, "
+                    f"Isolation: {security.get('data_isolation', 'public')}"
+                ),
+                domain="security",
+                business_rules=[
+                    f"sensitive_fields: {security.get('sensitive_fields', [])}",
+                    f"audit_trail: {security.get('audit_trail', False)}",
+                ],
+                confidence=0.9,
+                source="planner_proposal",
+            )
+
+    except Exception as nexus_err:
+        logger.warning("Early Nexus ingestion failed (non-fatal): %s", nexus_err)
+
+
+# ---------------------------------------------------------------------------
 # Node: PLANNER (Opus — architecture + task breakdown)
 # ---------------------------------------------------------------------------
 
@@ -360,7 +438,44 @@ def planner_node(state: BuildState) -> dict:
 
     if cache_result.data:
         plan = cache_result.data[0]["plan_json"]
-        state["event_seq"] = _emit_event(state, "info", "opus", {"message": "Using cached plan"}, settings)
+        is_proposal = plan.get("proposal") and not plan.get("tasks")
+
+        # --- Proposal Approved: Re-run LLM in EXECUTION mode ---
+        if is_proposal and state.get("hitl_approved"):
+            state["event_seq"] = _emit_event(state, "info", "opus", {"message": "Proposal approved — generating full task list..."}, settings)
+            context = _build_context(state)
+            proposal_json = json.dumps(plan["proposal"], indent=2)
+            messages = [
+                {"role": "system", "content": PLANNER_SYSTEM},
+                {"role": "user", "content": (
+                    f"## Project Context\n{context}\n\n"
+                    f"## PROPOSAL APPROVED\nThe following proposal was approved by the user:\n"
+                    f"```json\n{proposal_json}\n```\n\n"
+                    f"## Original Request\n{state['prompt']}\n\n"
+                    f"Generate the full task list (MODE 2: EXECUTION). Keep the proposal object intact."
+                )},
+            ]
+            response = call_llm(ModelTier.OPUS, messages, settings)
+            plan = _parse_json_response(response["content"])
+
+            # Update cache with full plan
+            db.table("plan_cache").upsert({
+                "id": str(uuid4()),
+                "tenant_id": state["tenant_id"],
+                "project_id": state["project_id"],
+                "prompt_hash": prompt_hash,
+                "plan_json": plan,
+                "tokens_used": response["tokens_in"] + response["tokens_out"],
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=settings.plan_cache_ttl_seconds)).isoformat(),
+            }, on_conflict="project_id,prompt_hash").execute()
+
+            _log_usage(state, "opus", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+            state["event_seq"] = _emit_event(state, "agent_end", "opus", {"agent": "planner", "plan_summary": plan.get("summary", "")}, settings)
+        else:
+            state["event_seq"] = _emit_event(state, "info", "opus", {"message": "Using cached plan"}, settings)
+
+        # Ingest proposal into Nexus (idempotent upsert)
+        _ingest_proposal_to_nexus(plan, state, settings)
 
         # Still run discriminator even for cached plans
         disc_result = classify_build(
@@ -407,6 +522,21 @@ def planner_node(state: BuildState) -> dict:
 
     _log_usage(state, "opus", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     state["event_seq"] = _emit_event(state, "agent_end", "opus", {"agent": "planner", "plan_summary": plan.get("summary", "")}, settings)
+
+    # --- Early Nexus Ingestion: write proposal to Business Logic Layer ---
+    _ingest_proposal_to_nexus(plan, state, settings)
+
+    # --- Emit architectural proposal event for frontend ---
+    if plan.get("proposal"):
+        state["event_seq"] = _emit_event(
+            state, "architectural_proposal", "opus",
+            {
+                "proposal": plan["proposal"],
+                "critical_question": plan.get("critical_question", ""),
+                "is_proposal_only": not plan.get("tasks"),
+            },
+            settings,
+        )
 
     # --- Phase 2: Run discriminator (backend-enforced, not LLM-decided) ---
     disc_result = classify_build(
@@ -616,12 +746,15 @@ def hitl_gate_node(state: BuildState) -> dict:
         "status": "awaiting_approval",
     }).eq("id", state["build_id"]).execute()
 
+    plan = state["plan"] or {}
     state["event_seq"] = _emit_event(
         state, "info", None,
         {
             "message": "Plan ready for review",
             "hitl_required": True,
-            "plan": state["plan"],
+            "plan": plan,
+            "critical_question": plan.get("critical_question", ""),
+            "proposal": plan.get("proposal"),
         },
         settings,
     )

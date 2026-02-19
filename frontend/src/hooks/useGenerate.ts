@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { FileNode } from "@/types";
+import { createClient } from "@/lib/supabase/client";
 
 interface GeneratedFile {
   path: string;
@@ -271,6 +272,43 @@ function parseFiles(text: string, allowTruncated = false, existingFiles?: { path
   }
 
   return files;
+}
+
+/**
+ * Fire-and-forget: record generation telemetry to Neural Nexus tables.
+ * Extracts projectId from the URL and auth token from the Supabase session.
+ * Non-blocking — failures are logged but never surface to the user.
+ */
+function recordToNexus(
+  prompt: string,
+  files: GeneratedFile[],
+  pipelineEvents: PipelineEvent[],
+) {
+  (async () => {
+    try {
+      // Extract projectId from URL: /project/{id}
+      const pathParts = window.location.pathname.split("/");
+      const projIdx = pathParts.indexOf("project");
+      const projectId = projIdx >= 0 ? pathParts[projIdx + 1] : null;
+      if (!projectId) return;
+
+      // Get auth token from Supabase session
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      await fetch("/api/nexus/record", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ projectId, prompt, files, pipelineEvents }),
+      });
+    } catch {
+      // Silently ignore — Nexus recording is best-effort
+    }
+  })();
 }
 
 /** Flatten file tree to get existing file contents for context */
@@ -658,6 +696,9 @@ export function useGenerate() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Local event tracker for Nexus recording (avoids stale state in useCallback)
+      const localEvents: PipelineEvent[] = [];
+
       setState((prev) => ({
         ...prev,
         isGenerating: true,
@@ -716,11 +757,13 @@ export function useGenerate() {
         return result;
       }
 
+      const coderMeta = { tokens_in: 0, tokens_out: 0, cost_usd: 0, latency_ms: Date.now() - coderStart };
       updatePipelineEvent(coderId, {
         status: "completed",
         message: `Generated ${result.files.length} file${result.files.length !== 1 ? "s" : ""}`,
-        meta: { tokens_in: 0, tokens_out: 0, cost_usd: 0, latency_ms: Date.now() - coderStart },
+        meta: coderMeta,
       });
+      localEvents.push({ id: coderId, agent: "coder", model: "claude-sonnet", status: "completed", message: `Generated ${result.files.length} files`, meta: coderMeta });
 
       // STAGE 3: Reviewer (Claude Haiku)
       setState((prev) => ({ ...prev, pipelinePhase: "reviewing" }));
@@ -755,24 +798,28 @@ export function useGenerate() {
           const warnings = findings.filter((f: { severity: string }) => f.severity === "warning");
 
           if (reviewApproved) {
+            const reviewMsg = `Review passed (score: ${review?.score || "N/A"}/10)`;
             updatePipelineEvent(reviewId, {
               status: "completed",
-              message: `Review passed (score: ${review?.score || "N/A"}/10)`,
+              message: reviewMsg,
               detail: findings.length > 0
                 ? `${warnings.length} warning(s), ${findings.length - criticals.length - warnings.length} info`
                 : "No issues found",
               meta,
             });
+            localEvents.push({ id: reviewId, agent: "reviewer", model: "claude-haiku", status: "completed", message: reviewMsg, meta });
           } else {
             reviewFindings = criticals
               .map((f: { description: string; fix: string }) => `- ${f.description}. Fix: ${f.fix}`)
               .join("\n");
+            const rejectMsg = `Review rejected (${criticals.length} critical issue${criticals.length !== 1 ? "s" : ""})`;
             updatePipelineEvent(reviewId, {
               status: "failed",
-              message: `Review rejected (${criticals.length} critical issue${criticals.length !== 1 ? "s" : ""})`,
+              message: rejectMsg,
               detail: reviewFindings,
               meta,
             });
+            localEvents.push({ id: reviewId, agent: "reviewer", model: "claude-haiku", status: "failed", message: rejectMsg, meta });
           }
         } else {
           updatePipelineEvent(reviewId, {
@@ -837,6 +884,11 @@ export function useGenerate() {
             message: "Fix attempt failed",
           });
         }
+      }
+
+      // Record to Neural Nexus (fire-and-forget, non-blocking)
+      if (result.files.length > 0) {
+        recordToNexus(prompt, result.files, localEvents);
       }
 
       // DONE
