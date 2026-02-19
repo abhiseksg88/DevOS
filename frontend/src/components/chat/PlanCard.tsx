@@ -158,28 +158,30 @@ export function PlanCard({ prd, status, onApprove, onModify, onReject, disabled 
 
         {/* Modify Textarea */}
         {showModify && isInteractive && (
-          <div className="space-y-2">
+          <div className="space-y-3 p-4 rounded-xl bg-blue-500/5 border border-blue-500/20">
+            <div className="text-xs font-medium text-blue-400 uppercase tracking-wider">Revision Notes</div>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Describe what you want to change..."
-              className="w-full rounded-xl bg-surface-0 border border-surface-3 px-3 py-2 text-sm text-slate-200 placeholder-slate-600 focus:ring-1 focus:ring-brand-500 focus:border-brand-500/50 outline-none resize-none"
-              rows={3}
+              placeholder="Describe what you want to change about the plan..."
+              className="w-full rounded-xl bg-surface-0 border border-surface-3 px-4 py-3 text-sm text-slate-200 placeholder-slate-600 focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 outline-none resize-none"
+              rows={4}
               autoFocus
             />
             <div className="flex gap-2">
               <button
                 onClick={handleModifySubmit}
                 disabled={!notes.trim()}
-                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-40 transition-all"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-40 transition-all"
               >
-                Re-analyze
+                <Sparkles className="w-3.5 h-3.5" />
+                Re-analyze with Changes
               </button>
               <button
                 onClick={() => { setShowModify(false); setNotes(""); }}
-                className="px-3 py-1.5 rounded-lg bg-surface-3 hover:bg-surface-4 text-slate-300 text-xs font-medium transition-all"
+                className="px-4 py-2 rounded-xl bg-surface-3 hover:bg-surface-4 text-slate-300 text-sm font-medium transition-all"
               >
-                Cancel
+                Back
               </button>
             </div>
           </div>
@@ -188,27 +190,27 @@ export function PlanCard({ prd, status, onApprove, onModify, onReject, disabled 
 
       {/* Actions */}
       {isInteractive && !showModify && (
-        <div className="flex items-center gap-2 px-4 py-3 border-t border-surface-3/50">
+        <div className="flex items-center gap-3 px-4 py-4 border-t border-surface-3/50 bg-surface-1/50">
           <button
             onClick={onApprove}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium shadow-sm transition-all"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold shadow-lg shadow-brand-600/25 hover:shadow-brand-500/30 transition-all"
           >
-            <Play className="w-3 h-3" />
-            Start Building
+            <Play className="w-4 h-4" />
+            Approve &amp; Build
           </button>
           <button
             onClick={() => setShowModify(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-surface-3 hover:bg-surface-4 text-slate-300 text-xs font-medium transition-all"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-surface-3 hover:bg-surface-4 text-slate-200 text-sm font-medium border border-surface-3 hover:border-blue-500/30 transition-all"
           >
-            <Pencil className="w-3 h-3" />
-            Modify
+            <Pencil className="w-3.5 h-3.5" />
+            Modify Plan
           </button>
           <button
             onClick={onReject}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl hover:bg-red-500/10 text-slate-500 hover:text-red-400 text-xs font-medium transition-all ml-auto"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl hover:bg-red-500/10 text-slate-500 hover:text-red-400 text-sm font-medium border border-transparent hover:border-red-500/20 transition-all ml-auto"
           >
-            <X className="w-3 h-3" />
-            Cancel
+            <X className="w-3.5 h-3.5" />
+            Reject
           </button>
         </div>
       )}
