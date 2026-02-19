@@ -26,11 +26,10 @@ export type WorkspaceTab =
   | "design";
 
 interface GeneratorState {
-  isAnalyzing: boolean;
+  isAnalyzing?: boolean;
   isGenerating: boolean;
   pipelineEvents: PipelineEvent[];
-  files: Array<{ path: string; content: string }>;
-  pipelinePhase: string;
+  pipelinePhase?: string;
 }
 
 interface AutoFixState {
@@ -54,9 +53,9 @@ export function useWorkspaceMode(
   hasPreviewContent?: boolean,
   hasPendingPlan?: boolean,
 ): ModeResult {
-  const prevModeRef = useRef<WorkspaceMode>("idle");
+  const prevModeRef = useRef               ("idle");
 
-  const result = useMemo<ModeResult>(() => {
+  const result = useMemo            (() => {
     // Deploying takes priority
     if (deploymentStatus === "deploying") {
       return {
@@ -82,7 +81,7 @@ export function useWorkspaceMode(
     }
 
     // Analyzing → plan mode
-    if (generator.isAnalyzing) {
+    if (generator.pipelinePhase === "analyzing" || generator.isAnalyzing) {
       return {
         mode: "plan",
         autoTab: null, // plan card floats above command bar
@@ -102,7 +101,7 @@ export function useWorkspaceMode(
     }
 
     // Generating code → build mode
-    if (generator.isGenerating) {
+    if (generator.isGenerating || generator.pipelinePhase === "building" || generator.pipelinePhase === "scaffolding") {
       return {
         mode: "build",
         autoTab: "console",
