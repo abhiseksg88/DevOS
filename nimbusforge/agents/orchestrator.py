@@ -903,6 +903,8 @@ def committer_node(state: BuildState) -> dict:
                         tagged_by="sentinel",
                     )
 
+            _remaining = len(sentinel_result.get("remaining_errors", []))
+            _sentinel_summary = "clean" if sentinel_result.get("clean") else f"{_remaining} errors remain"
             nexus.record_feedback(
                 tenant_id=state["tenant_id"],
                 project_id=state["project_id"],
@@ -911,11 +913,11 @@ def committer_node(state: BuildState) -> dict:
                 feedback={
                     "clean": sentinel_result.get("clean", False),
                     "errors_fixed": sentinel_result.get("errors_fixed", 0),
-                    "remaining_count": len(sentinel_result.get("remaining_errors", [])),
+                    "remaining_count": _remaining,
                 },
                 agent="red_team_sentinel",
                 prompt=state["prompt"],
-                response_summary=f"Sentinel: {'clean' if sentinel_result.get('clean') else f'{len(sentinel_result.get(\"remaining_errors\", []))} errors remain'}",
+                response_summary=f"Sentinel: {_sentinel_summary}",
             )
         except Exception as nexus_err:
             import logging
