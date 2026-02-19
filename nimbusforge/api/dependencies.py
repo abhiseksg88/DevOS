@@ -41,12 +41,27 @@ class AuthUser:
         raw_token: str,
         db: Client,
         is_service_role: bool = False,
+        supabase_url: str = "",
+        supabase_service_role_key: str = "",
     ):
         self.user_id = user_id
         self.email = email
         self.raw_token = raw_token
         self._db = db
         self.is_service_role = is_service_role
+        self._supabase_url = supabase_url
+        self._supabase_service_role_key = supabase_service_role_key
+
+    def _fresh_service_db(self) -> Client:
+        """Return a guaranteed-fresh service-role Supabase client.
+
+        We always create a new client rather than reusing self._db so that
+        any auth-header side-effects from db.auth.get_user() during JWT
+        validation cannot leak into the membership lookup.
+        """
+        if self._supabase_url and self._supabase_service_role_key:
+            return create_client(self._supabase_url, self._supabase_service_role_key)
+        return self._db
 
     def assert_tenant_access(self, tenant_id: UUID):
         """Raise 403 if the user is not a member of the given tenant.
@@ -54,6 +69,9 @@ class AuthUser:
         Uses a targeted single-row query rather than a pre-fetched list so that
         newly-created memberships are always visible and there is no window where
         a missing tenant_members row causes a spurious 403.
+
+        Always uses a fresh service-role client to guarantee RLS is bypassed,
+        regardless of any auth state that may have been set during JWT validation.
 
         Auto-heal: If the tenant exists but has ZERO members in tenant_members
         (e.g., created directly in Supabase Studio without going through the API),
@@ -63,9 +81,13 @@ class AuthUser:
         """
         if self.is_service_role:
             return
+
+        # Use a fresh service-role client to ensure no RLS interference
+        db = self._fresh_service_db()
+
         # --- 1. Fast path: user already has a membership row ---
         result = (
-            self._db.table("tenant_members")
+            db.table("tenant_members")
             .select("tenant_id")
             .eq("user_id", str(self.user_id))
             .eq("tenant_id", str(tenant_id))
@@ -77,7 +99,7 @@ class AuthUser:
 
         # --- 2. Slow path: check if the tenant has ANY members at all ---
         any_member = (
-            self._db.table("tenant_members")
+            db.table("tenant_members")
             .select("tenant_id")
             .eq("tenant_id", str(tenant_id))
             .limit(1)
@@ -87,7 +109,7 @@ class AuthUser:
             # Tenant was created without a membership row (e.g. via Studio).
             # Auto-insert the requesting user as owner and allow the request.
             try:
-                self._db.table("tenant_members").insert({
+                db.table("tenant_members").insert({
                     "tenant_id": str(tenant_id),
                     "user_id": str(self.user_id),
                     "role": "owner",
@@ -119,6 +141,8 @@ async def get_current_user(
             raw_token=token,
             db=db,
             is_service_role=True,
+            supabase_url=settings.supabase_url,
+            supabase_service_role_key=settings.supabase_service_role_key,
         )
 
     # Verify JWT with Supabase Auth
@@ -134,11 +158,15 @@ async def get_current_user(
 
     # tenant_ids are no longer pre-fetched here — assert_tenant_access does a
     # targeted single-row query per request, which is safer and more up-to-date.
+    # Pass credentials so assert_tenant_access can always create a fresh
+    # service-role client, unaffected by any auth state from get_user() above.
     return AuthUser(
         user_id=UUID(str(user.id)),
         email=user.email or "",
         raw_token=token,
         db=db,
+        supabase_url=settings.supabase_url,
+        supabase_service_role_key=settings.supabase_service_role_key,
     )
 
 
