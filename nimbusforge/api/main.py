@@ -861,35 +861,46 @@ async def stream_build_events(
     async def event_generator() -> AsyncGenerator[str, None]:
         last_seq = after_seq
         terminal_statuses = {"succeeded", "failed", "cancelled"}
+        keepalive_counter = 0
 
         while True:
-            # Fetch new events since last_seq
-            events = (
-                db.table("build_events")
-                .select("*")
-                .eq("build_id", str(build_id))
-                .eq("tenant_id", str(tenant_id))
-                .gt("seq", last_seq)
-                .order("seq")
-                .limit(50)
-                .execute()
-            )
+            try:
+                # Fetch new events since last_seq
+                events = (
+                    db.table("build_events")
+                    .select("*")
+                    .eq("build_id", str(build_id))
+                    .eq("tenant_id", str(tenant_id))
+                    .gt("seq", last_seq)
+                    .order("seq")
+                    .limit(50)
+                    .execute()
+                )
 
-            for event in events.data:
-                last_seq = event["seq"]
-                yield f"data: {json.dumps(event)}\n\n"
+                for event in events.data:
+                    last_seq = event["seq"]
+                    yield f"data: {json.dumps(event)}\n\n"
 
-            # Check if build is done
-            build = (
-                db.table("builds")
-                .select("status")
-                .eq("id", str(build_id))
-                .single()
-                .execute()
-            )
-            if build.data["status"] in terminal_statuses:
-                yield f"data: {json.dumps({'kind': 'stream_end', 'build_status': build.data['status']})}\n\n"
-                return
+                # Check if build is done
+                build = (
+                    db.table("builds")
+                    .select("status")
+                    .eq("id", str(build_id))
+                    .single()
+                    .execute()
+                )
+                if build.data["status"] in terminal_statuses:
+                    yield f"data: {json.dumps({'kind': 'stream_end', 'build_status': build.data['status']})}\n\n"
+                    return
+
+            except Exception as poll_err:
+                logger.warning("SSE poll error for build %s: %s", build_id, poll_err)
+
+            # Keepalive comment every 15s to prevent Railway/proxy from closing
+            # an idle connection during long-running pipeline phases.
+            keepalive_counter += 1
+            if keepalive_counter % 15 == 0:
+                yield ": keepalive\n\n"
 
             # Poll interval — Supabase Realtime handles the push on the frontend;
             # this SSE endpoint is a fallback/alternative for non-WS clients.
