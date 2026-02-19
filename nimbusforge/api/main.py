@@ -770,14 +770,16 @@ async def approve_build(
             pass
 
     # Atomically flip status to "running" before firing the background task.
-    # .select("id") ensures we get back the updated row(s); an empty result means
-    # the build was already moved out of awaiting_approval (duplicate click / race).
+    # In postgrest-py/supabase-py v2 the .select() MUST come before .eq() filters
+    # on an update query — it enables Prefer: return=representation so we get
+    # the updated rows back.  An empty result means the conditional filter found
+    # no row in "awaiting_approval", i.e. a duplicate click already won the race.
     status_update = (
         db.table("builds")
         .update({"status": "running"})
+        .select("id")
         .eq("id", str(build_id))
         .eq("status", "awaiting_approval")
-        .select("id")
         .execute()
     )
     if not status_update.data:
