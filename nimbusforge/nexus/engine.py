@@ -289,8 +289,8 @@ class NexusEngine:
             result = (
                 self.db.table("user_persona")
                 .select("*")
-                .eq("tenant_id", tenant_id)
-                .eq("user_id", user_id)
+                .eq("tenant_id", str(tenant_id))
+                .eq("user_id", str(user_id))
                 .limit(1)
                 .execute()
             )
@@ -338,7 +338,7 @@ class NexusEngine:
         try:
             self.db.table("user_persona").update(
                 {"preferences": prefs}
-            ).eq("tenant_id", tenant_id).eq("user_id", user_id).execute()
+            ).eq("tenant_id", str(tenant_id)).eq("user_id", str(user_id)).execute()
         except Exception as e:
             logger.warning("Failed to update persona preference: %s", e)
 
@@ -357,7 +357,7 @@ class NexusEngine:
         try:
             self.db.table("user_persona").update(
                 {"expertise": expertise}
-            ).eq("tenant_id", tenant_id).eq("user_id", user_id).execute()
+            ).eq("tenant_id", str(tenant_id)).eq("user_id", str(user_id)).execute()
         except Exception as e:
             logger.warning("Failed to update expertise: %s", e)
 
@@ -388,7 +388,7 @@ class NexusEngine:
         try:
             self.db.table("user_persona").update(
                 {"history": history}
-            ).eq("tenant_id", tenant_id).eq("user_id", user_id).execute()
+            ).eq("tenant_id", str(tenant_id)).eq("user_id", str(user_id)).execute()
         except Exception as e:
             logger.warning("Failed to record decision: %s", e)
 
@@ -408,8 +408,8 @@ class NexusEngine:
                 updates["total_rejected"] = persona.get("total_rejected", 0) + 1
 
             self.db.table("user_persona").update(updates).eq(
-                "tenant_id", tenant_id
-            ).eq("user_id", user_id).execute()
+                "tenant_id", str(tenant_id)
+            ).eq("user_id", str(user_id)).execute()
         except Exception as e:
             logger.warning("Failed to increment persona stats: %s", e)
 
@@ -423,7 +423,7 @@ class NexusEngine:
             result = (
                 self.db.table("project_state_matrix")
                 .select("*")
-                .eq("project_id", project_id)
+                .eq("project_id", str(project_id))
                 .limit(1)
                 .execute()
             )
@@ -502,7 +502,7 @@ class NexusEngine:
                 "file_graph": file_graph,
                 "dependency_graph": dependency_graph,
                 "last_analyzed_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("project_id", project_id).execute()
+            }).eq("project_id", str(project_id)).execute()
         except Exception as e:
             logger.warning("Failed to update file graph: %s", e)
 
@@ -519,7 +519,7 @@ class NexusEngine:
             psm = (
                 self.db.table("project_state_matrix")
                 .select("tech_debt, health_score")
-                .eq("project_id", project_id)
+                .eq("project_id", str(project_id))
                 .single()
                 .execute()
             )
@@ -543,7 +543,7 @@ class NexusEngine:
             self.db.table("project_state_matrix").update({
                 "tech_debt": tech_debt,
                 "health_score": health,
-            }).eq("project_id", project_id).execute()
+            }).eq("project_id", str(project_id)).execute()
         except Exception as e:
             logger.warning("Failed to tag tech debt: %s", e)
 
@@ -557,7 +557,7 @@ class NexusEngine:
             result = (
                 self.db.table("business_logic")
                 .select("*")
-                .eq("project_id", project_id)
+                .eq("project_id", str(project_id))
                 .order("confidence", desc=True)
                 .limit(50)
                 .execute()
@@ -613,8 +613,8 @@ class NexusEngine:
             result = (
                 self.db.table("nexus_feedback")
                 .select("*")
-                .eq("project_id", project_id)
-                .eq("user_id", user_id)
+                .eq("project_id", str(project_id))
+                .eq("user_id", str(user_id))
                 .order("created_at", desc=True)
                 .limit(limit)
                 .execute()
@@ -783,7 +783,7 @@ class NexusEngine:
             result = (
                 self.db.table("agent_executions")
                 .select("*")
-                .eq("project_id", project_id)
+                .eq("project_id", str(project_id))
                 .order("created_at", desc=True)
                 .limit(limit)
                 .execute()
