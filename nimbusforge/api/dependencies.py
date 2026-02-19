@@ -54,9 +54,16 @@ class AuthUser:
         Uses a targeted single-row query rather than a pre-fetched list so that
         newly-created memberships are always visible and there is no window where
         a missing tenant_members row causes a spurious 403.
+
+        Auto-heal: If the tenant exists but has ZERO members in tenant_members
+        (e.g., created directly in Supabase Studio without going through the API),
+        the requesting user is automatically inserted as owner.  This only fires
+        when the membership table is completely empty for that tenant — tenants
+        that have existing members still enforce the normal 403.
         """
         if self.is_service_role:
             return
+        # --- 1. Fast path: user already has a membership row ---
         result = (
             self._db.table("tenant_members")
             .select("tenant_id")
@@ -65,8 +72,31 @@ class AuthUser:
             .limit(1)
             .execute()
         )
-        if not result.data:
-            raise HTTPException(status_code=403, detail="Access denied to this tenant")
+        if result.data:
+            return
+
+        # --- 2. Slow path: check if the tenant has ANY members at all ---
+        any_member = (
+            self._db.table("tenant_members")
+            .select("tenant_id")
+            .eq("tenant_id", str(tenant_id))
+            .limit(1)
+            .execute()
+        )
+        if not any_member.data:
+            # Tenant was created without a membership row (e.g. via Studio).
+            # Auto-insert the requesting user as owner and allow the request.
+            try:
+                self._db.table("tenant_members").insert({
+                    "tenant_id": str(tenant_id),
+                    "user_id": str(self.user_id),
+                    "role": "owner",
+                }).execute()
+                return
+            except Exception:
+                pass  # Fall through to 403 if insert also fails
+
+        raise HTTPException(status_code=403, detail="Access denied to this tenant")
 
 
 async def get_current_user(
