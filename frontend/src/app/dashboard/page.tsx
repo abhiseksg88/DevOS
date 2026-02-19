@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as db from "@/lib/supabase-db";
+import * as api from "@/lib/api";
+import { createClient } from "@/lib/supabase/client";
 import { cn, timeAgo } from "@/lib/utils";
 import type { Tenant, Project } from "@/types";
 import {
@@ -34,11 +36,28 @@ export default function DashboardPage() {
   useEffect(() => {
     (async () => {
       try {
-        const t = await db.listTenants();
-        setTenants(t);
-        if (t.length > 0) {
-          setActiveTenant(t[0]);
-          const p = await db.listProjects(t[0].id);
+        // Always load tenants through the backend API so the list is filtered
+        // strictly by tenant_members — independent of Supabase RLS state.
+        // Fall back to direct Supabase only if the API is unreachable.
+        let tenantList: Tenant[] = [];
+        try {
+          const supabase = createClient();
+          const { data } = await supabase.auth.getSession();
+          const token = data.session?.access_token ?? "";
+          if (token) {
+            tenantList = await api.tenants.list(token);
+          }
+        } catch {
+          // API unreachable — fall back to direct Supabase
+        }
+        // If API returned nothing (unreachable or no tenants), use direct Supabase
+        if (tenantList.length === 0) {
+          tenantList = await db.listTenants();
+        }
+        setTenants(tenantList);
+        if (tenantList.length > 0) {
+          setActiveTenant(tenantList[0]);
+          const p = await db.listProjects(tenantList[0].id);
           setProjects(p);
         }
       } catch (err) {
