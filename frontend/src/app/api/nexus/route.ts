@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 function getBackendUrl(): string {
   return (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
@@ -104,23 +105,105 @@ function errorResponse(backend: string, msg: string, status = 502) {
 }
 
 // ---------------------------------------------------------------------------
+// Supabase-direct fallback — reads Nexus state when Railway is unreachable
+// ---------------------------------------------------------------------------
+
+function getServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+  if (!url || !key) return null;
+  return createClient(url, key);
+}
+
+async function getStateDirectFromSupabase(
+  tenantId: string,
+  projectId: string,
+  token: string,
+) {
+  const db = getServiceClient();
+  if (!db) return null;
+
+  // Resolve user from token for persona lookup
+  const {
+    data: { user },
+  } = await db.auth.getUser(token);
+  const userId = user?.id;
+
+  // Run all queries in parallel
+  const [personaRes, psmRes, blRes, execRes, feedbackRes] = await Promise.all([
+    userId
+      ? db
+          .from("user_persona")
+          .select("*")
+          .eq("tenant_id", tenantId)
+          .eq("user_id", userId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    db
+      .from("project_state_matrix")
+      .select("*")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+    db
+      .from("business_logic")
+      .select("entity_type, entity_path, entity_name, purpose, domain, confidence")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(50),
+    db
+      .from("agent_executions")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("completed_at", { ascending: false })
+      .limit(20),
+    db
+      .from("nexus_feedback")
+      .select("event_type, agent, feedback, created_at")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(20),
+  ]);
+
+  const persona = personaRes.data;
+  const psm = psmRes.data;
+
+  return {
+    user_persona: {
+      preferences: persona?.preferences ?? {},
+      expertise: persona?.expertise ?? {},
+      history: persona?.history ?? [],
+      stats: {
+        total_prompts: persona?.total_prompts ?? 0,
+        total_accepted: persona?.total_accepted ?? 0,
+        total_rejected: persona?.total_rejected ?? 0,
+        acceptance_rate:
+          persona?.total_prompts > 0
+            ? Math.round(
+                ((persona?.total_accepted ?? 0) / persona.total_prompts) * 100,
+              )
+            : 0,
+      },
+    },
+    project_state: {
+      file_graph: psm?.file_graph ?? {},
+      dependency_graph: psm?.dependency_graph ?? {},
+      tech_debt: psm?.tech_debt ?? [],
+      health_score: psm?.health_score ?? 0,
+      last_analyzed_at: psm?.last_analyzed_at ?? null,
+    },
+    business_logic: blRes.data ?? [],
+    recent_feedback: feedbackRes.data ?? [],
+    agent_activity: execRes.data ?? [],
+    _source: "supabase_direct",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // GET — state, context, persona, activity
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
   const backend = getBackendUrl();
-
-  if (backend.includes("localhost")) {
-    return NextResponse.json(
-      {
-        detail:
-          "NEXT_PUBLIC_API_URL is not configured (defaults to localhost). Set it to your Railway backend URL in the Netlify environment variables and redeploy.",
-        _backend_url: backend,
-      },
-      { status: 503 },
-    );
-  }
-
   const sp = req.nextUrl.searchParams;
   const tenantId = sp.get("tenantId");
   const projectId = sp.get("projectId");
@@ -136,6 +219,28 @@ export async function GET(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
   if (!token) {
     return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+  }
+
+  // If backend is localhost (not configured), try Supabase-direct for state
+  if (backend.includes("localhost")) {
+    if (action === "state") {
+      try {
+        const fallback = await getStateDirectFromSupabase(tenantId, projectId, token);
+        if (fallback) {
+          return NextResponse.json(fallback, { status: 200 });
+        }
+      } catch {
+        /* fallback failed */
+      }
+    }
+    return NextResponse.json(
+      {
+        detail:
+          "NEXT_PUBLIC_API_URL is not configured (defaults to localhost). Set it to your Railway backend URL in the Netlify environment variables and redeploy.",
+        _backend_url: backend,
+      },
+      { status: 503 },
+    );
   }
 
   const url = buildNexusUrl(backend, tenantId, projectId, action, sp);
@@ -156,6 +261,23 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
+
+    // Fallback: read directly from Supabase when backend is unreachable
+    if (action === "state") {
+      try {
+        const fallback = await getStateDirectFromSupabase(
+          tenantId!,
+          projectId!,
+          token!,
+        );
+        if (fallback) {
+          return NextResponse.json(fallback, { status: 200 });
+        }
+      } catch {
+        /* fallback also failed — fall through to error response */
+      }
+    }
+
     return errorResponse(backend, msg);
   }
 }

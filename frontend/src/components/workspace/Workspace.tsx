@@ -311,6 +311,11 @@ export function Workspace({ projectId }: { projectId: string }) {
     }, [updateMessageById]),
   );
 
+  // Find the latest pending plan message (must be before useWorkspaceMode so we can pass it)
+  const pendingPlan = messages.find(
+    (m) => m.type === "plan" && m.planStatus === "pending",
+  );
+
   // Workspace mode — auto-derives from build/fix/deploy state
   const hasPreviewContent = fileTree !== defaultFileTree && flattenTree(fileTree).length > 3;
   const { mode, autoTab, statusLabel, statusColor } = useWorkspaceMode(
@@ -318,6 +323,7 @@ export function Workspace({ projectId }: { projectId: string }) {
     autoFix,
     undefined,
     hasPreviewContent,
+    !!pendingPlan,
   );
 
   // Auto-switch tabs when mode changes (user can still override manually)
@@ -668,12 +674,8 @@ export function Workspace({ projectId }: { projectId: string }) {
     }
   }, [generator.isGenerating, generator.files.length, persistence]);
 
-  // Find the latest pending plan message
-  const pendingPlan = messages.find(
-    (m) => m.type === "plan" && m.planStatus === "pending",
-  );
-
-  const isDisabled = generator.isGenerating || generator.isAnalyzing || !!pendingPlan;
+  const isInputDisabled = generator.isGenerating || generator.isAnalyzing || !!pendingPlan;
+  const isPlanCardDisabled = generator.isGenerating || generator.isAnalyzing;
 
   // ---------------------------------------------------------------
   // handleSendMessage — Phase 1: Analyze only, show PlanCard
@@ -939,7 +941,7 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   function handleChatSubmit() {
     const trimmed = chatValue.trim();
-    if (!trimmed || isDisabled) return;
+    if (!trimmed || isInputDisabled) return;
     setChatValue("");
     handleSendMessage(trimmed).catch((err) => {
       console.error("[Workspace] handleSendMessage failed:", err);
@@ -1180,7 +1182,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                           onApprove={handleApprovePlan}
                           onModify={handleModifyPlan}
                           onReject={handleRejectPlan}
-                          disabled={isDisabled}
+                          disabled={isPlanCardDisabled}
                         />
                       </div>
                     )}
@@ -1232,22 +1234,22 @@ export function Workspace({ projectId }: { projectId: string }) {
                     }
                   }}
                   placeholder={
-                    isDisabled
+                    isInputDisabled
                       ? pendingPlan
                         ? "Review the plan above to continue..."
                         : statusLabel ? `${statusLabel}...` : "Building..."
                       : "Describe what you want to build..."
                   }
-                  disabled={isDisabled}
+                  disabled={isInputDisabled}
                   rows={1}
                   className="flex-1 bg-transparent text-foreground text-sm placeholder:text-slate-600 px-3 py-2.5 resize-none focus:outline-none disabled:opacity-50 max-h-[120px]"
                 />
                 <button
                   onClick={handleChatSubmit}
-                  disabled={isDisabled || !chatValue.trim()}
+                  disabled={isInputDisabled || !chatValue.trim()}
                   className="p-2 m-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition-all disabled:opacity-30 disabled:hover:bg-brand-600 shrink-0"
                 >
-                  {isDisabled ? (
+                  {isInputDisabled ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <Send className="w-4 h-4" />
