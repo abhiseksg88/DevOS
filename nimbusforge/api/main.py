@@ -794,18 +794,20 @@ async def approve_build(
         except Exception:
             pass
 
-    # Flip status to "running" before firing the background task.
+    # Flip status to "queued" before firing the background task.
+    # "running" is not a valid build_status enum value — use "queued" to
+    # signal the build is approved and waiting for the pipeline to pick it up.
     # postgrest-py 0.19 / supabase-py 2.x: .update() returns SyncFilterRequestBuilder
     # which does NOT support .select() — use a plain update + separate re-read.
     # The conditional .eq("status", "awaiting_approval") makes the UPDATE a no-op
     # if a concurrent request already moved the status (duplicate-click guard).
-    db.table("builds").update({"status": "running"}).eq("id", str(build_id)).eq(
+    db.table("builds").update({"status": "queued"}).eq("id", str(build_id)).eq(
         "status", "awaiting_approval"
     ).execute()
 
-    # Re-read to verify we actually own the "running" state — if the status is
-    # still "awaiting_approval" the conditional update matched nothing, meaning
-    # another concurrent request got here first.
+    # Re-read to verify we actually claimed the build — if the status is still
+    # "awaiting_approval" the conditional update matched nothing, meaning another
+    # concurrent request got here first.
     current = (
         db.table("builds").select("status").eq("id", str(build_id)).single().execute()
     )
