@@ -269,6 +269,16 @@ def _call_deepseek(
     response.raise_for_status()
     data = response.json()
 
+    # DeepSeek can return a 200 with an error body (no "choices") — treat that
+    # as an HTTP error so the retry/fallback logic in call_llm picks it up.
+    if "choices" not in data or not data["choices"]:
+        error_msg = data.get("error", {}).get("message", str(data)[:200])
+        raise httpx.HTTPStatusError(
+            f"DeepSeek returned no choices: {error_msg}",
+            request=response.request,
+            response=response,
+        )
+
     choice = data["choices"][0]
     usage = data.get("usage", {})
 

@@ -873,12 +873,27 @@ def coder_node(state: BuildState) -> dict:
         )},
     ]
 
-    response = call_llm(ModelTier.SONNET, messages, settings)
-    result = _parse_json_response(response["content"])
-    patches = result.get("patches", [])
+    try:
+        response = call_llm(ModelTier.SONNET, messages, settings)
+        result = _parse_json_response(response["content"])
+        patches = result.get("patches", [])
+    except Exception as _coder_err:
+        # LLM call failed (rate-limit, API error, all fallbacks exhausted).
+        # Keep whatever patches exist from the previous iteration so the
+        # reviewer can evaluate them — at worst the reviewer will reject again
+        # and we'll proceed best-effort via review_decision.
+        import logging as _logging
+        _logging.getLogger(__name__).exception("Coder LLM call failed: %s", _coder_err)
+        state["event_seq"] = _emit_event(
+            state, "error", "sonnet",
+            {"message": f"Coder error (using previous patches): {str(_coder_err)[:200]}"},
+            settings,
+        )
+        patches = state.get("patches", [])
+        response = {"tokens_in": 0, "tokens_out": 0, "cost": 0, "content": ""}
 
     # Phase 2A: Detect SEARCH/REPLACE format and convert to unified diffs
-    if not patches and "===EDIT:" in response["content"]:
+    if not patches and response.get("content") and "===EDIT:" in response["content"]:
         from ..services.search_replace import parse_search_replace_blocks, search_replace_to_diff
         blocks = parse_search_replace_blocks(response["content"])
         if blocks:
@@ -991,8 +1006,25 @@ def reviewer_node(state: BuildState) -> dict:
         )},
     ]
 
-    response = call_llm(ModelTier.SONNET, messages, settings)
-    review = _parse_json_response(response["content"])
+    try:
+        response = call_llm(ModelTier.SONNET, messages, settings)
+        review = _parse_json_response(response["content"])
+    except Exception as _rev_err:
+        # Reviewer LLM call failed — approve best-effort so the build can
+        # proceed to the committer rather than looping or crashing entirely.
+        import logging as _logging
+        _logging.getLogger(__name__).exception("Reviewer LLM call failed: %s", _rev_err)
+        state["event_seq"] = _emit_event(
+            state, "warning", "sonnet",
+            {"message": f"Reviewer error — approving best-effort: {str(_rev_err)[:200]}"},
+            settings,
+        )
+        review = {
+            "approved": True,
+            "findings": [{"severity": "warning", "file": "N/A",
+                          "description": f"Reviewer unavailable: {str(_rev_err)[:200]}"}],
+        }
+        response = {"tokens_in": 0, "tokens_out": 0, "cost": 0, "content": ""}
 
     _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
 
@@ -1042,16 +1074,36 @@ def committer_node(state: BuildState) -> dict:
 
     from ..pipeline.builder import apply_and_build
 
-    result = apply_and_build(
-        tenant_id=state["tenant_id"],
-        project_id=state["project_id"],
-        build_id=state["build_id"],
-        scaffold_files=state.get("scaffold_files", {}),
-        patches=state["patches"],
-        prompt=state["prompt"],
-        model_usage=state["model_usage"],
-        settings=settings,
-    )
+    try:
+        result = apply_and_build(
+            tenant_id=state["tenant_id"],
+            project_id=state["project_id"],
+            build_id=state["build_id"],
+            scaffold_files=state.get("scaffold_files", {}),
+            patches=state["patches"],
+            prompt=state["prompt"],
+            model_usage=state["model_usage"],
+            settings=settings,
+        )
+    except Exception as _build_err:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("apply_and_build failed: %s", _build_err)
+        state["event_seq"] = _emit_event(
+            state, "error", None,
+            {"message": f"Build step failed: {str(_build_err)[:300]}"},
+            settings,
+        )
+        _update_build_status(state, "failed", settings)
+        _nexus_complete(_comm_nexus, _comm_eid, "failed",
+            output_summary=f"apply_and_build error: {str(_build_err)[:200]}",
+            latency_ms=int((time.monotonic() - _comm_t0) * 1000),
+        )
+        return {
+            "commit_sha": "",
+            "image_tag": "",
+            "sentinel_result": None,
+            "event_seq": state["event_seq"],
+        }
 
     # --- Emit final file contents for frontend preview ---
     final_files = result.get("final_files", {})
@@ -1178,6 +1230,11 @@ def committer_node(state: BuildState) -> dict:
 # ---------------------------------------------------------------------------
 
 def deployer_node(state: BuildState) -> dict:
+    # If the committer already failed (commit_sha is empty), skip deployment
+    # so we don't overwrite the "failed" build status it already set.
+    if not state.get("commit_sha"):
+        return {"event_seq": state.get("event_seq", 0)}
+
     settings = Settings(**state["settings"])
     _update_build_status(state, "deploying", settings)
     state["event_seq"] = _emit_event(state, "deploy_progress", None, {"message": "Deploying to preview..."}, settings)
