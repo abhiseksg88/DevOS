@@ -147,10 +147,16 @@ async def startup_event():
     logger.info("CORS allowed origins: %s", settings.cors_allowed_origins)
     logger.info("Debug mode: %s", settings.debug_mode)
     logger.info(
-        "Configured providers — Anthropic: %s, Netlify: %s",
+        "Configured providers — Anthropic: %s, OpenAI: %s, Gemini: %s, Netlify: %s",
         bool(settings.anthropic_api_key),
+        bool(settings.openai_api_key),
+        bool(settings.gemini_api_key),
         bool(settings.netlify_token),
     )
+    if not settings.openai_api_key:
+        logger.warning("OPENAI_API_KEY not set — GPT-4o requirements stage will fall back to Claude Opus")
+    if not settings.gemini_api_key:
+        logger.warning("GEMINI_API_KEY not set — Gemini frontend stage will fall back to Claude Opus")
 
     # Auto-ensure app_data table exists (required for all CRUD apps)
     try:
@@ -908,47 +914,54 @@ async def stream_build_events(
         terminal_statuses = {"succeeded", "failed", "cancelled"}
         keepalive_counter = 0
 
+        # Send immediately so Railway/nginx proxy knows the connection is alive
+        # before the pipeline even emits its first event.
+        yield ": keepalive\n\n"
+
         while True:
+            # --- Poll Supabase off the event loop (sync client must not block) ---
             try:
-                # Fetch new events since last_seq
-                events = (
-                    db.table("build_events")
-                    .select("*")
-                    .eq("build_id", str(build_id))
-                    .eq("tenant_id", str(tenant_id))
-                    .gt("seq", last_seq)
-                    .order("seq")
-                    .limit(50)
-                    .execute()
+                events_resp = await asyncio.to_thread(
+                    lambda: (
+                        db.table("build_events")
+                        .select("*")
+                        .eq("build_id", str(build_id))
+                        .eq("tenant_id", str(tenant_id))
+                        .gt("seq", last_seq)
+                        .order("seq")
+                        .limit(50)
+                        .execute()
+                    )
                 )
-
-                for event in events.data:
-                    last_seq = event["seq"]
-                    yield f"data: {json.dumps(event)}\n\n"
-
-                # Check if build is done
-                build = (
-                    db.table("builds")
-                    .select("status")
-                    .eq("id", str(build_id))
-                    .single()
-                    .execute()
+                build_resp = await asyncio.to_thread(
+                    lambda: (
+                        db.table("builds")
+                        .select("status")
+                        .eq("id", str(build_id))
+                        .single()
+                        .execute()
+                    )
                 )
-                if build.data["status"] in terminal_statuses:
-                    yield f"data: {json.dumps({'kind': 'stream_end', 'build_status': build.data['status']})}\n\n"
-                    return
-
             except Exception as poll_err:
                 logger.warning("SSE poll error for build %s: %s", build_id, poll_err)
+                await asyncio.sleep(1)
+                continue
 
-            # Keepalive comment every 15s to prevent Railway/proxy from closing
-            # an idle connection during long-running pipeline phases.
+            # --- Yield events outside the try so client-disconnect propagates cleanly ---
+            for event in events_resp.data:
+                last_seq = event["seq"]
+                yield f"data: {json.dumps(event)}\n\n"
+
+            # --- Terminal state: close stream ---
+            if build_resp.data["status"] in terminal_statuses:
+                yield f"data: {json.dumps({'kind': 'stream_end', 'build_status': build_resp.data['status']})}\n\n"
+                return
+
+            # --- Keepalive every 5 s (not 15 s) — Railway proxy idle timeout is ~30 s ---
             keepalive_counter += 1
-            if keepalive_counter % 15 == 0:
+            if keepalive_counter % 5 == 0:
                 yield ": keepalive\n\n"
 
-            # Poll interval — Supabase Realtime handles the push on the frontend;
-            # this SSE endpoint is a fallback/alternative for non-WS clients.
             await asyncio.sleep(1)
 
     return StreamingResponse(
@@ -958,6 +971,9 @@ async def stream_build_events(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            # Explicit CORS header on streaming response — middleware doesn't
+            # always attach headers to StreamingResponse on Railway's proxy.
+            "Access-Control-Allow-Origin": "*",
         },
     )
 

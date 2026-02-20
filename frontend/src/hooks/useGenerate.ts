@@ -70,6 +70,9 @@ export function useGenerate(options: UseGenerateOptions = {}) {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const eventSeqRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const buildContextRef = useRef<{ token: string; tenantId: string; projectId: string; buildId: string } | null>(null);
   // Keep a stable ref to options callbacks to avoid stale closures
   const optionsRef = useRef(options);
   useEffect(() => { optionsRef.current = options; }, [options]);
@@ -78,6 +81,7 @@ export function useGenerate(options: UseGenerateOptions = {}) {
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     };
   }, []);
 
@@ -166,6 +170,9 @@ export function useGenerate(options: UseGenerateOptions = {}) {
   // connectStream — open SSE connection for a given build
   // Cancels any existing connection first so at most one is active.
   // -----------------------------------------------------------------
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000];
+
   const connectStream = useCallback((
     token: string,
     tenantId: string,
@@ -174,6 +181,7 @@ export function useGenerate(options: UseGenerateOptions = {}) {
   ) => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
+    buildContextRef.current = { token, tenantId, projectId, buildId };
 
     streamBuildEvents(
       token,
@@ -182,8 +190,9 @@ export function useGenerate(options: UseGenerateOptions = {}) {
       buildId,
       eventSeqRef.current,
       handleBackendEvent,
-      // onEnd — stream closed; build_status tells us the terminal state
+      // onEnd — stream closed cleanly; build_status tells us the terminal state
       (buildStatus?: string) => {
+        reconnectAttemptsRef.current = 0; // clean end — reset counter
         setState(prev => {
           // Intentional pause at HITL gate — don't transition
           if (prev.pipelinePhase === "awaiting_approval") return prev;
@@ -208,17 +217,32 @@ export function useGenerate(options: UseGenerateOptions = {}) {
           };
         });
       },
-      // onError
+      // onError — auto-reconnect with exponential backoff before giving up
       (err: Error) => {
-        console.error("[useGenerate] SSE error:", err);
-        const errMsg = `Stream error: ${err.message}`;
-        optionsRef.current.onError?.(errMsg);
-        setState(prev => ({
-          ...prev,
-          error: errMsg,
-          pipelinePhase: "error",
-          isGenerating: false,
-        }));
+        console.warn(`[useGenerate] SSE error (attempt ${reconnectAttemptsRef.current + 1}):`, err.message);
+
+        const ctx = buildContextRef.current;
+        const attempt = reconnectAttemptsRef.current;
+
+        if (ctx && attempt < MAX_RECONNECT_ATTEMPTS) {
+          const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
+          reconnectAttemptsRef.current += 1;
+          console.log(`[useGenerate] Reconnecting in ${delay}ms from seq ${eventSeqRef.current}…`);
+          reconnectTimerRef.current = setTimeout(() => {
+            connectStream(ctx.token, ctx.tenantId, ctx.projectId, ctx.buildId);
+          }, delay);
+        } else {
+          // All retries exhausted — surface the error
+          const errMsg = `Stream disconnected after ${attempt} retries: ${err.message}`;
+          console.error("[useGenerate] SSE permanently failed:", errMsg);
+          optionsRef.current.onError?.(errMsg);
+          setState(prev => ({
+            ...prev,
+            error: errMsg,
+            pipelinePhase: "error",
+            isGenerating: false,
+          }));
+        }
       }
     );
   }, [handleBackendEvent]);

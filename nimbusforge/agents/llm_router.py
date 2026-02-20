@@ -242,6 +242,19 @@ def call_llm(
                 "latency_ms": latency,
             }
 
+        except (RuntimeError, ValueError) as _cfg_err:
+            # Provider not configured (missing API key) or unknown tier — skip retries, go straight to fallback.
+            fallback = FALLBACK_CHAIN.get(current_tier)
+            if fallback and fallback != current_tier:
+                logging.getLogger(__name__).warning(
+                    "Provider %s unavailable (%s) — falling back to %s",
+                    current_tier.value, _cfg_err, fallback.value,
+                )
+                current_tier = fallback
+                attempt = 0
+                continue
+            raise
+
         except (anthropic.APIStatusError, anthropic.APIConnectionError, httpx.HTTPError, OSError) as e:
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)])
