@@ -242,8 +242,8 @@ def call_llm(
                 "latency_ms": latency,
             }
 
-        except RuntimeError as _cfg_err:
-            # Provider not configured (missing API key) — skip retries, go straight to fallback.
+        except (RuntimeError, ValueError) as _cfg_err:
+            # Provider not configured (missing API key) or unknown tier — skip retries, go straight to fallback.
             fallback = FALLBACK_CHAIN.get(current_tier)
             if fallback and fallback != current_tier:
                 logging.getLogger(__name__).warning(
