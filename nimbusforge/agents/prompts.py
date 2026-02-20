@@ -230,7 +230,7 @@ Use this exact pattern for all database operations:
 - INSERT: `await window.supabase.from('app_data').insert({ tenant_id: window.__VEDAA_TENANT_ID, project_id: window.__VEDAA_PROJECT_ID, app_instance_id: window.__VEDAA_APP_INSTANCE_ID, collection: 'items', record_id: crypto.randomUUID(), data: {...} }).select().single()`
 - SELECT: `await window.supabase.from('app_data').select('*').eq('collection', 'items').eq('project_id', window.__VEDAA_PROJECT_ID).order('created_at', { ascending: false })`
 - UPDATE: `await window.supabase.from('app_data').update({ data: {...}, version: currentVersion + 1 }).eq('collection', 'items').eq('record_id', id).eq('project_id', window.__VEDAA_PROJECT_ID).eq('version', currentVersion).select().single()`
-- DELETE: `await window.supabase.from('app_data').delete().eq('collection', 'items').eq('record_id', id).eq('project_id', window.__VEDAA_PROJECT_ID)`
+- DELETE: ALWAYS guard with `if (!window.confirm('Delete this item?')) return;` FIRST, then: `await window.supabase.from('app_data').delete().eq('collection', 'items').eq('record_id', id).eq('project_id', window.__VEDAA_PROJECT_ID)`
 
 ALWAYS destructure { data, error } from every Supabase call.
 ALWAYS guard arrays: (data || []).map(row => ({ id: row.record_id, ...row.data }))
@@ -285,6 +285,7 @@ export default function CaseManager() {
   }
 
   async function deleteCase(id) {
+    if (!window.confirm('Delete this case? This cannot be undone.')) return;
     setError(null);
     try {
       const { error: err } = await window.supabase
@@ -585,8 +586,9 @@ if (error) {
 }
 ```
 
-4. DELETE:
+4. DELETE (always include window.confirm — reviewer auto-rejects without it):
 ```javascript
+if (!window.confirm('Delete this item? This cannot be undone.')) return;
 const { error } = await window.supabase
   .from('app_data')
   .delete()
@@ -616,6 +618,7 @@ MANDATORY PATTERNS:
 11. ✅ ALWAYS use (data || []) when setting array state from query results (data can be null)
 12. ✅ ALWAYS include tenant_id, project_id, and app_instance_id in INSERT operations using window.__VEDAA_TENANT_ID, window.__VEDAA_PROJECT_ID, window.__VEDAA_APP_INSTANCE_ID
 13. ✅ ALWAYS filter by project_id in READ, UPDATE, and DELETE operations using .eq('project_id', window.__VEDAA_PROJECT_ID)
+14. ✅ ALWAYS guard DELETE operations with `if (!window.confirm('...')) return;` — reviewer auto-rejects deletes without a confirmation dialog
 
 SUPABASE RESPONSE SHAPE — CRITICAL (violating this causes "X.map is not a function"):
 Supabase queries return { data, error }. You MUST destructure correctly:
@@ -693,6 +696,7 @@ export default function CaseManager() {
   }
 
   async function deleteCase(id) {
+    if (!window.confirm('Delete this case? This cannot be undone.')) return;
     setError(null);
     try {
       const { error: err } = await window.supabase
