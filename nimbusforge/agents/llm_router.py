@@ -8,8 +8,8 @@ Routing table (task-type-based):
 
 Fallback chain:
   Opus fails   -> Sonnet (degraded planning)
-  Sonnet fails -> Haiku  (degraded coding, same vendor)
   Haiku fails  -> Sonnet (over-qualified but reliable)
+  Sonnet       -> no fallback (anchor tier; raises RuntimeError on exhaustion)
 
 Note: DeepSeek is retained in the cost table and fallback map for
 historical cost tracking but is no longer used as a primary model.
@@ -115,10 +115,10 @@ COST_TABLE = {
 }
 
 FALLBACK_CHAIN: dict[ModelTier, ModelTier] = {
-    ModelTier.OPUS: ModelTier.SONNET,    # Opus fails → Sonnet (degraded planning)
-    ModelTier.SONNET: ModelTier.HAIKU,   # Sonnet fails → Haiku (degraded coding, same vendor)
-    ModelTier.HAIKU: ModelTier.SONNET,   # Haiku fails → Sonnet (over-qualified but reliable)
+    ModelTier.OPUS: ModelTier.SONNET,     # Opus fails → Sonnet (degraded planning)
+    ModelTier.HAIKU: ModelTier.SONNET,    # Haiku fails → Sonnet (over-qualified but reliable)
     ModelTier.DEEPSEEK: ModelTier.SONNET, # DeepSeek retained as dead fallback (no longer primary)
+    # SONNET has no fallback — it is the anchor tier; if it fails, raise RuntimeError
 }
 
 MAX_RETRIES = 3
