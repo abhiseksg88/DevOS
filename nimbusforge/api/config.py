@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     model_haiku: str = "claude-haiku-4-5-20251001"
     model_deepseek: str = "deepseek-chat"  # DeepSeek-V3 (unified, replaces deepseek-coder)
     model_gpt4o: str = "gpt-4o"         # OpenAI GPT-4o for requirements + vision
-    model_gemini_pro: str = "gemini-2.0-pro-exp"    # Full codebase context (1M tokens)
+    model_gemini_pro: str = "gemini-1.5-pro"         # Full codebase context (1M tokens) — stable
     model_gemini_flash: str = "gemini-2.0-flash"    # Fast pre-reviewer + routing
 
     # --- Design Integration ---
