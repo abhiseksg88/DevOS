@@ -1442,7 +1442,12 @@ def requirements_node(state: BuildState) -> dict:
         _log_usage(state, "gpt4o", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     except Exception as _req_err:
         logging.getLogger(__name__).warning("Requirements agent failed, falling back to planner: %s", _req_err)
-        return {"build_phase": "design", "requirements": None}
+        state["event_seq"] = _emit_event(
+            state, "warning", None,
+            {"message": f"Requirements analysis unavailable ({type(_req_err).__name__}: {str(_req_err)[:200]}). Continuing with prompt directly."},
+            settings,
+        )
+        return {"build_phase": "design", "requirements": None, "event_seq": state["event_seq"]}
 
     state["event_seq"] = _emit_event(
         state, "agent_end", "gpt4o",
@@ -1610,8 +1615,16 @@ def frontend_node(state: BuildState) -> dict:
     except Exception as _fe_err:
         logging.getLogger(__name__).exception("Frontend node failed: %s", _fe_err)
         state["event_seq"] = _emit_event(
-            state, "error", "sonnet",
-            {"message": f"Frontend build failed: {str(_fe_err)[:200]}"},
+            state, "error", None,
+            {"message": f"Frontend build failed ({type(_fe_err).__name__}): {str(_fe_err)[:300]}. Check GEMINI_API_KEY and model name in Railway env vars."},
+            settings,
+        )
+        return {"build_phase": "frontend", "event_seq": state["event_seq"]}
+
+    if not frontend_files:
+        state["event_seq"] = _emit_event(
+            state, "warning", None,
+            {"message": "Frontend node returned no files. Gemini response may not have included a 'files' JSON key. Check Railway logs for raw response."},
             settings,
         )
         return {"build_phase": "frontend", "event_seq": state["event_seq"]}
@@ -1972,13 +1985,11 @@ def hitl_decision(state: BuildState) -> str:
     settings = Settings(**state["settings"])
     plan = state.get("plan", {}) or {}
 
-    # Frontend-first mode: enabled for genesis builds
-    if (settings.enable_frontend_first
-            and plan.get("needs_scaffold", False)
-            and state.get("requirements")):
+    # Frontend-first mode: any genesis build — requirements are optional bonus context
+    if settings.enable_frontend_first and plan.get("needs_scaffold", False):
         return "frontend"
 
-    # Legacy path: scaffolder + coder (genesis without requirements stage)
+    # Legacy path: scaffolder + coder (genesis with frontend_first disabled)
     if plan.get("needs_scaffold", False):
         return "scaffolder"
 
