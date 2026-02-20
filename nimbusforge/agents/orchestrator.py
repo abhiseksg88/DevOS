@@ -1247,13 +1247,25 @@ def deployer_node(state: BuildState) -> dict:
 
     from ..pipeline.deployer import deploy_preview
 
-    result = deploy_preview(
-        tenant_id=state["tenant_id"],
-        project_id=state["project_id"],
-        build_id=state["build_id"],
-        image_tag=state["image_tag"],
-        settings=settings,
-    )
+    try:
+        result = deploy_preview(
+            tenant_id=state["tenant_id"],
+            project_id=state["project_id"],
+            build_id=state["build_id"],
+            image_tag=state["image_tag"],
+            settings=settings,
+        )
+    except Exception as _deploy_err:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("deploy_preview failed (non-fatal): %s", _deploy_err)
+        # Deploy failure should not fail the build — the code was successfully generated and
+        # committed. Use a fallback storage-based preview URL so the build can still succeed.
+        result = {"preview_url": f"https://{state['build_id'][:8]}.{settings.preview_domain}"}
+        state["event_seq"] = _emit_event(
+            state, "warning", None,
+            {"message": f"Deploy step failed (build still succeeded): {str(_deploy_err)[:200]}"},
+            settings,
+        )
 
     state["event_seq"] = _emit_event(
         state, "deploy_progress", None,
