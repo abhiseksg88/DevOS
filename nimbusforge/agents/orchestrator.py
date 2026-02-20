@@ -41,6 +41,12 @@ from .prompts import (
     PLANNER_SYSTEM,
     REVIEWER_SYSTEM,
     SCAFFOLDER_SYSTEM,
+    REQUIREMENTS_SYSTEM,
+    DESIGN_SYSTEM,
+    FRONTEND_SYSTEM,
+    BACKEND_SPEC_SYSTEM,
+    INTEGRATION_SYSTEM,
+    PRE_REVIEW_SYSTEM,
 )
 from ..services.ast_graph import (
     build_dependency_graph,
@@ -328,9 +334,29 @@ class BuildState(TypedDict):
     review_result: dict | None      # {"approved": bool, "findings": [...]}
     review_iterations: int
 
-    # HITL checkpoint
+    # HITL checkpoint (architecture plan approval)
     hitl_approved: bool             # Whether the HITL gate has been approved
     hitl_modified_plan: dict | None # Modified plan from user, if any
+
+    # --- Multi-modal pipeline stages (new) ---
+    # Stage 0: Requirements (GPT-4o)
+    requirements: dict | None           # Structured PRD from GPT-4o
+    requirements_approved: bool         # HITL gate A: requirements approved
+    figma_key: str | None               # Figma file key (if user provides Figma URL)
+
+    # Stage 1: Design Contract
+    design_contract: dict | None        # Design Contract (from Figma or AI-generated)
+    design_approved: bool               # HITL gate B: design approved
+
+    # Stage 2: Frontend-first build
+    frontend_files: dict[str, str]      # Frontend-only files (no backend calls)
+    frontend_approved: bool             # HITL gate C: frontend visual approval
+
+    # Stage 3: Backend spec
+    backend_spec: dict | None           # Backend schema reverse-engineered from frontend
+
+    # Build phase tracker
+    build_phase: str                    # "requirements|design|frontend|backend|integration|review"
 
     # Sentinel results
     sentinel_result: dict | None    # auto-heal loop results
@@ -968,16 +994,6 @@ def hitl_gate_node(state: BuildState) -> dict:
     }
 
 
-def hitl_decision(state: BuildState) -> str:
-    """After hitl_gate: if approved -> scaffolder/coder; if not -> end (wait)."""
-    if state.get("hitl_approved"):
-        plan = state.get("plan", {})
-        if plan.get("needs_scaffold", False):
-            return "scaffolder"
-        return "coder"
-    return "__end__"
-
-
 # ---------------------------------------------------------------------------
 # Node: REVIEWER (Sonnet — QA, security, tests)
 # ---------------------------------------------------------------------------
@@ -1353,12 +1369,28 @@ def should_scaffold(state: BuildState) -> str:
 
 
 def review_decision(state: BuildState) -> str:
-    """After review: if approved -> commit; if rejected and under max iterations -> coder; else -> commit (best-effort)."""
+    """After review: if approved -> commit; if rejected and under max iterations -> coder; else -> commit (best-effort).
+
+    Severity-gated rejection to prevent warning-level issues from spinning 5 loops:
+    - Iterations 1-2: Reject on any non-approved review (strict)
+    - Iterations 3+:  Only reject if CRITICAL findings remain (not warnings/info)
+    """
     settings = Settings(**state["settings"])
     review = state.get("review_result", {})
 
     if review.get("approved", False):
         return "committer"
+
+    # After iteration 2, only block on critical findings — not warnings
+    if state["review_iterations"] >= 3:
+        findings = review.get("findings", [])
+        critical_findings = [f for f in findings if f.get("severity") == "critical"]
+        if not critical_findings:
+            # No critical issues — warnings are acceptable; proceed to commit
+            _emit_event(state, "info", None, {
+                "message": f"No critical findings after iteration {state['review_iterations']} — proceeding with warnings noted."
+            }, settings)
+            return "committer"
 
     if state["review_iterations"] < settings.max_agent_iterations:
         _emit_event(state, "info", None, {"message": f"Review rejected (iteration {state['review_iterations']}), retrying coder..."}, settings)
@@ -1370,41 +1402,589 @@ def review_decision(state: BuildState) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Node: REQUIREMENTS (GPT-4o — natural language → structured PRD)
+# ---------------------------------------------------------------------------
+
+def requirements_node(state: BuildState) -> dict:
+    """Stage 0: Convert user prompt → structured PRD using GPT-4o."""
+    settings = Settings(**state["settings"])
+
+    # Skip if: stage disabled, requirements already set, or already approved (resume path)
+    if (not settings.enable_requirements_stage
+            or state.get("requirements")
+            or state.get("requirements_approved")):
+        return {"build_phase": "design"}
+
+    state["event_seq"] = _emit_event(
+        state, "agent_start", "gpt4o",
+        {"agent": "requirements", "message": "Analyzing requirements with GPT-4o..."},
+        settings,
+    )
+
+    figma_context = ""
+    if state.get("figma_key"):
+        figma_context = f"\n\nThe user has provided a Figma file key: {state['figma_key']}. Reference screen names from the design."
+
+    messages = [
+        {"role": "system", "content": REQUIREMENTS_SYSTEM},
+        {"role": "user", "content": (
+            f"Convert this product idea into a structured PRD:\n\n"
+            f"{state['prompt']}"
+            f"{figma_context}"
+        )},
+    ]
+
+    try:
+        response = call_llm(ModelTier.GPT4O, messages, settings, max_tokens=4096)
+        requirements = _parse_json_response(response["content"])
+        _log_usage(state, "gpt4o", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _req_err:
+        logging.getLogger(__name__).warning("Requirements agent failed, falling back to planner: %s", _req_err)
+        return {"build_phase": "design", "requirements": None}
+
+    state["event_seq"] = _emit_event(
+        state, "agent_end", "gpt4o",
+        {
+            "agent": "requirements",
+            "app_name": requirements.get("app_name", ""),
+            "screens": len(requirements.get("screens", [])),
+            "entities": len(requirements.get("data_entities", [])),
+            "requirements": requirements,
+            "hitl_required": True,
+        },
+        settings,
+    )
+
+    return {
+        "requirements": requirements,
+        "requirements_approved": False,
+        "build_phase": "requirements",
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "gpt4o", response),
+    }
+
+
+def requirements_hitl_node(state: BuildState) -> dict:
+    """HITL Gate A: pause after requirements for user review."""
+    if state.get("requirements_approved") or not state.get("requirements"):
+        return {}  # Pass through
+
+    settings = Settings(**state["settings"])
+    _update_build_status(state, "awaiting_requirements_approval", settings)
+
+    db = _get_db(settings)
+    db.table("builds").update({"status": "awaiting_requirements_approval"}).eq("id", state["build_id"]).execute()
+
+    state["event_seq"] = _emit_event(
+        state, "info", None,
+        {
+            "message": "Requirements ready for review",
+            "hitl_required": True,
+            "gate": "requirements",
+            "requirements": state["requirements"],
+        },
+        settings,
+    )
+    return {"requirements_approved": False, "event_seq": state["event_seq"]}
+
+
+def requirements_hitl_decision(state: BuildState) -> str:
+    """Route after requirements HITL."""
+    if state.get("requirements_approved") or not state.get("requirements"):
+        return "design"
+    return "__end__"
+
+
+# ---------------------------------------------------------------------------
+# Node: DESIGN (Figma API or Sonnet — design contract generation)
+# ---------------------------------------------------------------------------
+
+def design_node(state: BuildState) -> dict:
+    """Stage 1: Generate Design Contract from Figma JSON or PRD."""
+    settings = Settings(**state["settings"])
+
+    # Try Figma first if key is provided and stage is enabled
+    figma_contract = None
+    if settings.enable_figma_stage and state.get("figma_key"):
+        try:
+            from ..services.figma import fetch_design_contract
+            figma_contract = fetch_design_contract(state["figma_key"], settings)
+            state["event_seq"] = _emit_event(
+                state, "info", "figma",
+                {
+                    "message": f"Figma design loaded: {figma_contract['file_name']} ({len(figma_contract['screens'])} screens)",
+                    "design_contract": figma_contract,
+                },
+                settings,
+            )
+        except Exception as _figma_err:
+            logging.getLogger(__name__).warning("Figma fetch failed, generating design from PRD: %s", _figma_err)
+
+    if figma_contract:
+        return {
+            "design_contract": figma_contract,
+            "design_approved": True,  # Figma designs auto-approved (user already approved in Figma)
+            "build_phase": "frontend",
+            "event_seq": state["event_seq"],
+        }
+
+    # No Figma — generate design spec from PRD using Sonnet
+    state["event_seq"] = _emit_event(
+        state, "agent_start", "sonnet",
+        {"agent": "design", "message": "Generating design contract from requirements..."},
+        settings,
+    )
+
+    requirements_ctx = json.dumps(state.get("requirements") or {"prompt": state["prompt"]}, indent=2)
+    messages = [
+        {"role": "system", "content": DESIGN_SYSTEM},
+        {"role": "user", "content": f"Generate a Design Contract for this product:\n\n{requirements_ctx}"},
+    ]
+
+    try:
+        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=4096)
+        design_contract = _parse_json_response(response["content"])
+        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _design_err:
+        logging.getLogger(__name__).warning("Design agent failed, proceeding without: %s", _design_err)
+        return {"design_contract": None, "design_approved": True, "build_phase": "frontend"}
+
+    state["event_seq"] = _emit_event(
+        state, "agent_end", "sonnet",
+        {"agent": "design", "design_contract": design_contract},
+        settings,
+    )
+
+    return {
+        "design_contract": design_contract,
+        "design_approved": False,
+        "build_phase": "design",
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "sonnet", response),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Node: FRONTEND (Sonnet — complete UI with mock data, no backend)
+# ---------------------------------------------------------------------------
+
+def frontend_node(state: BuildState) -> dict:
+    """Stage 2: Build complete frontend with mock data (no Supabase calls)."""
+    settings = Settings(**state["settings"])
+    _update_build_status(state, "building_frontend", settings)
+
+    state["event_seq"] = _emit_event(
+        state, "agent_start", "sonnet",
+        {"agent": "frontend", "message": "Building frontend UI (mock data, no backend)..."},
+        settings,
+    )
+
+    requirements_ctx = json.dumps(state.get("requirements") or {"prompt": state["prompt"]}, indent=2)
+    design_ctx = json.dumps(state.get("design_contract") or {}, indent=2)
+
+    messages = [
+        {"role": "system", "content": FRONTEND_SYSTEM},
+        {"role": "user", "content": (
+            f"## Product Requirements\n{requirements_ctx}\n\n"
+            f"## Design Contract\n{design_ctx}\n\n"
+            f"## User Request\n{state['prompt']}\n\n"
+            f"Build the complete frontend. ALL screens. ALL components. Mock data only."
+        )},
+    ]
+
+    try:
+        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=16000)
+        result = _parse_json_response(response["content"])
+        frontend_files = result.get("files", {})
+        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _fe_err:
+        logging.getLogger(__name__).exception("Frontend node failed: %s", _fe_err)
+        state["event_seq"] = _emit_event(
+            state, "error", "sonnet",
+            {"message": f"Frontend build failed: {str(_fe_err)[:200]}"},
+            settings,
+        )
+        return {"build_phase": "frontend", "event_seq": state["event_seq"]}
+
+    # Emit frontend files for preview
+    for path, content in frontend_files.items():
+        state["event_seq"] = _emit_event(
+            state, "file_content", "sonnet",
+            {"path": path, "content": content, "stage": "frontend"},
+            settings,
+        )
+
+    state["event_seq"] = _emit_event(
+        state, "agent_end", "sonnet",
+        {
+            "agent": "frontend",
+            "files_count": len(frontend_files),
+            "screens": result.get("screens_built", []),
+            "hitl_required": True,
+            "gate": "frontend",
+        },
+        settings,
+    )
+
+    return {
+        "frontend_files": frontend_files,
+        "frontend_approved": False,
+        "build_phase": "frontend",
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "sonnet", response),
+    }
+
+
+def frontend_hitl_node(state: BuildState) -> dict:
+    """HITL Gate C: pause after frontend build for visual approval."""
+    if state.get("frontend_approved"):
+        return {}
+
+    settings = Settings(**state["settings"])
+    _update_build_status(state, "awaiting_frontend_approval", settings)
+
+    db = _get_db(settings)
+    db.table("builds").update({"status": "awaiting_frontend_approval"}).eq("id", state["build_id"]).execute()
+
+    state["event_seq"] = _emit_event(
+        state, "info", None,
+        {
+            "message": "Frontend ready for visual review",
+            "hitl_required": True,
+            "gate": "frontend",
+            "files": list(state.get("frontend_files", {}).keys()),
+        },
+        settings,
+    )
+    return {"frontend_approved": False, "event_seq": state["event_seq"]}
+
+
+def frontend_hitl_decision(state: BuildState) -> str:
+    """Route after frontend HITL."""
+    if state.get("frontend_approved"):
+        return "backend_spec"
+    return "__end__"
+
+
+# ---------------------------------------------------------------------------
+# Node: BACKEND SPEC (Sonnet — reverse-engineer backend from frontend)
+# ---------------------------------------------------------------------------
+
+def backend_spec_node(state: BuildState) -> dict:
+    """Stage 3: Analyze frontend code and generate backend schema spec."""
+    settings = Settings(**state["settings"])
+
+    state["event_seq"] = _emit_event(
+        state, "agent_start", "sonnet",
+        {"agent": "backend_spec", "message": "Analyzing frontend to generate backend schema..."},
+        settings,
+    )
+
+    frontend_code = "\n\n".join(
+        f"// File: {path}\n{content}"
+        for path, content in (state.get("frontend_files") or {}).items()
+    )
+
+    messages = [
+        {"role": "system", "content": BACKEND_SPEC_SYSTEM},
+        {"role": "user", "content": (
+            f"## Approved Frontend Code\n{frontend_code[:30000]}\n\n"
+            f"Analyze this frontend and generate the exact backend spec it needs."
+        )},
+    ]
+
+    try:
+        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=4096)
+        backend_spec = _parse_json_response(response["content"])
+        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _bs_err:
+        logging.getLogger(__name__).exception("Backend spec node failed: %s", _bs_err)
+        return {"backend_spec": None, "build_phase": "backend", "event_seq": state["event_seq"]}
+
+    state["event_seq"] = _emit_event(
+        state, "agent_end", "sonnet",
+        {
+            "agent": "backend_spec",
+            "collections": [c["name"] for c in backend_spec.get("collections", [])],
+            "backend_spec": backend_spec,
+        },
+        settings,
+    )
+
+    return {
+        "backend_spec": backend_spec,
+        "build_phase": "backend",
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "sonnet", response),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Node: INTEGRATION (Sonnet — wire frontend mocks to real Supabase)
+# ---------------------------------------------------------------------------
+
+def integration_node(state: BuildState) -> dict:
+    """Stage 4: Replace mock hooks with real Supabase calls."""
+    settings = Settings(**state["settings"])
+    _update_build_status(state, "integrating", settings)
+
+    state["event_seq"] = _emit_event(
+        state, "agent_start", "sonnet",
+        {"agent": "integration", "message": "Wiring frontend to Supabase backend..."},
+        settings,
+    )
+
+    frontend_code = "\n\n".join(
+        f"// File: {path}\n{content}"
+        for path, content in (state.get("frontend_files") or {}).items()
+    )
+    backend_spec_ctx = json.dumps(state.get("backend_spec") or {}, indent=2)
+
+    messages = [
+        {"role": "system", "content": INTEGRATION_SYSTEM},
+        {"role": "user", "content": (
+            f"## Approved Frontend Code\n{frontend_code[:25000]}\n\n"
+            f"## Backend Spec\n{backend_spec_ctx}\n\n"
+            f"Replace ALL mock hooks with real Supabase calls. "
+            f"Return unified diff patches."
+        )},
+    ]
+
+    try:
+        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=12000)
+        result = _parse_json_response(response["content"])
+        patches = result.get("patches", [])
+        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _int_err:
+        logging.getLogger(__name__).exception("Integration node failed: %s", _int_err)
+        # Fall back to using frontend files directly as scaffold
+        scaffold_files = state.get("frontend_files", {})
+        return {
+            "scaffold_files": scaffold_files,
+            "patches": [],
+            "build_phase": "integration",
+            "event_seq": state["event_seq"],
+        }
+
+    for patch in patches:
+        state["event_seq"] = _emit_event(state, "patch", "sonnet", {"diff": patch}, settings)
+
+    state["event_seq"] = _emit_event(
+        state, "agent_end", "sonnet",
+        {"agent": "integration", "patch_count": len(patches)},
+        settings,
+    )
+
+    return {
+        "scaffold_files": state.get("frontend_files", {}),
+        "patches": patches,
+        "build_phase": "integration",
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "sonnet", response),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Node: PRE-REVIEWER (Gemini Flash — fast critical-issue gate)
+# ---------------------------------------------------------------------------
+
+def pre_reviewer_node(state: BuildState) -> dict:
+    """Gemini Flash fast pre-review: blocks only critical security/data issues.
+
+    Runs before expensive Sonnet reviewer. 40x cheaper, <2s.
+    Only blocks on showstoppers (XSS, data leakage, hardcoded credentials).
+    Warnings go directly to commit without burning a review iteration.
+    """
+    settings = Settings(**state["settings"])
+
+    if not settings.enable_gemini_pre_review or not settings.gemini_api_key:
+        return {}  # Skip if not configured
+
+    patches_text = "\n\n".join(state.get("patches", []))
+    if not patches_text:
+        return {}
+
+    messages = [
+        {"role": "system", "content": PRE_REVIEW_SYSTEM},
+        {"role": "user", "content": (
+            f"Scan these patches for critical issues:\n\n"
+            f"```diff\n{patches_text[:20000]}\n```"
+        )},
+    ]
+
+    try:
+        response = call_llm(ModelTier.GEMINI_FLASH, messages, settings, max_tokens=1024)
+        pre_review = _parse_json_response(response["content"])
+        _log_usage(state, "gemini_flash", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _pr_err:
+        logging.getLogger(__name__).warning("Pre-reviewer failed (skipping): %s", _pr_err)
+        return {}  # Fail open — don't block on pre-reviewer failure
+
+    blocking = pre_review.get("blocking_issues", [])
+    if blocking:
+        state["event_seq"] = _emit_event(
+            state, "warning", "gemini_flash",
+            {"message": f"Pre-review: {len(blocking)} critical issue(s) found", "issues": blocking},
+            settings,
+        )
+        # Inject pre-review findings into review_result so coder sees them immediately
+        return {
+            "review_result": {"approved": False, "findings": blocking},
+            "review_iterations": state.get("review_iterations", 0) + 1,
+            "event_seq": state["event_seq"],
+            "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+            "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+            "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+            "model_usage": _update_model_usage(state["model_usage"], "gemini_flash", response),
+        }
+
+    # No critical issues — pass straight to commit (skip expensive Sonnet review)
+    state["event_seq"] = _emit_event(
+        state, "info", "gemini_flash",
+        {"message": "Pre-review: clean — no critical issues found"},
+        settings,
+    )
+    return {
+        "review_result": {"approved": True, "findings": pre_review.get("notes", [])},
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "gemini_flash", response),
+    }
+
+
+def pre_review_decision(state: BuildState) -> str:
+    """After pre-review: if clean -> commit; if blocking -> coder."""
+    review = state.get("review_result", {})
+    if review.get("approved", True):
+        return "committer"
+    return "coder"
+
+
+# ---------------------------------------------------------------------------
 # Graph construction
 # ---------------------------------------------------------------------------
 
+def hitl_decision(state: BuildState) -> str:
+    """After hitl_gate: if approved -> frontend_node (genesis) / coder (surgical); if not -> end (wait)."""
+    if not state.get("hitl_approved"):
+        return "__end__"
+
+    settings = Settings(**state["settings"])
+    plan = state.get("plan", {}) or {}
+
+    # Frontend-first mode: enabled for genesis builds
+    if (settings.enable_frontend_first
+            and plan.get("needs_scaffold", False)
+            and state.get("requirements")):
+        return "frontend"
+
+    # Legacy path: scaffolder + coder (genesis without requirements stage)
+    if plan.get("needs_scaffold", False):
+        return "scaffolder"
+
+    # Surgical mode: direct to coder
+    return "coder"
+
+
 def build_graph() -> StateGraph:
-    """Construct the LangGraph agent pipeline with HITL gate."""
+    """Construct the multi-modal LangGraph agent pipeline.
+
+    New flow (frontend-first with requirements + Figma):
+      requirements → requirements_hitl → design → planner → hitl_gate
+        → frontend → frontend_hitl → backend_spec → integration
+        → pre_reviewer → reviewer → committer → deployer
+
+    Legacy flow (surgical / genesis without requirements):
+      planner → hitl_gate → scaffolder/coder → pre_reviewer → reviewer → committer → deployer
+    """
     graph = StateGraph(BuildState)
 
-    # Add nodes
+    # --- New multi-modal pipeline nodes ---
+    graph.add_node("requirements", requirements_node)
+    graph.add_node("requirements_hitl", requirements_hitl_node)
+    graph.add_node("design", design_node)
+
+    # --- Existing planning + HITL ---
     graph.add_node("planner", planner_node)
     graph.add_node("hitl_gate", hitl_gate_node)
+
+    # --- Legacy path ---
     graph.add_node("scaffolder", scaffolder_node)
+
+    # --- New frontend-first path ---
+    graph.add_node("frontend", frontend_node)
+    graph.add_node("frontend_hitl", frontend_hitl_node)
+    graph.add_node("backend_spec", backend_spec_node)
+    graph.add_node("integration", integration_node)
+
+    # --- Shared code path ---
     graph.add_node("coder", coder_node)
+    graph.add_node("pre_reviewer", pre_reviewer_node)
     graph.add_node("reviewer", reviewer_node)
     graph.add_node("committer", committer_node)
     graph.add_node("deployer", deployer_node)
 
-    # Entry point
-    graph.set_entry_point("planner")
+    # ── Entry: requirements analysis ──────────────────────────────────────
+    graph.set_entry_point("requirements")
+    graph.add_edge("requirements", "requirements_hitl")
+    graph.add_conditional_edges("requirements_hitl", requirements_hitl_decision, {
+        "design": "design",
+        "__end__": END,
+    })
+    graph.add_edge("design", "planner")
 
-    # Planner -> HITL gate
+    # ── Architecture planning + HITL ──────────────────────────────────────
     graph.add_edge("planner", "hitl_gate")
-
-    # HITL gate -> scaffolder/coder/end (waits for approval)
     graph.add_conditional_edges("hitl_gate", hitl_decision, {
-        "scaffolder": "scaffolder",
-        "coder": "coder",
+        "frontend": "frontend",       # New: frontend-first genesis
+        "scaffolder": "scaffolder",   # Legacy: genesis with scaffolder
+        "coder": "coder",             # Surgical: direct to coder
         "__end__": END,
     })
 
+    # ── Frontend-first path ───────────────────────────────────────────────
+    graph.add_edge("frontend", "frontend_hitl")
+    graph.add_conditional_edges("frontend_hitl", frontend_hitl_decision, {
+        "backend_spec": "backend_spec",
+        "__end__": END,
+    })
+    graph.add_edge("backend_spec", "integration")
+    graph.add_edge("integration", "pre_reviewer")
+
+    # ── Legacy path ───────────────────────────────────────────────────────
     graph.add_edge("scaffolder", "coder")
-    graph.add_edge("coder", "reviewer")
+    graph.add_edge("coder", "pre_reviewer")
+
+    # ── Pre-review gate (Gemini Flash — fast critical check) ──────────────
+    graph.add_conditional_edges("pre_reviewer", pre_review_decision, {
+        "committer": "committer",   # Clean: skip expensive Sonnet review
+        "coder": "reviewer",        # Issues found: run full Sonnet review
+    })
+
+    # ── Full review loop (Sonnet) ─────────────────────────────────────────
     graph.add_conditional_edges("reviewer", review_decision, {
         "coder": "coder",
         "committer": "committer",
     })
+
+    # ── Commit + deploy ───────────────────────────────────────────────────
     graph.add_edge("committer", "deployer")
     graph.add_edge("deployer", END)
 
@@ -1491,9 +2071,19 @@ async def run_build(
         "patches": [],
         "review_result": None,
         "review_iterations": 0,
-        # HITL checkpoint
+        # HITL checkpoint (architecture plan)
         "hitl_approved": False,
         "hitl_modified_plan": None,
+        # Multi-modal pipeline stages
+        "requirements": None,
+        "requirements_approved": False,
+        "figma_key": None,
+        "design_contract": None,
+        "design_approved": False,
+        "frontend_files": {},
+        "frontend_approved": False,
+        "backend_spec": None,
+        "build_phase": "requirements",
         # Sentinel
         "sentinel_result": None,
         # Deployment
@@ -1576,6 +2166,17 @@ async def run_build_resume(
         "review_iterations": 0,
         "hitl_approved": True,  # Key: already approved
         "hitl_modified_plan": None,
+        # Multi-modal stages: all pre-code stages already done on initial run
+        "requirements": build.data.get("requirements_json"),
+        "requirements_approved": True,    # Skip requirements on resume
+        "figma_key": build.data.get("figma_key"),
+        "design_contract": build.data.get("design_contract_json"),
+        "design_approved": True,           # Skip design on resume
+        "frontend_files": {},
+        "frontend_approved": False,
+        "backend_spec": None,
+        "build_phase": "frontend" if approved_plan.get("needs_scaffold") else "integration",
+        # Sentinel
         "sentinel_result": None,
         "commit_sha": None,
         "image_tag": None,
