@@ -1,15 +1,29 @@
 """
-LLM Router — Model selection, fallback, retry, and cost tracking.
+LLM Router — Three-layer multi-model routing with fallback and cost tracking.
 
-Routing table (task-type-based):
-  Claude (Opus):    Architecture, planning, complex decisions
-  Claude (Sonnet):  Backend code, diffs, repair, review
-  Claude (Haiku):   UI components, styling, layout, scaffolding
+THREE-LAYER ARCHITECTURE:
+  ┌─────────────────────────────────────────────────────────┐
+  │  Layer 1 — GPT-4o  (The Communicator)                    │
+  │  JSON output, structured specs, user-facing reasoning    │
+  │  Tasks: requirements, design contract, HITL commentary   │
+  ├─────────────────────────────────────────────────────────┤
+  │  Layer 2 — Gemini  (The Analyst)                         │
+  │  Large content, 1M-token codebase context, vision        │
+  │  Tasks: frontend code, backend spec, codebase analysis   │
+  │         wireframe vision, fast pre-review                │
+  ├─────────────────────────────────────────────────────────┤
+  │  Layer 3 — Claude  (The Engineer)                        │
+  │  Code precision, security, surgical diff patches         │
+  │  Tasks: integration, review, repair, architecture        │
+  └─────────────────────────────────────────────────────────┘
 
 Fallback chain:
-  Opus fails   -> Sonnet (degraded planning)
-  Sonnet fails -> Haiku  (degraded coding, same vendor)
-  Haiku fails  -> Sonnet (over-qualified but reliable)
+  GPT-4o       → Opus    (JSON spec fails → Claude structural planning)
+  Gemini Pro   → Opus    (content fails → Claude deep planning)
+  Gemini Flash → Haiku   (fast review fails → Claude fast review)
+  Opus         → Sonnet  (planning fails → degraded planning)
+  Haiku        → Sonnet  (fast task fails → reliable anchor)
+  Sonnet       → (none)  (anchor tier; RuntimeError on exhaustion)
 
 Note: DeepSeek is retained in the cost table and fallback map for
 historical cost tracking but is no longer used as a primary model.
@@ -34,6 +48,9 @@ class ModelTier(str, Enum):
     SONNET = "sonnet"
     HAIKU = "haiku"
     DEEPSEEK = "deepseek"
+    GPT4O = "gpt4o"               # OpenAI GPT-4o for requirements + vision
+    GEMINI_PRO = "gemini_pro"     # Gemini 2.0 Pro: 1M-token full codebase context
+    GEMINI_FLASH = "gemini_flash" # Gemini 2.0 Flash: fast cheap pre-review + routing
 
 
 class TaskType(str, Enum):
@@ -48,22 +65,66 @@ class TaskType(str, Enum):
     LAYOUT = "layout"
     SCAFFOLD = "scaffold"
 
+    # ── LAYER 1: GPT-4o  — The Communicator ──────────────────────────────
+    # JSON output, structured specs, user-facing reasoning
+    REQUIREMENTS = "requirements"           # Natural language → structured PRD JSON
+    DESIGN = "design"                       # PRD → Design Contract JSON (spec, not code)
+    HITL_COMMENTARY = "hitl_commentary"     # Technical plan → friendly user explanation
 
-# Task type → model tier routing
+    # ── LAYER 2: Gemini  — The Analyst ───────────────────────────────────
+    # Large content volume, 1M-token codebase context, vision
+    FRONTEND = "frontend"                   # Full UI code generation (large volume + vision)
+    BACKEND_SPEC = "backend_spec"           # Backend schema from full codebase context
+    CODEBASE_ANALYSIS = "codebase_analysis" # Entire codebase ingest + impact analysis (1M ctx)
+    VISION = "vision"                       # Wireframe/screenshot → UI spec
+    PRE_REVIEW = "pre_review"               # Fast critical-issue gate (40x cheaper)
+
+    # ── LAYER 3: Claude  — The Engineer ──────────────────────────────────
+    # Code precision, security, surgical diffs
+    INTEGRATION = "integration"             # Replace mocks with Supabase (surgical patches)
+    BACKEND = "backend"
+    DIFF = "diff"
+    REPAIR = "repair"
+    REVIEW = "review"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THREE-LAYER ROUTING TABLE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  GPT-4o   — Communicator: JSON specs, user reasoning, structured output
+#  Gemini   — Analyst:      Content volume, codebase context (1M), vision
+#  Claude   — Engineer:     Code precision, security, surgical patches
+#
 TASK_ROUTING: dict[TaskType, ModelTier] = {
-    # Claude handles: architecture, backend, diffs, repair
-    TaskType.ARCHITECTURE: ModelTier.OPUS,
-    TaskType.BACKEND: ModelTier.SONNET,
-    TaskType.DIFF: ModelTier.SONNET,
-    TaskType.REPAIR: ModelTier.SONNET,
-    TaskType.REVIEW: ModelTier.SONNET,
-    # Haiku handles: UI components, styling, layout, scaffolding
-    # (replaced DeepSeek — better instruction following, same Anthropic vendor,
-    #  eliminates LOC violations and TODO leaks that caused the review loop)
+
+    # ── Layer 1: GPT-4o (Communicator) ───────────────────────────────────
+    # Best at: structured JSON, product language, user-facing clarity
+    TaskType.REQUIREMENTS:    ModelTier.GPT4O,   # PRD JSON
+    TaskType.DESIGN:          ModelTier.GPT4O,   # Design Contract JSON (specs, not code)
+    TaskType.HITL_COMMENTARY: ModelTier.GPT4O,   # HITL plan → friendly user message
+
+    # ── Layer 2: Gemini (Analyst) ─────────────────────────────────────────
+    # Best at: 1M context, large code volume, vision, ultra-fast pre-review
+    TaskType.FRONTEND:           ModelTier.GEMINI_PRO,   # Full UI code (large, vision-aware)
+    TaskType.BACKEND_SPEC:       ModelTier.GEMINI_PRO,   # Backend from full codebase context
+    TaskType.CODEBASE_ANALYSIS:  ModelTier.GEMINI_PRO,   # Full codebase ingest (1M tokens)
+    TaskType.VISION:             ModelTier.GEMINI_PRO,   # Wireframe/screenshot → spec
+    TaskType.PRE_REVIEW:         ModelTier.GEMINI_FLASH, # Fast critical-issue gate
+
+    # ── Layer 3: Claude (Engineer) ────────────────────────────────────────
+    # Best at: precise code, OWASP security, instruction-following for diffs
+    TaskType.ARCHITECTURE: ModelTier.OPUS,     # Deep architectural planning
+    TaskType.INTEGRATION:  ModelTier.SONNET,   # Surgical mock→Supabase patches
+    TaskType.BACKEND:      ModelTier.SONNET,   # Backend API code
+    TaskType.DIFF:         ModelTier.SONNET,   # Unified diffs
+    TaskType.REPAIR:       ModelTier.SONNET,   # Fix specific issues
+    TaskType.REVIEW:       ModelTier.SONNET,   # Security + pattern review
+    # Haiku: fast, cheap UI scaffolding
     TaskType.UI_COMPONENT: ModelTier.HAIKU,
-    TaskType.STYLING: ModelTier.HAIKU,
-    TaskType.LAYOUT: ModelTier.HAIKU,
-    TaskType.SCAFFOLD: ModelTier.HAIKU,
+    TaskType.STYLING:      ModelTier.HAIKU,
+    TaskType.LAYOUT:       ModelTier.HAIKU,
+    TaskType.SCAFFOLD:     ModelTier.HAIKU,
 }
 
 
@@ -108,17 +169,23 @@ def classify_file_task(file_path: str) -> TaskType:
 
 # Cost per 1M tokens (USD) — update as pricing changes
 COST_TABLE = {
-    "opus":     {"input": 15.00, "output": 75.00},
-    "sonnet":   {"input": 3.00,  "output": 15.00},
-    "haiku":    {"input": 0.25,  "output": 1.25},
-    "deepseek": {"input": 0.14,  "output": 0.28},
+    "opus":          {"input": 15.00, "output": 75.00},
+    "sonnet":        {"input": 3.00,  "output": 15.00},
+    "haiku":         {"input": 0.25,  "output": 1.25},
+    "deepseek":      {"input": 0.14,  "output": 0.28},
+    "gpt4o":         {"input": 2.50,  "output": 10.00},   # GPT-4o pricing
+    "gemini_pro":    {"input": 1.25,  "output": 5.00},    # Gemini 2.0 Pro (1M ctx window)
+    "gemini_flash":  {"input": 0.075, "output": 0.30},    # Gemini 2.0 Flash (ultra-cheap)
 }
 
 FALLBACK_CHAIN: dict[ModelTier, ModelTier] = {
-    ModelTier.OPUS: ModelTier.SONNET,    # Opus fails → Sonnet (degraded planning)
-    ModelTier.SONNET: ModelTier.HAIKU,   # Sonnet fails → Haiku (degraded coding, same vendor)
-    ModelTier.HAIKU: ModelTier.SONNET,   # Haiku fails → Sonnet (over-qualified but reliable)
-    ModelTier.DEEPSEEK: ModelTier.SONNET, # DeepSeek retained as dead fallback (no longer primary)
+    ModelTier.GPT4O:        ModelTier.OPUS,      # GPT-4o fails → Opus (requirements → Claude)
+    ModelTier.GEMINI_PRO:   ModelTier.OPUS,      # Gemini Pro fails → Opus (architecture fallback)
+    ModelTier.GEMINI_FLASH: ModelTier.HAIKU,     # Gemini Flash fails → Haiku (fast fallback)
+    ModelTier.OPUS:         ModelTier.SONNET,    # Opus fails → Sonnet (degraded planning)
+    ModelTier.HAIKU:        ModelTier.SONNET,    # Haiku fails → Sonnet (over-qualified but reliable)
+    ModelTier.DEEPSEEK:     ModelTier.SONNET,    # DeepSeek retained as dead fallback
+    # SONNET has no fallback — it is the anchor tier; if it fails, raise RuntimeError
 }
 
 MAX_RETRIES = 3
@@ -175,7 +242,7 @@ def call_llm(
                 "latency_ms": latency,
             }
 
-        except (anthropic.APIStatusError, anthropic.APIConnectionError, httpx.HTTPError) as e:
+        except (anthropic.APIStatusError, anthropic.APIConnectionError, httpx.HTTPError, OSError) as e:
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)])
                 attempt += 1
@@ -201,6 +268,10 @@ def _dispatch(
     """Dispatch to the correct provider based on tier."""
     if tier in (ModelTier.OPUS, ModelTier.SONNET, ModelTier.HAIKU):
         return _call_anthropic(tier, messages, settings, max_tokens, temperature)
+    elif tier == ModelTier.GPT4O:
+        return _call_openai(messages, settings, max_tokens, temperature)
+    elif tier in (ModelTier.GEMINI_PRO, ModelTier.GEMINI_FLASH):
+        return _call_gemini(tier, messages, settings, max_tokens, temperature)
     elif tier == ModelTier.DEEPSEEK:
         return _call_deepseek(messages, settings, max_tokens, temperature)
     else:
@@ -246,6 +317,114 @@ def _call_anthropic(
         "model": model_id,
         "tokens_in": response.usage.input_tokens,
         "tokens_out": response.usage.output_tokens,
+    }
+
+
+def _call_openai(
+    messages: list[dict[str, str]],
+    settings: Settings,
+    max_tokens: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """Call OpenAI API (GPT-4o) for requirements analysis."""
+    if not settings.openai_api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY not configured. Set it in .env to enable requirements analysis."
+        )
+
+    response = httpx.Client(timeout=120).post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": settings.model_gpt4o,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "response_format": {"type": "text"},
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    if "choices" not in data or not data["choices"]:
+        error_msg = data.get("error", {}).get("message", str(data)[:200])
+        raise httpx.HTTPStatusError(
+            f"OpenAI returned no choices: {error_msg}",
+            request=response.request,
+            response=response,
+        )
+
+    choice = data["choices"][0]
+    usage = data.get("usage", {})
+    return {
+        "content": choice["message"]["content"],
+        "model": settings.model_gpt4o,
+        "tokens_in": usage.get("prompt_tokens", 0),
+        "tokens_out": usage.get("completion_tokens", 0),
+    }
+
+
+def _call_gemini(
+    tier: ModelTier,
+    messages: list[dict[str, str]],
+    settings: Settings,
+    max_tokens: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """
+    Call Google Gemini API (Pro or Flash) via the OpenAI-compatible endpoint.
+
+    Gemini Pro:   1M token context → ingest entire codebase at once
+    Gemini Flash: Ultra-fast, ultra-cheap → pre-review, routing, simple tasks
+
+    Uses the OpenAI-compatible endpoint so no extra SDK needed beyond httpx.
+    """
+    if not settings.gemini_api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY not configured. Set it in .env to enable Gemini integration."
+        )
+
+    model_map = {
+        ModelTier.GEMINI_PRO: settings.model_gemini_pro,
+        ModelTier.GEMINI_FLASH: settings.model_gemini_flash,
+    }
+    model_id = model_map[tier]
+
+    # Gemini supports OpenAI-compatible API at generativelanguage.googleapis.com
+    response = httpx.Client(timeout=180).post(
+        f"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        headers={
+            "Authorization": f"Bearer {settings.gemini_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model_id,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    if "choices" not in data or not data["choices"]:
+        error_msg = data.get("error", {}).get("message", str(data)[:200])
+        raise httpx.HTTPStatusError(
+            f"Gemini returned no choices: {error_msg}",
+            request=response.request,
+            response=response,
+        )
+
+    choice = data["choices"][0]
+    usage = data.get("usage", {})
+    return {
+        "content": choice["message"]["content"],
+        "model": model_id,
+        "tokens_in": usage.get("prompt_tokens", 0),
+        "tokens_out": usage.get("completion_tokens", 0),
     }
 
 

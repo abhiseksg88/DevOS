@@ -27,12 +27,26 @@ class Settings(BaseSettings):
     # --- LLM Providers ---
     anthropic_api_key: str = ""
     deepseek_api_key: str = ""
+    openai_api_key: str = ""            # GPT-4o for requirements analysis + vision
+    gemini_api_key: str = ""            # Gemini Pro (1M ctx) + Flash (fast pre-review)
 
     # --- Model IDs ---
     model_opus: str = "claude-opus-4-6"
     model_sonnet: str = "claude-sonnet-4-5-20250929"
     model_haiku: str = "claude-haiku-4-5-20251001"
     model_deepseek: str = "deepseek-chat"  # DeepSeek-V3 (unified, replaces deepseek-coder)
+    model_gpt4o: str = "gpt-4o"         # OpenAI GPT-4o for requirements + vision
+    model_gemini_pro: str = "gemini-2.0-pro-exp"    # Full codebase context (1M tokens)
+    model_gemini_flash: str = "gemini-2.0-flash"    # Fast pre-reviewer + routing
+
+    # --- Design Integration ---
+    figma_access_token: str = ""        # Figma REST API personal access token
+
+    # --- Pipeline feature flags ---
+    enable_requirements_stage: bool = True   # Run GPT-4o requirements agent before planner
+    enable_figma_stage: bool = True          # Parse Figma JSON when figma_key provided
+    enable_frontend_first: bool = True       # Frontend-first for genesis builds
+    enable_gemini_pre_review: bool = True    # Gemini Flash fast pre-review before Sonnet review
 
     # --- Docker / Deploy ---
     container_registry: str = "gcr.io/nimbusforge"

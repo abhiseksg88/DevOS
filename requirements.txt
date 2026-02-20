@@ -14,6 +14,8 @@ supabase==2.11.0
 # --- LLM Providers ---
 anthropic==0.42.0
 httpx==0.28.1
+google-generativeai==0.8.3      # Gemini: full-codebase context + fast pre-review
+openai==1.58.1                  # GPT-4o: requirements analysis + vision (wireframes)
 
 # --- Agent Orchestrator ---
 langgraph==0.2.60
