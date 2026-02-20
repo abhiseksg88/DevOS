@@ -147,10 +147,16 @@ async def startup_event():
     logger.info("CORS allowed origins: %s", settings.cors_allowed_origins)
     logger.info("Debug mode: %s", settings.debug_mode)
     logger.info(
-        "Configured providers — Anthropic: %s, Netlify: %s",
+        "Configured providers — Anthropic: %s, OpenAI: %s, Gemini: %s, Netlify: %s",
         bool(settings.anthropic_api_key),
+        bool(settings.openai_api_key),
+        bool(settings.gemini_api_key),
         bool(settings.netlify_token),
     )
+    if not settings.openai_api_key:
+        logger.warning("OPENAI_API_KEY not set — GPT-4o requirements stage will fall back to Claude Opus")
+    if not settings.gemini_api_key:
+        logger.warning("GEMINI_API_KEY not set — Gemini frontend stage will fall back to Claude Opus")
 
     # Auto-ensure app_data table exists (required for all CRUD apps)
     try:
