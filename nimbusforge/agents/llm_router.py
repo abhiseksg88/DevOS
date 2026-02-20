@@ -1,17 +1,29 @@
 """
-LLM Router — Model selection, fallback, retry, and cost tracking.
+LLM Router — Three-layer multi-model routing with fallback and cost tracking.
 
-Routing table (task-type-based):
-  OpenAI  (GPT-4o):     Requirements analysis, PRD generation
-  Claude  (Opus):       Architecture, planning, complex decisions
-  Claude  (Sonnet):     Backend code, diffs, repair, review, frontend, integration
-  Claude  (Haiku):      UI components, styling, layout, scaffolding
+THREE-LAYER ARCHITECTURE:
+  ┌─────────────────────────────────────────────────────────┐
+  │  Layer 1 — GPT-4o  (The Communicator)                    │
+  │  JSON output, structured specs, user-facing reasoning    │
+  │  Tasks: requirements, design contract, HITL commentary   │
+  ├─────────────────────────────────────────────────────────┤
+  │  Layer 2 — Gemini  (The Analyst)                         │
+  │  Large content, 1M-token codebase context, vision        │
+  │  Tasks: frontend code, backend spec, codebase analysis   │
+  │         wireframe vision, fast pre-review                │
+  ├─────────────────────────────────────────────────────────┤
+  │  Layer 3 — Claude  (The Engineer)                        │
+  │  Code precision, security, surgical diff patches         │
+  │  Tasks: integration, review, repair, architecture        │
+  └─────────────────────────────────────────────────────────┘
 
 Fallback chain:
-  GPT-4o fails → Opus  (requirements falls back to Claude for planning)
-  Opus fails   → Sonnet (degraded planning)
-  Haiku fails  → Sonnet (over-qualified but reliable)
-  Sonnet       → no fallback (anchor tier; raises RuntimeError on exhaustion)
+  GPT-4o       → Opus    (JSON spec fails → Claude structural planning)
+  Gemini Pro   → Opus    (content fails → Claude deep planning)
+  Gemini Flash → Haiku   (fast review fails → Claude fast review)
+  Opus         → Sonnet  (planning fails → degraded planning)
+  Haiku        → Sonnet  (fast task fails → reliable anchor)
+  Sonnet       → (none)  (anchor tier; RuntimeError on exhaustion)
 
 Note: DeepSeek is retained in the cost table and fallback map for
 historical cost tracking but is no longer used as a primary model.
@@ -52,40 +64,67 @@ class TaskType(str, Enum):
     STYLING = "styling"
     LAYOUT = "layout"
     SCAFFOLD = "scaffold"
-    # New multimodal pipeline stages
-    REQUIREMENTS = "requirements"       # Product requirements analysis → GPT-4o
-    DESIGN = "design"                   # Design contract from Figma/spec → Sonnet
-    FRONTEND = "frontend"               # Frontend-only code (no backend) → Sonnet
-    BACKEND_SPEC = "backend_spec"       # Backend schema from frontend analysis → Sonnet
-    INTEGRATION = "integration"         # Wire frontend to backend → Sonnet
-    # Gemini-powered stages
-    CODEBASE_ANALYSIS = "codebase_analysis"  # Full codebase ingest + impact analysis → Gemini Pro
-    PRE_REVIEW = "pre_review"           # Fast pre-review before expensive Sonnet → Gemini Flash
+
+    # ── LAYER 1: GPT-4o  — The Communicator ──────────────────────────────
+    # JSON output, structured specs, user-facing reasoning
+    REQUIREMENTS = "requirements"           # Natural language → structured PRD JSON
+    DESIGN = "design"                       # PRD → Design Contract JSON (spec, not code)
+    HITL_COMMENTARY = "hitl_commentary"     # Technical plan → friendly user explanation
+
+    # ── LAYER 2: Gemini  — The Analyst ───────────────────────────────────
+    # Large content volume, 1M-token codebase context, vision
+    FRONTEND = "frontend"                   # Full UI code generation (large volume + vision)
+    BACKEND_SPEC = "backend_spec"           # Backend schema from full codebase context
+    CODEBASE_ANALYSIS = "codebase_analysis" # Entire codebase ingest + impact analysis (1M ctx)
+    VISION = "vision"                       # Wireframe/screenshot → UI spec
+    PRE_REVIEW = "pre_review"               # Fast critical-issue gate (40x cheaper)
+
+    # ── LAYER 3: Claude  — The Engineer ──────────────────────────────────
+    # Code precision, security, surgical diffs
+    INTEGRATION = "integration"             # Replace mocks with Supabase (surgical patches)
+    BACKEND = "backend"
+    DIFF = "diff"
+    REPAIR = "repair"
+    REVIEW = "review"
 
 
-# Task type → model tier routing
+# ═══════════════════════════════════════════════════════════════════════════
+# THREE-LAYER ROUTING TABLE
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  GPT-4o   — Communicator: JSON specs, user reasoning, structured output
+#  Gemini   — Analyst:      Content volume, codebase context (1M), vision
+#  Claude   — Engineer:     Code precision, security, surgical patches
+#
 TASK_ROUTING: dict[TaskType, ModelTier] = {
-    # OpenAI handles: product requirements (natural language → structured PRD) + vision
-    TaskType.REQUIREMENTS: ModelTier.GPT4O,
-    # Gemini handles: full-codebase context analysis + fast pre-review
-    TaskType.CODEBASE_ANALYSIS: ModelTier.GEMINI_PRO,
-    TaskType.PRE_REVIEW: ModelTier.GEMINI_FLASH,
-    # Claude Opus handles: architecture, planning
-    TaskType.ARCHITECTURE: ModelTier.OPUS,
-    # Claude Sonnet handles: code generation and review
-    TaskType.BACKEND: ModelTier.SONNET,
-    TaskType.DIFF: ModelTier.SONNET,
-    TaskType.REPAIR: ModelTier.SONNET,
-    TaskType.REVIEW: ModelTier.SONNET,
-    TaskType.DESIGN: ModelTier.SONNET,
-    TaskType.FRONTEND: ModelTier.SONNET,
-    TaskType.BACKEND_SPEC: ModelTier.SONNET,
-    TaskType.INTEGRATION: ModelTier.SONNET,
-    # Haiku handles: UI components, styling, layout, scaffolding (fast + cheap)
+
+    # ── Layer 1: GPT-4o (Communicator) ───────────────────────────────────
+    # Best at: structured JSON, product language, user-facing clarity
+    TaskType.REQUIREMENTS:    ModelTier.GPT4O,   # PRD JSON
+    TaskType.DESIGN:          ModelTier.GPT4O,   # Design Contract JSON (specs, not code)
+    TaskType.HITL_COMMENTARY: ModelTier.GPT4O,   # HITL plan → friendly user message
+
+    # ── Layer 2: Gemini (Analyst) ─────────────────────────────────────────
+    # Best at: 1M context, large code volume, vision, ultra-fast pre-review
+    TaskType.FRONTEND:           ModelTier.GEMINI_PRO,   # Full UI code (large, vision-aware)
+    TaskType.BACKEND_SPEC:       ModelTier.GEMINI_PRO,   # Backend from full codebase context
+    TaskType.CODEBASE_ANALYSIS:  ModelTier.GEMINI_PRO,   # Full codebase ingest (1M tokens)
+    TaskType.VISION:             ModelTier.GEMINI_PRO,   # Wireframe/screenshot → spec
+    TaskType.PRE_REVIEW:         ModelTier.GEMINI_FLASH, # Fast critical-issue gate
+
+    # ── Layer 3: Claude (Engineer) ────────────────────────────────────────
+    # Best at: precise code, OWASP security, instruction-following for diffs
+    TaskType.ARCHITECTURE: ModelTier.OPUS,     # Deep architectural planning
+    TaskType.INTEGRATION:  ModelTier.SONNET,   # Surgical mock→Supabase patches
+    TaskType.BACKEND:      ModelTier.SONNET,   # Backend API code
+    TaskType.DIFF:         ModelTier.SONNET,   # Unified diffs
+    TaskType.REPAIR:       ModelTier.SONNET,   # Fix specific issues
+    TaskType.REVIEW:       ModelTier.SONNET,   # Security + pattern review
+    # Haiku: fast, cheap UI scaffolding
     TaskType.UI_COMPONENT: ModelTier.HAIKU,
-    TaskType.STYLING: ModelTier.HAIKU,
-    TaskType.LAYOUT: ModelTier.HAIKU,
-    TaskType.SCAFFOLD: ModelTier.HAIKU,
+    TaskType.STYLING:      ModelTier.HAIKU,
+    TaskType.LAYOUT:       ModelTier.HAIKU,
+    TaskType.SCAFFOLD:     ModelTier.HAIKU,
 }
 
 

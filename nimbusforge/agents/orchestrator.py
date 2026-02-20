@@ -47,6 +47,8 @@ from .prompts import (
     BACKEND_SPEC_SYSTEM,
     INTEGRATION_SYSTEM,
     PRE_REVIEW_SYSTEM,
+    COMMENTARY_SYSTEM,
+    VISION_SYSTEM,  # noqa: F401 — available for vision_node (Phase 2)
 )
 from ..services.ast_graph import (
     build_dependency_graph,
@@ -1545,9 +1547,10 @@ def design_node(state: BuildState) -> dict:
     ]
 
     try:
-        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=4096)
+        # GPT-4o: Layer 1 Communicator — reliable structured JSON output for design specs
+        response = call_llm(ModelTier.GPT4O, messages, settings, max_tokens=4096)
         design_contract = _parse_json_response(response["content"])
-        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+        _log_usage(state, "gpt4o", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     except Exception as _design_err:
         logging.getLogger(__name__).warning("Design agent failed, proceeding without: %s", _design_err)
         return {"design_contract": None, "design_approved": True, "build_phase": "frontend"}
@@ -1599,10 +1602,11 @@ def frontend_node(state: BuildState) -> dict:
     ]
 
     try:
-        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=16000)
+        # Gemini Pro: Layer 2 Analyst — 1M context + vision, generates large code volumes
+        response = call_llm(ModelTier.GEMINI_PRO, messages, settings, max_tokens=16000)
         result = _parse_json_response(response["content"])
         frontend_files = result.get("files", {})
-        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+        _log_usage(state, "gemini_pro", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     except Exception as _fe_err:
         logging.getLogger(__name__).exception("Frontend node failed: %s", _fe_err)
         state["event_seq"] = _emit_event(
@@ -1703,9 +1707,10 @@ def backend_spec_node(state: BuildState) -> dict:
     ]
 
     try:
-        response = call_llm(ModelTier.SONNET, messages, settings, max_tokens=4096)
+        # Gemini Pro: Layer 2 Analyst — 1M context sees full codebase for accurate backend spec
+        response = call_llm(ModelTier.GEMINI_PRO, messages, settings, max_tokens=4096)
         backend_spec = _parse_json_response(response["content"])
-        _log_usage(state, "sonnet", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+        _log_usage(state, "gemini_pro", response["tokens_in"], response["tokens_out"], response["cost"], settings)
     except Exception as _bs_err:
         logging.getLogger(__name__).exception("Backend spec node failed: %s", _bs_err)
         return {"backend_spec": None, "build_phase": "backend", "event_seq": state["event_seq"]}
@@ -1881,6 +1886,84 @@ def pre_review_decision(state: BuildState) -> str:
 # Graph construction
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Node: COMMENTARY (GPT-4o Layer 1 — translate technical plan → user message)
+# ---------------------------------------------------------------------------
+
+def commentary_node(state: BuildState) -> dict:
+    """
+    GPT-4o Layer 1 Communicator: runs before every HITL gate.
+    Translates technical JSON plans into a friendly, actionable user message.
+
+    Receives whatever is the most recent significant artifact:
+    - requirements PRD (after Stage 0)
+    - plan + proposal (after Opus planner)
+    - frontend_files summary (after Stage 2)
+
+    Emits a 'commentary' event that the frontend surfaces directly to the user
+    instead of showing raw JSON.
+    """
+    settings = Settings(**state["settings"])
+
+    # Build context from the most recent stage artifact
+    gate = state.get("build_phase", "requirements")
+    if gate == "requirements" and state.get("requirements"):
+        artifact_label = "Product Requirements"
+        artifact = json.dumps(state["requirements"], indent=2)[:6000]
+    elif state.get("plan"):
+        artifact_label = "Architecture Plan"
+        plan = state["plan"]
+        artifact = json.dumps({
+            "summary": plan.get("summary", ""),
+            "proposal": plan.get("proposal"),
+            "critical_question": plan.get("critical_question", ""),
+            "screens": plan.get("proposal", {}).get("screens", []) if plan.get("proposal") else [],
+        }, indent=2)[:4000]
+    elif state.get("frontend_files"):
+        artifact_label = "Frontend Build"
+        screens = list(state["frontend_files"].keys())
+        artifact = f"Built {len(screens)} files: {', '.join(screens[:8])}"
+    else:
+        return {}  # Nothing to narrate
+
+    messages = [
+        {"role": "system", "content": COMMENTARY_SYSTEM},
+        {"role": "user", "content": (
+            f"## {artifact_label}\n{artifact}\n\n"
+            f"Write a friendly 3-5 sentence explanation for the user. "
+            f"Original user request: \"{state.get('prompt', '')[:300]}\""
+        )},
+    ]
+
+    try:
+        # GPT-4o: Layer 1 Communicator — user-facing narrative
+        response = call_llm(ModelTier.GPT4O, messages, settings, max_tokens=400)
+        commentary = response["content"].strip()
+        _log_usage(state, "gpt4o", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    except Exception as _c_err:
+        logging.getLogger(__name__).warning("Commentary node failed (non-blocking): %s", _c_err)
+        return {}  # Commentary is optional — never block the pipeline
+
+    state["event_seq"] = _emit_event(
+        state, "info", "gpt4o",
+        {
+            "agent": "commentary",
+            "message": commentary,
+            "gate": gate,
+            "is_user_message": True,
+        },
+        settings,
+    )
+
+    return {
+        "event_seq": state["event_seq"],
+        "total_tokens_in": state["total_tokens_in"] + response.get("tokens_in", 0),
+        "total_tokens_out": state["total_tokens_out"] + response.get("tokens_out", 0),
+        "total_cost_usd": state["total_cost_usd"] + response.get("cost", 0),
+        "model_usage": _update_model_usage(state["model_usage"], "gpt4o", response),
+    }
+
+
 def hitl_decision(state: BuildState) -> str:
     """After hitl_gate: if approved -> frontend_node (genesis) / coder (surgical); if not -> end (wait)."""
     if not state.get("hitl_approved"):
@@ -1904,63 +1987,80 @@ def hitl_decision(state: BuildState) -> str:
 
 
 def build_graph() -> StateGraph:
-    """Construct the multi-modal LangGraph agent pipeline.
+    """Construct the three-layer multi-modal LangGraph agent pipeline.
 
-    New flow (frontend-first with requirements + Figma):
-      requirements → requirements_hitl → design → planner → hitl_gate
-        → frontend → frontend_hitl → backend_spec → integration
-        → pre_reviewer → reviewer → committer → deployer
+    Three-layer model assignment:
+      GPT-4o   (Layer 1 Communicator) — requirements, design spec, HITL commentary
+      Gemini   (Layer 2 Analyst)      — frontend code, backend spec, codebase context, pre-review
+      Claude   (Layer 3 Engineer)     — integration patches, security review, repair, planning
 
-    Legacy flow (surgical / genesis without requirements):
-      planner → hitl_gate → scaffolder/coder → pre_reviewer → reviewer → committer → deployer
+    New flow (frontend-first):
+      requirements → commentary_req → requirements_hitl
+        → design → planner → commentary_plan → hitl_gate
+        → frontend → commentary_fe → frontend_hitl
+        → backend_spec → integration → pre_reviewer → reviewer → committer → deployer
+
+    Legacy flow (surgical):
+      requirements(skip) → design(skip) → planner → commentary_plan → hitl_gate
+        → coder → pre_reviewer → reviewer → committer → deployer
     """
     graph = StateGraph(BuildState)
 
-    # --- New multi-modal pipeline nodes ---
-    graph.add_node("requirements", requirements_node)
+    # ── Layer 1: GPT-4o commentary (one node, used 3 times with aliases) ──
+    graph.add_node("commentary_req",  commentary_node)  # Before requirements HITL
+    graph.add_node("commentary_plan", commentary_node)  # Before architecture HITL
+    graph.add_node("commentary_fe",   commentary_node)  # Before frontend HITL
+
+    # ── Stage 0: Requirements (GPT-4o) ────────────────────────────────────
+    graph.add_node("requirements",     requirements_node)
     graph.add_node("requirements_hitl", requirements_hitl_node)
+
+    # ── Stage 1: Design Contract (GPT-4o) ────────────────────────────────
     graph.add_node("design", design_node)
 
-    # --- Existing planning + HITL ---
-    graph.add_node("planner", planner_node)
+    # ── Stage 2a: Architecture Planning (Opus) + HITL ────────────────────
+    graph.add_node("planner",   planner_node)
     graph.add_node("hitl_gate", hitl_gate_node)
 
-    # --- Legacy path ---
-    graph.add_node("scaffolder", scaffolder_node)
-
-    # --- New frontend-first path ---
-    graph.add_node("frontend", frontend_node)
+    # ── Stage 2b: Frontend-first genesis path ────────────────────────────
+    graph.add_node("frontend",      frontend_node)       # Gemini Pro
     graph.add_node("frontend_hitl", frontend_hitl_node)
-    graph.add_node("backend_spec", backend_spec_node)
-    graph.add_node("integration", integration_node)
+    graph.add_node("backend_spec",  backend_spec_node)   # Gemini Pro
+    graph.add_node("integration",   integration_node)    # Claude Sonnet
 
-    # --- Shared code path ---
-    graph.add_node("coder", coder_node)
-    graph.add_node("pre_reviewer", pre_reviewer_node)
-    graph.add_node("reviewer", reviewer_node)
-    graph.add_node("committer", committer_node)
-    graph.add_node("deployer", deployer_node)
+    # ── Legacy path ───────────────────────────────────────────────────────
+    graph.add_node("scaffolder", scaffolder_node)        # Claude Haiku
 
-    # ── Entry: requirements analysis ──────────────────────────────────────
+    # ── Shared code path ──────────────────────────────────────────────────
+    graph.add_node("coder",        coder_node)           # Claude Sonnet
+    graph.add_node("pre_reviewer", pre_reviewer_node)    # Gemini Flash
+    graph.add_node("reviewer",     reviewer_node)        # Claude Sonnet
+    graph.add_node("committer",    committer_node)
+    graph.add_node("deployer",     deployer_node)
+
+    # ── ENTRY → Requirements → Commentary → HITL ─────────────────────────
     graph.set_entry_point("requirements")
-    graph.add_edge("requirements", "requirements_hitl")
+    graph.add_edge("requirements", "commentary_req")
+    graph.add_edge("commentary_req", "requirements_hitl")
     graph.add_conditional_edges("requirements_hitl", requirements_hitl_decision, {
         "design": "design",
         "__end__": END,
     })
-    graph.add_edge("design", "planner")
 
-    # ── Architecture planning + HITL ──────────────────────────────────────
-    graph.add_edge("planner", "hitl_gate")
+    # ── Design → Planner → Commentary → HITL ─────────────────────────────
+    graph.add_edge("design", "planner")
+    graph.add_edge("planner", "commentary_plan")
+    graph.add_edge("commentary_plan", "hitl_gate")
     graph.add_conditional_edges("hitl_gate", hitl_decision, {
-        "frontend": "frontend",       # New: frontend-first genesis
-        "scaffolder": "scaffolder",   # Legacy: genesis with scaffolder
-        "coder": "coder",             # Surgical: direct to coder
-        "__end__": END,
+        "frontend":   "frontend",    # Frontend-first genesis
+        "scaffolder": "scaffolder",  # Legacy genesis
+        "coder":      "coder",       # Surgical mode
+        "__end__":    END,
     })
 
-    # ── Frontend-first path ───────────────────────────────────────────────
-    graph.add_edge("frontend", "frontend_hitl")
+    # ── Frontend-first: Frontend → Commentary → HITL → Backend → Integrate ─
+    graph.add_edge("frontend", "commentary_fe")
+    graph.add_edge("commentary_fe", "frontend_hitl")
     graph.add_conditional_edges("frontend_hitl", frontend_hitl_decision, {
         "backend_spec": "backend_spec",
         "__end__": END,
