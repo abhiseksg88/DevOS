@@ -748,11 +748,11 @@ def scaffolder_node(state: BuildState) -> dict:
     """
     settings = Settings(**state["settings"])
     _update_build_status(state, "scaffolding", settings)
-    state["event_seq"] = _emit_event(state, "agent_start", "deepseek", {"agent": "scaffolder", "message": "Generating project scaffold..."}, settings)
+    state["event_seq"] = _emit_event(state, "agent_start", "haiku", {"agent": "scaffolder", "message": "Generating project scaffold..."}, settings)
     _scaff_t0 = time.monotonic()
     _scaff_nexus, _scaff_eid = _nexus_start(
         settings, state["tenant_id"], state["project_id"], state["build_id"],
-        "principal_builder", "scaffold", "deepseek", settings.model_deepseek,
+        "principal_builder", "scaffold", "haiku", settings.model_haiku,
         input_summary=f"Scaffold for: {state.get('prompt', '')[:300]}",
     )
 
@@ -776,7 +776,7 @@ def scaffolder_node(state: BuildState) -> dict:
         )},
     ]
 
-    response = call_llm(ModelTier.DEEPSEEK, messages, settings)
+    response = call_llm(ModelTier.HAIKU, messages, settings)
     files = _parse_json_response(response["content"]).get("files", {})
 
     # --- Enforce 120 LOC limit ---
@@ -788,18 +788,18 @@ def scaffolder_node(state: BuildState) -> dict:
 
     if violations:
         state["event_seq"] = _emit_event(
-            state, "warning", "deepseek",
+            state, "warning", "haiku",
             {"message": "LOC violations in scaffold", "violations": violations},
             settings,
         )
 
-    _log_usage(state, "deepseek", response["tokens_in"], response["tokens_out"], response["cost"], settings)
-    state["event_seq"] = _emit_event(state, "agent_end", "deepseek", {"agent": "scaffolder", "files_created": list(files.keys())}, settings)
+    _log_usage(state, "haiku", response["tokens_in"], response["tokens_out"], response["cost"], settings)
+    state["event_seq"] = _emit_event(state, "agent_end", "haiku", {"agent": "scaffolder", "files_created": list(files.keys())}, settings)
 
     # Emit file contents for frontend preview (SSE file_content events)
     for path, content in files.items():
         state["event_seq"] = _emit_event(
-            state, "file_content", "deepseek",
+            state, "file_content", "haiku",
             {"path": path, "content": content},
             settings,
         )
@@ -817,7 +817,7 @@ def scaffolder_node(state: BuildState) -> dict:
         "total_tokens_in": state["total_tokens_in"] + response["tokens_in"],
         "total_tokens_out": state["total_tokens_out"] + response["tokens_out"],
         "total_cost_usd": state["total_cost_usd"] + response["cost"],
-        "model_usage": _update_model_usage(state["model_usage"], "deepseek", response),
+        "model_usage": _update_model_usage(state["model_usage"], "haiku", response),
     }
 
 

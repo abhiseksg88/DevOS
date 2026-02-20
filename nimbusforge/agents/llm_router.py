@@ -3,15 +3,18 @@ LLM Router — Model selection, fallback, retry, and cost tracking.
 
 Routing table (task-type-based):
   Claude (Opus):    Architecture, planning, complex decisions
-  Claude (Sonnet):  Backend code, diffs, repair patches
-  Claude (Haiku):   QA/review/tests/security
-  DeepSeek:         UI components, styling, layout, scaffolding
+  Claude (Sonnet):  Backend code, diffs, repair, review
+  Claude (Haiku):   UI components, styling, layout, scaffolding
 
 Fallback chain:
-  Opus fails    -> Sonnet (degraded planning)
-  Sonnet fails  -> DeepSeek (degraded coding)
-  Haiku fails   -> Sonnet (over-qualified but available)
-  DeepSeek fails -> Sonnet (repair mode)
+  Opus fails   -> Sonnet (degraded planning)
+  Sonnet fails -> Haiku  (degraded coding, same vendor)
+  Haiku fails  -> Sonnet (over-qualified but reliable)
+
+Note: DeepSeek is retained in the cost table and fallback map for
+historical cost tracking but is no longer used as a primary model.
+Claude Haiku replaced it — better instruction-following eliminates
+the LOC violations and TODO leaks that caused the review retry loop.
 """
 
 from __future__ import annotations
@@ -54,11 +57,13 @@ TASK_ROUTING: dict[TaskType, ModelTier] = {
     TaskType.DIFF: ModelTier.SONNET,
     TaskType.REPAIR: ModelTier.SONNET,
     TaskType.REVIEW: ModelTier.SONNET,
-    # DeepSeek handles: UI components, styling, layout
-    TaskType.UI_COMPONENT: ModelTier.DEEPSEEK,
-    TaskType.STYLING: ModelTier.DEEPSEEK,
-    TaskType.LAYOUT: ModelTier.DEEPSEEK,
-    TaskType.SCAFFOLD: ModelTier.DEEPSEEK,
+    # Haiku handles: UI components, styling, layout, scaffolding
+    # (replaced DeepSeek — better instruction following, same Anthropic vendor,
+    #  eliminates LOC violations and TODO leaks that caused the review loop)
+    TaskType.UI_COMPONENT: ModelTier.HAIKU,
+    TaskType.STYLING: ModelTier.HAIKU,
+    TaskType.LAYOUT: ModelTier.HAIKU,
+    TaskType.SCAFFOLD: ModelTier.HAIKU,
 }
 
 
@@ -71,7 +76,7 @@ def classify_file_task(file_path: str) -> TaskType:
     """Classify a file path into a task type for routing."""
     path_lower = file_path.lower()
 
-    # UI/frontend files → DeepSeek
+    # UI/frontend files → Haiku
     if any(p in path_lower for p in [
         "/components/", "/pages/", "/app/page",
         ".css", ".scss", ".tailwind",
@@ -110,10 +115,10 @@ COST_TABLE = {
 }
 
 FALLBACK_CHAIN: dict[ModelTier, ModelTier] = {
-    ModelTier.OPUS: ModelTier.SONNET,
-    ModelTier.SONNET: ModelTier.DEEPSEEK,
-    ModelTier.HAIKU: ModelTier.SONNET,
-    ModelTier.DEEPSEEK: ModelTier.SONNET,
+    ModelTier.OPUS: ModelTier.SONNET,    # Opus fails → Sonnet (degraded planning)
+    ModelTier.SONNET: ModelTier.HAIKU,   # Sonnet fails → Haiku (degraded coding, same vendor)
+    ModelTier.HAIKU: ModelTier.SONNET,   # Haiku fails → Sonnet (over-qualified but reliable)
+    ModelTier.DEEPSEEK: ModelTier.SONNET, # DeepSeek retained as dead fallback (no longer primary)
 }
 
 MAX_RETRIES = 3
