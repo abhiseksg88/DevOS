@@ -910,59 +910,94 @@ async def stream_build_events(
     user.assert_tenant_access(tenant_id)
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        last_seq = after_seq
+        """
+        Two-task architecture:
+          poll_task    — queries Supabase every second, pushes rows into queue
+          ping_task    — pushes a ping into queue every 3 s, unconditionally
+
+        The generator reads from the queue and yields.  Because ping_task runs
+        independently, keepalives are sent even when Supabase is slow (common
+        cause of Railway proxy dropping the idle SSE connection).
+        """
         terminal_statuses = {"succeeded", "failed", "cancelled"}
-        keepalive_counter = 0
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        last_seq_holder = [after_seq]   # list so inner tasks can mutate it
 
-        # Send immediately so Railway/nginx proxy knows the connection is alive
-        # before the pipeline even emits its first event.
-        yield ": keepalive\n\n"
-
-        while True:
-            # --- Poll Supabase off the event loop (sync client must not block) ---
-            try:
-                events_resp = await asyncio.to_thread(
-                    lambda: (
-                        db.table("build_events")
-                        .select("*")
-                        .eq("build_id", str(build_id))
-                        .eq("tenant_id", str(tenant_id))
-                        .gt("seq", last_seq)
-                        .order("seq")
-                        .limit(50)
-                        .execute()
+        # ---------- poll task -------------------------------------------------
+        async def poll_task() -> None:
+            while True:
+                try:
+                    current_seq = last_seq_holder[0]
+                    events_resp, build_resp = await asyncio.gather(
+                        asyncio.wait_for(
+                            asyncio.to_thread(
+                                lambda s=current_seq: (
+                                    db.table("build_events")
+                                    .select("*")
+                                    .eq("build_id", str(build_id))
+                                    .eq("tenant_id", str(tenant_id))
+                                    .gt("seq", s)
+                                    .order("seq")
+                                    .limit(50)
+                                    .execute()
+                                )
+                            ),
+                            timeout=10,
+                        ),
+                        asyncio.wait_for(
+                            asyncio.to_thread(
+                                lambda: (
+                                    db.table("builds")
+                                    .select("status")
+                                    .eq("id", str(build_id))
+                                    .single()
+                                    .execute()
+                                )
+                            ),
+                            timeout=10,
+                        ),
                     )
-                )
-                build_resp = await asyncio.to_thread(
-                    lambda: (
-                        db.table("builds")
-                        .select("status")
-                        .eq("id", str(build_id))
-                        .single()
-                        .execute()
-                    )
-                )
-            except Exception as poll_err:
-                logger.warning("SSE poll error for build %s: %s", build_id, poll_err)
+                    for event in (events_resp.data or []):
+                        last_seq_holder[0] = event["seq"]
+                        await queue.put(("event", event))
+                    build_status = (build_resp.data or {}).get("status", "")
+                    if build_status in terminal_statuses:
+                        await queue.put(("end", build_status))
+                        return
+                except asyncio.CancelledError:
+                    return
+                except Exception as poll_err:
+                    logger.warning("SSE poll error build=%s: %s", build_id, poll_err)
                 await asyncio.sleep(1)
-                continue
 
-            # --- Yield events outside the try so client-disconnect propagates cleanly ---
-            for event in events_resp.data:
-                last_seq = event["seq"]
-                yield f"data: {json.dumps(event)}\n\n"
+        # ---------- ping task -------------------------------------------------
+        async def ping_task() -> None:
+            while True:
+                try:
+                    await asyncio.sleep(3)
+                    await queue.put(("ping", None))
+                except asyncio.CancelledError:
+                    return
 
-            # --- Terminal state: close stream ---
-            if build_resp.data["status"] in terminal_statuses:
-                yield f"data: {json.dumps({'kind': 'stream_end', 'build_status': build_resp.data['status']})}\n\n"
-                return
+        # ---------- generator body --------------------------------------------
+        t_poll = asyncio.create_task(poll_task())
+        t_ping = asyncio.create_task(ping_task())
+        # Send one ping right away so Railway proxy sees data before LLM warms up
+        yield f"data: {json.dumps({'kind': 'ping'})}\n\n"
 
-            # --- Keepalive every 5 s (not 15 s) — Railway proxy idle timeout is ~30 s ---
-            keepalive_counter += 1
-            if keepalive_counter % 5 == 0:
-                yield ": keepalive\n\n"
-
-            await asyncio.sleep(1)
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == "ping":
+                    yield f"data: {json.dumps({'kind': 'ping'})}\n\n"
+                elif kind == "event":
+                    yield f"data: {json.dumps(payload)}\n\n"
+                elif kind == "end":
+                    yield f"data: {json.dumps({'kind': 'stream_end', 'build_status': payload})}\n\n"
+                    return
+        finally:
+            t_poll.cancel()
+            t_ping.cancel()
 
     return StreamingResponse(
         event_generator(),

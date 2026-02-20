@@ -329,6 +329,7 @@ export function streamBuildEvents(
                 onEnd(data.build_status as string | undefined);
                 return;
               }
+              if (data.kind === "ping") continue; // keepalive — discard
               onEvent(data);
             } catch {
               // skip malformed JSON
